@@ -20,6 +20,7 @@ Dev-only tool that turns a running Vite app into an editable surface: draw on an
 - `contracts/*.schema.json`: source of truth for cross-process types. `pnpm contracts:gen` writes `packages/contracts-ts/src/generated/` and `contracts/generated/`; Rust types are generated at build time by `crates/gjd-core/build.rs` (typify).
 - `crates/gjd-core`: contract types, content hash. `crates/gjd-providers`: provider CLI adapters. `crates/gjd-daemon`: the `gjd` binary.
 - `packages/vite-plugin`: in-memory overlays served through Vite, HMR result correlation, browser client.
+- `packages/guijam`: the only published package. tsdown bundles the plugin and the contract types into `guijam/vite`; the fixture and e2e import it from there. Released by `.github/workflows/release.yml` when a GitHub release is published (ADR 0008).
 - `fixtures/small-react-tailwind4`: Brew & Co. test app. `tests/e2e`: Playwright.
 - `docs/handoff/`: original handoff bundle (screenshots, prototype). The prototype is reference only.
 
@@ -35,6 +36,7 @@ pnpm typecheck
 pnpm test                  # vitest unit tests
 pnpm contracts:check       # fails if generated contracts drifted
 pnpm test:e2e              # builds, then Playwright (S-1 overlay suite)
+scripts/smoke-package.sh   # packed guijam installs, loads and type-checks outside the workspace
 cargo fmt --all --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace
 cargo test -p gjd-providers --test live_claude_code -- --ignored --test-threads=1   # real CLI, spends tokens
 cargo run -p gjd-daemon -- provider list | provider test claude-code --runs 5

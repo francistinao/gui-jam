@@ -1,11 +1,13 @@
 # 0001. Stack and repository layout
 
-- Status: accepted
+- Status: accepted, amended 2026-11-17
 - Date: 2026-11-17
 
 ## Context
 
 GUIJam has TypeScript surfaces (Vite plugin, browser overlay, thin CLI) and a Rust daemon (PRD §8). Cross-process messages must be defined once (NFR-MNT-01). Phase 0 needs only the pieces the S-1 and S-3 spikes use.
+
+Amendment (2026-11-17): D-11 is decided in 0008 (tsdown 0.23.7, used for the published `guijam` package, which raises the development Node floor to 22.18). `ci.yml` was split into `lint.yml` and `test.yml`, and `release.yml` was added.
 
 ## Decision
 
@@ -20,7 +22,7 @@ GUIJam has TypeScript surfaces (Vite plugin, browser overlay, thin CLI) and a Ru
 
 ## Consequences
 
-- One `pnpm install` and one `cargo build` cover everything; CI runs the same commands as a developer (`.github/workflows/ci.yml`).
+- One `pnpm install` and one `cargo build` cover everything; CI runs the same commands as a developer (`.github/workflows/lint.yml` and `test.yml`; `scripts/gate.sh` runs them all locally).
 - typify constrains how schemas are written: tagged unions must be `oneOf` branches written inline as objects with a `const` discriminator (a `$ref` per branch makes typify fall back to an untagged enum that does not enforce `kind`), and it ignores `minItems`/`maxItems`, so the daemon validates counts itself.
 - Claude Code's `--json-schema` rejects a `$schema: 2020-12` declaration, so the provider-facing bundle omits `$schema` and uses only draft-07-compatible keywords (see 0004).
 - The plugin package must be built before the fixture or e2e tests run (`pnpm build`; `pnpm test:e2e` does it).

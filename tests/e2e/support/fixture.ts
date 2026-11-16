@@ -2,8 +2,8 @@ import { readFile, stat } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import type { GuijamApi } from '@guijam/vite-plugin';
 import type { Page } from '@playwright/test';
+import type { GuijamApi } from 'guijam/vite';
 import type * as Vite from 'vite';
 
 export const FIXTURE_DIR = fileURLToPath(

@@ -1,6 +1,6 @@
 import { readFile } from 'node:fs/promises';
-import type { GuijamApi } from '@guijam/vite-plugin';
 import { expect, type Page, test } from '@playwright/test';
+import type { GuijamApi } from 'guijam/vite';
 import type * as Vite from 'vite';
 import {
   fileSnapshot,

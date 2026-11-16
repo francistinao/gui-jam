@@ -1,0 +1,97 @@
+name: release
+
+# Publishing a GitHub release tagged vX.Y.Z publishes guijam@X.Y.Z to npm. Pre-releases
+# (vX.Y.Z-rc.N, marked "Set as a pre-release") go to the `next` dist-tag, others to `latest`.
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  lint:
+    uses: ./.github/workflows/lint.yml
+
+  test:
+    uses: ./.github/workflows/test.yml
+
+  publish:
+    needs: [lint, test]
+    runs-on: ubuntu-24.04
+    environment: npm
+    permissions:
+      contents: read
+      id-token: write # npm trusted publishing (OIDC) and provenance
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - name: Read the version and dist-tag from the release
+        id: release
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+          PRERELEASE: ${{ github.event.release.prerelease }}
+        run: |
+          version="${TAG#v}"
+          if [[ ! $version =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::Release tag '$TAG' is not vX.Y.Z or vX.Y.Z-<pre>."
+            exit 1
+          fi
+          if [[ $version == *-* ]]; then suffixed=true; else suffixed=false; fi
+          if [[ $suffixed != "$PRERELEASE" ]]; then
+            echo "::error::Tag '$TAG' and the release's pre-release flag ($PRERELEASE) disagree."
+            exit 1
+          fi
+          if [[ $PRERELEASE == true ]]; then dist_tag=next; else dist_tag=latest; fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "dist-tag=$dist_tag" >> "$GITHUB_OUTPUT"
+
+      - uses: pnpm/action-setup@v6.1.1
+      - uses: actions/setup-node@v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+      - name: Install npm 11.21.2 (trusted publishing needs 11.5.1+)
+        run: npm install -g npm@11.21.2
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+
+      # npm rejects provenance unless repository.url matches the repository that built it.
+      # devDependencies name private workspace packages that never reach the registry.
+      - name: Prepare guijam's published package.json
+        working-directory: packages/guijam
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
+          REPO_URL: git+${{ github.server_url }}/${{ github.repository }}.git
+        run: |
+          npm pkg set "version=$VERSION" repository.type=git "repository.url=$REPO_URL"
+          npm pkg delete devDependencies scripts
+
+      - name: Pack guijam
+        working-directory: packages/guijam
+        run: pnpm pack --pack-destination "$RUNNER_TEMP"
+
+      - name: Smoke-test the tarball
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
+        run: scripts/smoke-package.sh "$RUNNER_TEMP/guijam-$VERSION.tgz"
+
+      - name: Publish to npm
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
+          DIST_TAG: ${{ steps.release.outputs.dist-tag }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [[ -n "$(npm view "guijam@$VERSION" version 2> /dev/null || true)" ]]; then
+            echo "guijam@$VERSION is already on npm; nothing to publish."
+            exit 0
+          fi
+          tar -xzf "$RUNNER_TEMP/guijam-$VERSION.tgz" -C "$RUNNER_TEMP"
+          npm publish "$RUNNER_TEMP/package" --access public --tag "$DIST_TAG"
