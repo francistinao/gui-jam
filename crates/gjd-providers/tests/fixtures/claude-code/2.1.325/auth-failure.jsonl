@@ -1,0 +1,3 @@
+{"type":"system","subtype":"init"}
+{"type":"assistant","error":"authentication_failed","api_error_status":401}
+{"type":"result","subtype":"success","is_error":true,"api_error_status":401,"result":"Invalid API key \u00b7 Fix external API key","total_cost_usd":0,"num_turns":1}

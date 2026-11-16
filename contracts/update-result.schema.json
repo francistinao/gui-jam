@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "update-result.schema.json",
+  "title": "UpdateResult",
+  "description": "Outcome of one HMR update correlated to a preview or commit. latencyMs runs from the client receiving gj:update-start to vite:afterUpdate or vite:error.",
+  "type": "object",
+  "required": ["updateId", "status", "latencyMs", "errors"],
+  "additionalProperties": false,
+  "properties": {
+    "updateId": { "type": "string", "minLength": 1 },
+    "status": {
+      "enum": ["ok", "compile_error", "runtime_error", "full_reload", "timeout"]
+    },
+    "latencyMs": { "type": "number", "minimum": 0 },
+    "errors": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/UpdateError" }
+    }
+  },
+  "$defs": {
+    "UpdateError": {
+      "type": "object",
+      "required": ["message", "attributed"],
+      "additionalProperties": false,
+      "properties": {
+        "message": { "type": "string" },
+        "file": { "type": "string" },
+        "line": { "type": "integer", "minimum": 1 },
+        "stack": { "type": "string" },
+        "attributed": { "type": "boolean" }
+      }
+    }
+  }
+}

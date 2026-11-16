@@ -1,0 +1,238 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "edit-op.schema.json",
+  "title": "EditOp",
+  "description": "One source edit, resolved by the daemon against the file content whose blake3 hex is base_hash.",
+  "oneOf": [
+    {
+      "title": "ReplaceSnippetOp",
+      "type": "object",
+      "description": "find must occur exactly once in the file.",
+      "required": ["kind", "file", "base_hash", "find", "replace"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "replace_snippet"
+        },
+        "file": {
+          "$ref": "#/$defs/ProjectPath"
+        },
+        "base_hash": {
+          "$ref": "#/$defs/ContentHash"
+        },
+        "find": {
+          "type": "string",
+          "minLength": 1
+        },
+        "replace": {
+          "type": "string"
+        }
+      }
+    },
+    {
+      "title": "ClassTokensOp",
+      "type": "object",
+      "required": ["kind", "file", "base_hash", "at", "add", "remove"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "class_tokens"
+        },
+        "file": {
+          "$ref": "#/$defs/ProjectPath"
+        },
+        "base_hash": {
+          "$ref": "#/$defs/ContentHash"
+        },
+        "at": {
+          "$ref": "#/$defs/SrcLoc"
+        },
+        "add": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "remove": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    {
+      "title": "JsxAttrOp",
+      "type": "object",
+      "description": "value null removes the attribute.",
+      "required": ["kind", "file", "base_hash", "at", "name", "value"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "jsx_attr"
+        },
+        "file": {
+          "$ref": "#/$defs/ProjectPath"
+        },
+        "base_hash": {
+          "$ref": "#/$defs/ContentHash"
+        },
+        "at": {
+          "$ref": "#/$defs/SrcLoc"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "value": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/JsxValue"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "title": "StylePropOp",
+      "type": "object",
+      "description": "value null removes the property from the inline style object.",
+      "required": ["kind", "file", "base_hash", "at", "prop", "value"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "style_prop"
+        },
+        "file": {
+          "$ref": "#/$defs/ProjectPath"
+        },
+        "base_hash": {
+          "$ref": "#/$defs/ContentHash"
+        },
+        "at": {
+          "$ref": "#/$defs/SrcLoc"
+        },
+        "prop": {
+          "type": "string",
+          "minLength": 1
+        },
+        "value": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "title": "CreateFileOp",
+      "type": "object",
+      "description": "Always requires approval.",
+      "required": ["kind", "file", "content"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "create_file"
+        },
+        "file": {
+          "$ref": "#/$defs/ProjectPath"
+        },
+        "content": {
+          "type": "string"
+        }
+      }
+    },
+    {
+      "title": "RewriteFileOp",
+      "type": "object",
+      "required": ["kind", "file", "base_hash", "content"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "rewrite_file"
+        },
+        "file": {
+          "$ref": "#/$defs/ProjectPath"
+        },
+        "base_hash": {
+          "$ref": "#/$defs/ContentHash"
+        },
+        "content": {
+          "type": "string"
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "ProjectPath": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Path relative to the project root, forward slashes."
+    },
+    "ContentHash": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "blake3 hex of the full file content the proposer saw."
+    },
+    "SrcLoc": {
+      "type": "object",
+      "description": "1-based position from data-gj-src.",
+      "required": ["line", "column"],
+      "additionalProperties": false,
+      "properties": {
+        "line": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "column": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "JsxValue": {
+      "oneOf": [
+        {
+          "type": "object",
+          "title": "JsxStringValue",
+          "required": ["string"],
+          "additionalProperties": false,
+          "properties": {
+            "string": {
+              "type": "string"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "title": "JsxExpressionValue",
+          "required": ["expression"],
+          "additionalProperties": false,
+          "properties": {
+            "expression": {
+              "type": "string"
+            }
+          }
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,25 @@
+[package]
+name = "gjd-daemon"
+description = "GUIJam daemon (gjd): local gateway, supervisors and developer CLI."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "gjd"
+path = "src/main.rs"
+
+[dependencies]
+clap.workspace = true
+gjd-providers = { path = "../gjd-providers" }
+tempfile.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

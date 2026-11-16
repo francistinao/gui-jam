@@ -1,0 +1,11 @@
+skills
+.DS_Store
+node_modules/
+dist/
+target/
+*.tsbuildinfo
+**/.gui-jam/run/
+**/.gui-jam/logs/
+**/.gui-jam/journal/
+test-results/
+playwright-report/

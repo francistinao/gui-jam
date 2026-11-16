@@ -1,0 +1,11 @@
+{
+  "name": "@gui-jam/contracts-ts",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./src/generated/contracts.ts"
+    }
+  }
+}
