@@ -64,13 +64,6 @@ enum ProviderCommand {
     },
 }
 
-fn fast_tier_model(id: ProviderId) -> Option<&'static str> {
-    match id {
-        ProviderId::ClaudeCode => Some("haiku"),
-        ProviderId::Codex => None,
-    }
-}
-
 fn percentile(samples: &[Duration], p: usize) -> Duration {
     let mut sorted = samples.to_vec();
     sorted.sort();
@@ -141,26 +134,19 @@ async fn test(id: ProviderId, runs: u32, model: Option<String>) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let model = model.or_else(|| fast_tier_model(id).map(str::to_owned));
+    let model = model.unwrap_or_else(|| id.fast_model().to_owned());
     let mut ready = Vec::new();
     let mut answer = Vec::new();
     for run in 1..=runs {
-        match run_probe(
-            provider.as_ref(),
-            &discovery,
-            model.as_deref(),
-            workdir.path(),
-        )
-        .await
-        {
+        match run_probe(provider.as_ref(), &discovery, Some(&model), workdir.path()).await {
             Ok((timings, cost)) => {
                 println!(
-                    "run {run}: ready {} ms · answer {} ms · cost ${:.4}",
+                    "run {run}: ready {} ms · answer {} ms{}",
                     timings
                         .ready
                         .map_or_else(|| "?".to_owned(), |d| d.as_millis().to_string()),
                     timings.answer.as_millis(),
-                    cost.unwrap_or_default(),
+                    cost.map_or_else(String::new, |cost| format!(" · cost ${cost:.4}")),
                 );
                 ready.extend(timings.ready);
                 answer.push(timings.answer);

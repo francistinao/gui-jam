@@ -11,7 +11,7 @@ use tokio::process::Command;
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 
-use crate::process::ProviderProcess;
+use crate::process::{EventFold, ProviderProcess, run_to_answer};
 use crate::{
     AuthStatus, Capabilities, Discovery, GenerationOutput, GenerationRequest, ProviderAdapter,
     ProviderError, ProviderId, RunTimings, ToolPolicy,
@@ -21,7 +21,6 @@ const BINARY: &str = "claude";
 const LOGIN_COMMAND: &str = "claude auth login";
 const READ_ONLY_TOOLS: &str = "Read,Grep,Glob";
 const QUERY_TIMEOUT: Duration = Duration::from_secs(10);
-const EXIT_GRACE: Duration = Duration::from_secs(10);
 
 pub struct ClaudeCode;
 
@@ -72,7 +71,9 @@ struct ClaudeStream {
     assistant_error: Option<String>,
 }
 
-impl ClaudeStream {
+impl EventFold for ClaudeStream {
+    type Answer = Answer;
+
     fn feed(&mut self, line: &str, elapsed: Duration) -> Option<Result<Answer, ProviderError>> {
         if line.trim().is_empty() {
             return None;
@@ -98,7 +99,9 @@ impl ClaudeStream {
             StreamEvent::System { .. } | StreamEvent::Assistant { .. } | StreamEvent::Other => None,
         }
     }
+}
 
+impl ClaudeStream {
     fn finish(&self, result: ResultEvent) -> Result<Answer, ProviderError> {
         if result.is_error {
             let authentication_failed = result.api_error_status == Some(401)
@@ -197,19 +200,6 @@ async fn query(binary: &Path, args: &[&str]) -> Result<String, ProviderError> {
     Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
-async fn read_answer(
-    process: &mut ProviderProcess,
-    stream: &mut ClaudeStream,
-    started: Instant,
-) -> std::io::Result<Option<Result<Answer, ProviderError>>> {
-    while let Some(line) = process.next_line().await? {
-        if let Some(finished) = stream.feed(&line, started.elapsed()) {
-            return Ok(Some(finished));
-        }
-    }
-    Ok(None)
-}
-
 #[async_trait]
 impl ProviderAdapter for ClaudeCode {
     fn id(&self) -> ProviderId {
@@ -263,7 +253,7 @@ impl ProviderAdapter for ClaudeCode {
         cancel: CancellationToken,
     ) -> Result<GenerationOutput, ProviderError> {
         let started = Instant::now();
-        let mut process = ProviderProcess::spawn(
+        let process = ProviderProcess::spawn(
             &discovery.binary,
             args(&request),
             &request.cwd,
@@ -271,42 +261,15 @@ impl ProviderAdapter for ClaudeCode {
         )
         .await?;
         let mut stream = ClaudeStream::default();
-
-        let read = tokio::select! {
-            () = cancel.cancelled() => Err(ProviderError::Cancelled),
-            read = timeout(request.timeout, read_answer(&mut process, &mut stream, started)) => {
-                match read {
-                    Err(_elapsed) => Err(ProviderError::Timeout(request.timeout)),
-                    Ok(io_result) => io_result.map_err(ProviderError::from),
-                }
-            }
-        };
-
-        match read {
-            Ok(Some(finished)) => {
-                process.reap_in_background(EXIT_GRACE);
-                let answer = finished?;
-                Ok(GenerationOutput {
-                    variant_set: answer.variant_set,
-                    timings: RunTimings {
-                        ready: stream.ready,
-                        answer: started.elapsed(),
-                    },
-                    cost_usd: answer.cost_usd,
-                })
-            }
-            Ok(None) => {
-                let (exit_code, stderr_tail) = process.exit_code_and_stderr().await;
-                Err(ProviderError::Crashed {
-                    exit_code,
-                    stderr_tail,
-                })
-            }
-            Err(error) => {
-                process.terminate().await;
-                Err(error)
-            }
-        }
+        let answer = run_to_answer(process, &mut stream, request.timeout, &cancel, started).await?;
+        Ok(GenerationOutput {
+            variant_set: answer.variant_set,
+            timings: RunTimings {
+                ready: stream.ready,
+                answer: started.elapsed(),
+            },
+            cost_usd: answer.cost_usd,
+        })
     }
 }
 
@@ -318,6 +281,7 @@ mod tests {
     use gjd_core::contracts::EditOp;
 
     use super::{Answer, ClaudeStream, args};
+    use crate::process::EventFold;
     use crate::{GenerationRequest, ProviderError, ToolPolicy};
 
     const SUCCESS: &str = include_str!("../tests/fixtures/claude-code/2.1.325/success.jsonl");

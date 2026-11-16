@@ -1,4 +1,5 @@
 mod claude_code;
+mod codex;
 mod error;
 mod process;
 
@@ -12,6 +13,7 @@ use gjd_core::contracts::VariantSet;
 use tokio_util::sync::CancellationToken;
 
 pub use claude_code::ClaudeCode;
+pub use codex::Codex;
 pub use error::ProviderError;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -36,6 +38,22 @@ impl ProviderId {
         match self {
             Self::ClaudeCode => "Claude Code",
             Self::Codex => "Codex",
+        }
+    }
+
+    #[must_use]
+    pub fn fast_model(self) -> &'static str {
+        match self {
+            Self::ClaudeCode => "haiku",
+            Self::Codex => "gpt-6-luna",
+        }
+    }
+
+    #[must_use]
+    pub fn standard_model(self) -> Option<&'static str> {
+        match self {
+            Self::ClaudeCode => Some("sonnet"),
+            Self::Codex => None,
         }
     }
 
@@ -158,6 +176,6 @@ pub trait ProviderAdapter: Send + Sync {
 pub fn adapter(id: ProviderId) -> Option<Box<dyn ProviderAdapter>> {
     match id {
         ProviderId::ClaudeCode => Some(Box::new(ClaudeCode)),
-        ProviderId::Codex => None,
+        ProviderId::Codex => Some(Box::new(Codex)),
     }
 }

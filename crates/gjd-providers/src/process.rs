@@ -2,7 +2,7 @@ use std::ffi::OsStr;
 use std::io;
 use std::path::Path;
 use std::process::Stdio;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use nix::sys::signal::{Signal, killpg};
 use nix::unistd::Pid;
@@ -10,8 +10,12 @@ use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader, Lines};
 use tokio::process::{Child, ChildStdout, Command};
 use tokio::task::JoinHandle;
 use tokio::time::timeout;
+use tokio_util::sync::CancellationToken;
+
+use crate::ProviderError;
 
 const STDERR_TAIL_BYTES: usize = 4096;
+const EXIT_GRACE: Duration = Duration::from_secs(10);
 const SIGINT_GRACE: Duration = Duration::from_secs(2);
 const SIGTERM_GRACE: Duration = Duration::from_secs(3);
 
@@ -111,5 +115,61 @@ impl ProviderProcess {
 
     fn signal_group(&self, signal: Signal) -> nix::Result<()> {
         killpg(self.group, signal)
+    }
+}
+
+pub(crate) trait EventFold {
+    type Answer;
+
+    fn feed(
+        &mut self,
+        line: &str,
+        elapsed: Duration,
+    ) -> Option<Result<Self::Answer, ProviderError>>;
+}
+
+async fn read_answer<F: EventFold>(
+    process: &mut ProviderProcess,
+    fold: &mut F,
+    started: Instant,
+) -> io::Result<Option<Result<F::Answer, ProviderError>>> {
+    while let Some(line) = process.next_line().await? {
+        if let Some(finished) = fold.feed(&line, started.elapsed()) {
+            return Ok(Some(finished));
+        }
+    }
+    Ok(None)
+}
+
+pub(crate) async fn run_to_answer<F: EventFold>(
+    mut process: ProviderProcess,
+    fold: &mut F,
+    limit: Duration,
+    cancel: &CancellationToken,
+    started: Instant,
+) -> Result<F::Answer, ProviderError> {
+    let read = tokio::select! {
+        () = cancel.cancelled() => Err(ProviderError::Cancelled),
+        read = timeout(limit, read_answer(&mut process, fold, started)) => match read {
+            Err(_elapsed) => Err(ProviderError::Timeout(limit)),
+            Ok(io_result) => io_result.map_err(ProviderError::from),
+        },
+    };
+    match read {
+        Ok(Some(Ok(answer))) => {
+            process.reap_in_background(EXIT_GRACE);
+            Ok(answer)
+        }
+        Ok(Some(Err(error))) | Err(error) => {
+            process.terminate().await;
+            Err(error)
+        }
+        Ok(None) => {
+            let (exit_code, stderr_tail) = process.exit_code_and_stderr().await;
+            Err(ProviderError::Crashed {
+                exit_code,
+                stderr_tail,
+            })
+        }
     }
 }
