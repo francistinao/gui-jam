@@ -5,6 +5,7 @@ import {
   chooseDrawTarget,
   clamp,
   cssColor,
+  droppedNote,
   fillOfToken,
   hexOfComputedColor,
   OPACITY_RANGE,
@@ -206,5 +207,17 @@ describe('chooseDrawTarget', () => {
     const offToTheSide = { left: 1000, top: 600, width: 200, height: 100 };
 
     expect(chooseDrawTarget(offToTheSide, [button, row, section])).toBeNull();
+  });
+});
+
+describe('droppedNote', () => {
+  it('says how many variants were dropped and why the first one was', () => {
+    expect(droppedNote([])).toBeNull();
+    expect(droppedNote([{ label: 'Deep', reason: 'op 0: the snippet occurs 0 times' }])).toBe(
+      '1 variant was dropped: op 0: the snippet occurs 0 times',
+    );
+    expect(droppedNote([{ reason: 'It is the same as another variant.' }, { reason: 'x' }])).toBe(
+      '2 variants were dropped: It is the same as another variant.',
+    );
   });
 });

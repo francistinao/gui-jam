@@ -41,6 +41,46 @@ export type GuijamMessage =
   | GenerateDoneMessage
   | GenerateCancelMessage
   | GenerateCancelledMessage
+  | {
+      type: 'generate.progress';
+      /**
+       * Set on requests; a reply repeats its request's id.
+       */
+      id?: string;
+      payload: GenerateProgress;
+    }
+  | {
+      type: 'variant.select';
+      /**
+       * Set on requests; a reply repeats its request's id.
+       */
+      id?: string;
+      payload: VariantSelect;
+    }
+  | {
+      type: 'variant.selected';
+      /**
+       * Set on requests; a reply repeats its request's id.
+       */
+      id?: string;
+      payload: VariantSelected;
+    }
+  | {
+      type: 'generate.discard';
+      /**
+       * Set on requests; a reply repeats its request's id.
+       */
+      id?: string;
+      payload: RunRef;
+    }
+  | {
+      type: 'generate.discarded';
+      /**
+       * Set on requests; a reply repeats its request's id.
+       */
+      id?: string;
+      payload: RunRef;
+    }
   | ErrorMessage;
 export type ErrorCode =
   | 'CONFLICT'
@@ -58,6 +98,7 @@ export type ErrorCode =
   | 'PROVIDER_INVALID_OUTPUT'
   | 'PROVIDER_TIMEOUT'
   | 'PROVIDER_FAILED'
+  | 'PROVIDER_CRASHED'
   | 'PLUGIN_UNAVAILABLE'
   | 'DAEMON_UNAVAILABLE'
   | 'INTERNAL';
@@ -439,7 +480,7 @@ export interface GenerateRequestMessage {
   payload: GenerateRequest;
 }
 /**
- * Ask the developer's provider CLI for one variant of an element (route R1). runId names the run for generate.cancel.
+ * Ask the developer's provider CLI for variants of an element. runId names the run for generate.progress, variant.select, generate.discard and generate.cancel.
  */
 export interface GenerateRequest {
   runId: string;
@@ -457,16 +498,55 @@ export interface GenerateDoneMessage {
   payload: GenerateDone;
 }
 /**
- * A variant previewed in the running app, not yet written; commit or discard it by changesetId.
+ * The variants that survived validation, the first one previewed in the running app, none written yet.
  */
 export interface GenerateDone {
   runId: string;
+  route: Route;
+  /**
+   * One line for the terminal (F-DX-06, FR-050).
+   */
+  summary: string;
+  elapsedMs: number;
+  /**
+   * @minItems 1
+   * @maxItems 3
+   */
+  variants:
+    | [VariantPreview]
+    | [VariantPreview, VariantPreview]
+    | [VariantPreview, VariantPreview, VariantPreview];
+  /**
+   * Variants the model proposed that could not be applied, with the reason.
+   */
+  dropped: {
+    label?: string;
+    reason: string;
+  }[];
+  update: UpdateResult;
+}
+/**
+ * How a request was answered (PRD §12): R0 is an exact edit with no model; R1 and R2 ask the provider at the fast and standard tiers.
+ */
+export interface Route {
+  tier: 'R0' | 'R1' | 'R2';
+  provider?: string;
+  model?: string;
+  /**
+   * Why the request took this route, when it is worth saying.
+   */
+  notice?: string;
+}
+/**
+ * One variant held as a changeset; variant.select shows it, changeset.commit writes it.
+ */
+export interface VariantPreview {
   changesetId: string;
   label: string;
+  system: string;
+  style: string;
   rationale: string;
-  provider: string;
-  elapsedMs: number;
-  update: UpdateResult;
+  file: string;
   changes: CodeChange[];
 }
 export interface GenerateCancelMessage {
@@ -487,6 +567,27 @@ export interface GenerateCancelledMessage {
    */
   id?: string;
   payload: RunRef;
+}
+/**
+ * Pushed by the daemon while a run works, to the page that asked. Each message is the whole step list, so a lost one cannot leave it wrong.
+ */
+export interface GenerateProgress {
+  runId: string;
+  steps: {
+    label: string;
+    state: 'done' | 'active' | 'pending';
+  }[];
+}
+/**
+ * Show another variant of the run in place of the current one; the file on disk is untouched.
+ */
+export interface VariantSelect {
+  runId: string;
+  changesetId: string;
+}
+export interface VariantSelected {
+  changesetId: string;
+  update: UpdateResult;
 }
 export interface ErrorMessage {
   type: 'error';

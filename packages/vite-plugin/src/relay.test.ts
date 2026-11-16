@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { checkWidgetRequest, errorReply, replyWindowMs, terminalLine } from './relay.js';
+import {
+  checkWidgetRequest,
+  errorReply,
+  generationRunId,
+  replyWindowMs,
+  terminalLine,
+} from './relay.js';
 
 describe('checkWidgetRequest', () => {
   it('admits a widget request with an id and a payload', () => {
@@ -51,7 +57,36 @@ describe('replyWindowMs', () => {
 });
 
 describe('terminalLine', () => {
-  it('announces commits and undos only', () => {
+  it('announces finished generations with their route', () => {
+    const summary =
+      '"make it softer" → 3 variants for <button> src/A.tsx:3 (R1 · Claude Code haiku)';
+    expect(
+      terminalLine({
+        type: 'generate.done',
+        payload: {
+          runId: 'r1',
+          route: { tier: 'R1', provider: 'Claude Code', model: 'haiku' },
+          summary,
+          elapsedMs: 900,
+          variants: [
+            {
+              changesetId: 'c1',
+              label: 'Soft',
+              system: 'Your project',
+              style: 'Soft',
+              rationale: 'r',
+              file: 'src/A.tsx',
+              changes: [],
+            },
+          ],
+          dropped: [],
+          update: { updateId: 'u1', status: 'ok', latencyMs: 20, errors: [] },
+        },
+      }),
+    ).toBe(`✦ ${summary}`);
+  });
+
+  it('announces commits and undos, not other replies', () => {
     expect(
       terminalLine({
         type: 'commit.done',
@@ -68,5 +103,16 @@ describe('terminalLine', () => {
     expect(
       terminalLine({ type: 'changeset.discarded', payload: { changesetId: 'c1' } }),
     ).toBeUndefined();
+  });
+});
+
+describe('generationRunId', () => {
+  it('names the run of a generate.request and nothing else', () => {
+    expect(generationRunId({ type: 'generate.request', id: 'w1', payload: { runId: 'r1' } })).toBe(
+      'r1',
+    );
+    expect(generationRunId({ type: 'generate.cancel', payload: { runId: 'r1' } })).toBeUndefined();
+    expect(generationRunId({ type: 'generate.request', payload: { runId: 7 } })).toBeUndefined();
+    expect(generationRunId('generate.request')).toBeUndefined();
   });
 });

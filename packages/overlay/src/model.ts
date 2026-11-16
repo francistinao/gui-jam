@@ -1,4 +1,4 @@
-import type { ElementStyle, StyleGroup, StyleToken } from '@guijam/contracts-ts';
+import type { ElementStyle, GenerateDone, StyleGroup, StyleToken } from '@guijam/contracts-ts';
 
 export type { Tool } from './host';
 
@@ -227,4 +227,11 @@ function isInside(point: Rect, rect: Rect): boolean {
     point.top >= rect.top &&
     point.top <= rect.top + rect.height
   );
+}
+
+export function droppedNote(dropped: GenerateDone['dropped']): string | null {
+  const [first] = dropped;
+  if (!first) return null;
+  const count = dropped.length === 1 ? '1 variant was' : `${dropped.length} variants were`;
+  return `${count} dropped: ${first.reason}`;
 }

@@ -14,5 +14,7 @@ declare module 'vite/types/customEvent.d.ts' {
     /** A widget request; untrusted until `checkWidgetRequest` admits it. */
     'gj:request': unknown;
     'gj:response': GuijamMessage;
+    /** Pushed by the daemon to the page a run belongs to, e.g. `generate.progress`. */
+    'gj:event': GuijamMessage;
   }
 }

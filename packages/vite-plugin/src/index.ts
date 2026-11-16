@@ -15,7 +15,13 @@ import {
   version as viteVersion,
 } from 'vite';
 import { DaemonClient } from './daemon-client.js';
-import { checkWidgetRequest, errorReply, replyWindowMs, terminalLine } from './relay.js';
+import {
+  checkWidgetRequest,
+  errorReply,
+  generationRunId,
+  replyWindowMs,
+  terminalLine,
+} from './relay.js';
 import { injectSourceLocations } from './transform-srcloc.js';
 import { createUpdateTracker, isUpdateResult } from './update-tracker.js';
 
@@ -96,6 +102,8 @@ export function guijam(options: GuijamOptions = {}): Plugin<GuijamApi> {
   let root = process.cwd();
   let candidatesDir = '';
   let scriptEntries = new Set<string>();
+  /** The page that started each generation in flight; only it gets that run's progress. */
+  const runPages = new Map<string, { send(event: string, payload?: unknown): void }>();
 
   function tailwindRootFiles(): string[] {
     return [...new Set([...tailwindRootIds].map((id) => id.split('?', 1)[0] ?? id))];
@@ -113,6 +121,9 @@ export function guijam(options: GuijamOptions = {}): Plugin<GuijamApi> {
           type: 'update.result',
           payload: await applyOverlay(message.payload.file, undefined),
         };
+      case 'generate.progress':
+        runPages.get(message.payload.runId)?.send('gj:event', message);
+        return undefined;
       default:
         return undefined;
     }
@@ -277,7 +288,13 @@ export function guijam(options: GuijamOptions = {}): Plugin<GuijamApi> {
         }, next);
       });
       server.environments.client.hot.on('gj:request', async (data, client) => {
-        client.send('gj:response', await relay(data));
+        const runId = generationRunId(data);
+        if (runId !== undefined) runPages.set(runId, client);
+        try {
+          client.send('gj:response', await relay(data));
+        } finally {
+          if (runId !== undefined) runPages.delete(runId);
+        }
       });
       connectDaemon(server);
     },

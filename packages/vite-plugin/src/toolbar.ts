@@ -119,6 +119,14 @@ export function bootToolbar(hot: HotContext): void {
   shadowRoot.append(toolbar);
 
   const request = createRequester(hot);
+  const listeners = new Set<(message: GuijamMessage) => void>();
+  hot.on('gj:event', (message) => {
+    for (const listener of listeners) listener(message);
+  });
+  const onEvent: WidgetHost['onEvent'] = (listener) => {
+    listeners.add(listener);
+    return () => listeners.delete(listener);
+  };
   let active: Tool | null = null;
   let widget: Promise<Widget> | undefined;
 
@@ -132,7 +140,7 @@ export function bootToolbar(hot: HotContext): void {
   const loadWidget = (): Promise<Widget> => {
     widget ??= import(/* @vite-ignore */ WIDGET_URL).then((module: unknown) => {
       if (!isWidgetModule(module)) throw new Error(`${WIDGET_URL} is not the GUIJam widget`);
-      return module.mount({ shadowRoot, hostElement, request, onToolChange: show });
+      return module.mount({ shadowRoot, hostElement, request, onEvent, onToolChange: show });
     });
     return widget;
   };

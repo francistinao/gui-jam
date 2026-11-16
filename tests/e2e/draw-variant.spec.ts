@@ -19,12 +19,13 @@ import {
   startFixtureServer,
 } from './support/fixture.js';
 
-// The daemon resolves `claude` on the PATH it inherits from the dev server, so this
-// stand-in answers instead of the real CLI and no tokens are spent.
 const FAKE_CLI_DIR = fileURLToPath(new URL('../fake-cli/', import.meta.url));
 const ORDER_BUTTON = fixturePath('src/components/OrderButton.tsx');
+const ORDER_BUTTON_REF = { file: 'src/components/OrderButton.tsx', line: 3, column: 5 };
 const BRAND_RGB = 'rgb(190, 18, 60)';
-const VARIANT_RGB = 'rgb(37, 99, 235)';
+const SOLID_RGB = 'rgb(37, 99, 235)';
+const DEEP_RGB = 'rgb(29, 78, 216)';
+const OUTLINE_RGB = 'rgb(255, 255, 255)';
 
 let fixture: FixtureServer;
 let original: string;
@@ -52,7 +53,6 @@ async function chooseTool(page: Page, name: 'Draw' | 'Select'): Promise<void> {
   await expect(tool).toHaveAttribute('aria-pressed', 'true');
 }
 
-/** A rough loop around the element, as a developer would circle it. */
 async function circle(page: Page, element: Locator): Promise<void> {
   const box = await element.boundingBox();
   if (!box) throw new Error('the element is not visible');
@@ -74,6 +74,15 @@ async function circle(page: Page, element: Locator): Promise<void> {
   await page.mouse.up();
 }
 
+async function askAbout(page: Page, element: Locator, request: string): Promise<Locator> {
+  await chooseTool(page, 'Draw');
+  await circle(page, element);
+  const prompt = page.getByRole('dialog', { name: 'Ask AI src/components/OrderButton.tsx' });
+  await prompt.getByRole('textbox', { name: 'Describe the change' }).fill(request);
+  await prompt.getByRole('button', { name: 'Generate' }).click();
+  return prompt;
+}
+
 function changedLines(before: string, after: string): string[] {
   const afterLines = after.split('\n');
   return before.split('\n').filter((line, index) => line !== afterLines[index]);
@@ -88,11 +97,7 @@ test.beforeAll(async () => {
   process.env.PATH = `${FAKE_CLI_DIR}:${savedEnv.PATH ?? ''}`;
   fixture = await startFixtureServer();
   original = await readFile(ORDER_BUTTON, 'utf8');
-  await waitForDaemon(widgetRequests(fixture.api), {
-    file: 'src/components/OrderButton.tsx',
-    line: 3,
-    column: 5,
-  });
+  await waitForDaemon(widgetRequests(fixture.api), ORDER_BUTTON_REF);
 });
 
 test.afterEach(async () => {
@@ -107,33 +112,50 @@ test.afterAll(async () => {
   await stopDaemon(FIXTURE_DIR);
 });
 
-test('circling an element and asking for a change previews one variant; Use writes it', async ({
+test('a drawn prompt shows its progress, then three variants that switch live without writing', async ({
   page,
 }) => {
-  await chooseTool(page, 'Draw');
   const button = page.getByRole('button', { name: 'Order now' });
-  await circle(page, button);
-  const prompt = page.getByRole('dialog', { name: 'Ask AI src/components/OrderButton.tsx' });
   const before = await fileSnapshot(ORDER_BUTTON);
+  const runsBefore = (await cliRuns()).length;
 
-  await prompt.getByRole('textbox', { name: 'Describe the change' }).fill('Make it blue');
-  await prompt.getByRole('button', { name: 'Generate' }).click();
+  const prompt = await askAbout(page, button, 'Make it blue with a soft shadow, pause');
 
-  const variant = prompt.getByRole('region', { name: 'Variant' });
-  await expect(variant).toContainText('Blue button');
-  await expect(variant).toContainText('Swapped the brand fill for blue.');
-  await expect(variant).toContainText(
-    '3 + <button type="button" className="rounded-lg bg-[#2563EB] px-6',
-  );
-  await expect(button).toHaveCSS('background-color', VARIANT_RGB);
+  const progress = prompt.getByRole('list', { name: 'Progress' });
+  await expect(progress.getByRole('listitem')).toHaveText([
+    'Reading <button> at OrderButton.tsx:3',
+    'Applying your index.css tokens',
+    'Asking Claude Code (haiku)',
+    'Checking the variants',
+    'Previewing V1',
+  ]);
+  await expect(progress.getByRole('listitem').nth(2)).toHaveAttribute('data-state', 'active');
+  await expect(progress.getByRole('listitem').nth(0)).toHaveAttribute('data-state', 'done');
+
+  const variants = prompt.getByRole('region', { name: 'Variants' });
+  const tiles = variants.getByRole('group', { name: 'Pick a variant' }).getByRole('button');
+  await expect(tiles).toHaveText(['V1Solid', 'V2Deep', 'V3Outline']);
+  await expect(tiles.nth(0)).toHaveAttribute('aria-pressed', 'true');
+  await expect(button).toHaveCSS('background-color', SOLID_RGB);
+  await expect(variants).toContainText('Blue button.');
+  await expect(variants).toContainText('OrderButton.tsx');
+
+  await tiles.nth(1).click();
+  await expect(tiles.nth(1)).toHaveAttribute('aria-pressed', 'true');
+  await expect(button).toHaveCSS('background-color', DEEP_RGB);
+  await tiles.nth(2).click();
+  await expect(button).toHaveCSS('background-color', OUTLINE_RGB);
+  await tiles.nth(1).click();
+  await expect(button).toHaveCSS('background-color', DEEP_RGB);
   expect(await fileSnapshot(ORDER_BUTTON)).toEqual(before);
-  const [run] = await cliRuns();
-  expect(run?.request).toBe('Make it blue');
-  expect(run?.args).toEqual(
+
+  const runs = await cliRuns();
+  expect(runs).toHaveLength(runsBefore + 1);
+  expect(runs.at(-1)?.args).toEqual(
     expect.arrayContaining(['--tools', '', '--strict-mcp-config', '--model', 'haiku']),
   );
 
-  await variant.getByRole('button', { name: 'Use' }).click();
+  await variants.getByRole('button', { name: 'Use V2' }).click();
 
   await expect(
     page.getByRole('dialog', { name: 'Fine-tune src/components/OrderButton.tsx' }),
@@ -144,13 +166,51 @@ test('circling an element and asking for a change previews one variant; Use writ
   expect(changedLines(before.content, written)).toEqual([
     '    <button type="button" className="rounded-lg bg-brand px-6 py-3 font-medium text-white">',
   ]);
-  expect(written).toContain('className="rounded-lg bg-[#2563EB] px-6 py-3 font-medium text-white"');
+  expect(written).toContain('className="rounded-lg bg-[#1D4ED8] px-6 py-3 font-medium text-white"');
 
   await toast.getByRole('button', { name: 'Undo' }).click();
 
   await expect(page.getByRole('status').filter({ hasText: 'Change undone.' })).toBeVisible();
   expect(await readFile(ORDER_BUTTON, 'utf8')).toBe(before.content);
   await expect(button).toHaveCSS('background-color', BRAND_RGB);
+});
+
+test('a variant whose edit does not apply is dropped with the reason, and Edit prompt keeps the text', async ({
+  page,
+}) => {
+  const button = page.getByRole('button', { name: 'Order now' });
+  const before = await fileSnapshot(ORDER_BUTTON);
+
+  const prompt = await askAbout(page, button, 'Make it blue with a soft shadow, invalid');
+
+  const variants = prompt.getByRole('region', { name: 'Variants' });
+  await expect(
+    variants.getByRole('group', { name: 'Pick a variant' }).getByRole('button'),
+  ).toHaveText(['V1Solid', 'V2Outline']);
+  await expect(variants.getByRole('note')).toContainText('1 variant was dropped');
+  await expect(button).toHaveCSS('background-color', SOLID_RGB);
+
+  await variants.getByRole('button', { name: 'Edit prompt' }).click();
+
+  await expect(prompt.getByRole('textbox', { name: 'Describe the change' })).toHaveValue(
+    'Make it blue with a soft shadow, invalid',
+  );
+  await expect(button).toHaveCSS('background-color', BRAND_RGB);
+  expect(await fileSnapshot(ORDER_BUTTON)).toEqual(before);
+});
+
+test('a CLI that exits without answering shows PROVIDER_CRASHED with Retry and leaves no preview', async ({
+  page,
+}) => {
+  const button = page.getByRole('button', { name: 'Order now' });
+  const before = await fileSnapshot(ORDER_BUTTON);
+
+  const prompt = await askAbout(page, button, 'Make it blue with a soft shadow, crash');
+
+  await expect(prompt.getByRole('alert')).toContainText('Claude Code stopped before answering.');
+  await expect(prompt.getByRole('button', { name: 'Retry' })).toBeEnabled();
+  await expect(button).toHaveCSS('background-color', BRAND_RGB);
+  expect(await fileSnapshot(ORDER_BUTTON)).toEqual(before);
 });
 
 test('Ask AI from fine-tune, then Cancel, stops the CLI and leaves no preview', async ({
@@ -181,4 +241,26 @@ test('Ask AI from fine-tune, then Cancel, stops the CLI and leaves no preview', 
   await expect(button).toHaveCSS('background-color', BRAND_RGB);
   expect(await fileSnapshot(ORDER_BUTTON)).toEqual(before);
   await expect(page.getByRole('alert')).toHaveCount(0);
+});
+
+test('a second request on the same element cancels the first run', async () => {
+  const send = widgetRequests(fixture.api);
+  const first = send('generate.request', {
+    runId: 'e2e-first',
+    ...ORDER_BUTTON_REF,
+    prompt: 'Make it blue with a soft shadow, slowly',
+  });
+  await expect.poll(async () => (await cliRuns()).at(-1)?.request).toContain('slowly');
+
+  const second = await send('generate.request', {
+    runId: 'e2e-second',
+    ...ORDER_BUTTON_REF,
+    prompt: 'Make it blue with a soft shadow',
+  });
+
+  const replaced = await first;
+  expect(replaced.type === 'error' && replaced.payload.code).toBe('CANCELLED');
+  expect(second.type).toBe('generate.done');
+  const discarded = await send('generate.discard', { runId: 'e2e-second' });
+  expect(discarded.type).toBe('generate.discarded');
 });

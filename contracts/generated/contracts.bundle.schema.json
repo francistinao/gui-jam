@@ -1136,6 +1136,111 @@
           }
         },
         {
+          "type": "object",
+          "required": [
+            "type",
+            "payload"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "generate.progress"
+            },
+            "id": {
+              "type": "string",
+              "description": "Set on requests; a reply repeats its request's id."
+            },
+            "payload": {
+              "$ref": "#/$defs/GenerateProgress"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "type",
+            "payload"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "variant.select"
+            },
+            "id": {
+              "type": "string",
+              "description": "Set on requests; a reply repeats its request's id."
+            },
+            "payload": {
+              "$ref": "#/$defs/VariantSelect"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "type",
+            "payload"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "variant.selected"
+            },
+            "id": {
+              "type": "string",
+              "description": "Set on requests; a reply repeats its request's id."
+            },
+            "payload": {
+              "$ref": "#/$defs/VariantSelected"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "type",
+            "payload"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "generate.discard"
+            },
+            "id": {
+              "type": "string",
+              "description": "Set on requests; a reply repeats its request's id."
+            },
+            "payload": {
+              "$ref": "#/$defs/RunRef"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "type",
+            "payload"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "generate.discarded"
+            },
+            "id": {
+              "type": "string",
+              "description": "Set on requests; a reply repeats its request's id."
+            },
+            "payload": {
+              "$ref": "#/$defs/RunRef"
+            }
+          }
+        },
+        {
           "title": "ErrorMessage",
           "type": "object",
           "required": [
@@ -1411,7 +1516,7 @@
       }
     },
     "GenerateRequest": {
-      "description": "Ask the developer's provider CLI for one variant of an element (route R1). runId names the run for generate.cancel.",
+      "description": "Ask the developer's provider CLI for variants of an element. runId names the run for generate.progress, variant.select, generate.discard and generate.cancel.",
       "type": "object",
       "required": [
         "runId",
@@ -1442,18 +1547,178 @@
         }
       }
     },
-    "GenerateDone": {
-      "description": "A variant previewed in the running app, not yet written; commit or discard it by changesetId.",
+    "GenerateProgress": {
+      "description": "Pushed by the daemon while a run works, to the page that asked. Each message is the whole step list, so a lost one cannot leave it wrong.",
       "type": "object",
       "required": [
         "runId",
+        "steps"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "runId": {
+          "type": "string"
+        },
+        "steps": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "label",
+              "state"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "label": {
+                "type": "string"
+              },
+              "state": {
+                "type": "string",
+                "enum": [
+                  "done",
+                  "active",
+                  "pending"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    "Route": {
+      "description": "How a request was answered (PRD §12): R0 is an exact edit with no model; R1 and R2 ask the provider at the fast and standard tiers.",
+      "type": "object",
+      "required": [
+        "tier"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "tier": {
+          "type": "string",
+          "enum": [
+            "R0",
+            "R1",
+            "R2"
+          ]
+        },
+        "provider": {
+          "type": "string"
+        },
+        "model": {
+          "type": "string"
+        },
+        "notice": {
+          "type": "string",
+          "description": "Why the request took this route, when it is worth saying."
+        }
+      }
+    },
+    "VariantPreview": {
+      "description": "One variant held as a changeset; variant.select shows it, changeset.commit writes it.",
+      "type": "object",
+      "required": [
         "changesetId",
         "label",
+        "system",
+        "style",
         "rationale",
-        "provider",
-        "elapsedMs",
-        "update",
+        "file",
         "changes"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "changesetId": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "system": {
+          "type": "string"
+        },
+        "style": {
+          "type": "string"
+        },
+        "rationale": {
+          "type": "string"
+        },
+        "file": {
+          "type": "string"
+        },
+        "changes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/CodeChange"
+          }
+        }
+      }
+    },
+    "GenerateDone": {
+      "description": "The variants that survived validation, the first one previewed in the running app, none written yet.",
+      "type": "object",
+      "required": [
+        "runId",
+        "route",
+        "summary",
+        "elapsedMs",
+        "variants",
+        "dropped",
+        "update"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "runId": {
+          "type": "string"
+        },
+        "route": {
+          "$ref": "#/$defs/Route"
+        },
+        "summary": {
+          "type": "string",
+          "description": "One line for the terminal (F-DX-06, FR-050)."
+        },
+        "elapsedMs": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "variants": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 3,
+          "items": {
+            "$ref": "#/$defs/VariantPreview"
+          }
+        },
+        "dropped": {
+          "description": "Variants the model proposed that could not be applied, with the reason.",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "reason"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "label": {
+                "type": "string"
+              },
+              "reason": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "update": {
+          "$ref": "#/$defs/UpdateResult"
+        }
+      }
+    },
+    "VariantSelect": {
+      "description": "Show another variant of the run in place of the current one; the file on disk is untouched.",
+      "type": "object",
+      "required": [
+        "runId",
+        "changesetId"
       ],
       "additionalProperties": false,
       "properties": {
@@ -1462,28 +1727,22 @@
         },
         "changesetId": {
           "type": "string"
-        },
-        "label": {
+        }
+      }
+    },
+    "VariantSelected": {
+      "type": "object",
+      "required": [
+        "changesetId",
+        "update"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "changesetId": {
           "type": "string"
-        },
-        "rationale": {
-          "type": "string"
-        },
-        "provider": {
-          "type": "string"
-        },
-        "elapsedMs": {
-          "type": "integer",
-          "minimum": 0
         },
         "update": {
           "$ref": "#/$defs/UpdateResult"
-        },
-        "changes": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/CodeChange"
-          }
         }
       }
     },
@@ -1516,6 +1775,7 @@
         "PROVIDER_INVALID_OUTPUT",
         "PROVIDER_TIMEOUT",
         "PROVIDER_FAILED",
+        "PROVIDER_CRASHED",
         "PLUGIN_UNAVAILABLE",
         "DAEMON_UNAVAILABLE",
         "INTERNAL"

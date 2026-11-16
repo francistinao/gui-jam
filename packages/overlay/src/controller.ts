@@ -2,8 +2,12 @@ import type {
   CodeChange,
   ElementStyle,
   FillValue,
+  GenerateDone,
+  GenerateProgress,
   GuijamMessage,
   RadiusValue,
+  Route,
+  VariantPreview,
 } from '@guijam/contracts-ts';
 import type { WidgetHost } from './host';
 import {
@@ -44,22 +48,36 @@ export interface Notice {
 
 export type PanelMode = 'finetune' | 'prompt';
 
-export interface Variant {
-  changesetId: string;
-  label: string;
-  rationale: string;
-  changes: CodeChange[];
-  provider: string;
-  elapsedMs: number;
-}
+export type ProgressStep = GenerateProgress['steps'][number];
 
 export interface Generation {
   prompt: string;
   status: 'idle' | 'running' | 'ready';
-  variant: Variant | null;
+  /** The run whose progress or variants are on show. */
+  runId: string | null;
+  steps: ProgressStep[];
+  variants: VariantPreview[];
+  /** Which variant the page shows. */
+  active: number;
+  dropped: GenerateDone['dropped'];
+  route: Route | null;
+  elapsedMs: number;
+  /** Why the last run failed; shown in the panel with Retry. */
+  error: Notice | null;
 }
 
-const IDLE_GENERATION: Generation = { prompt: '', status: 'idle', variant: null };
+const IDLE_GENERATION: Generation = {
+  prompt: '',
+  status: 'idle',
+  runId: null,
+  steps: [],
+  variants: [],
+  active: 0,
+  dropped: [],
+  route: null,
+  elapsedMs: 0,
+  error: null,
+};
 
 export interface WidgetState {
   tool: Tool | null;
@@ -153,7 +171,15 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
   let editSequence = 0;
   /** The generation whose reply is still wanted; cleared by cancel and close. */
   let runId: string | null = null;
+  /** Bumped on each variant switch, so only the last switch's failure is reported. */
+  let selectSequence = 0;
   const styled = new Set<HTMLElement>();
+
+  host.onEvent((message) => {
+    if (message.type !== 'generate.progress' || message.payload.runId !== runId) return;
+    const { generation } = store.get();
+    store.set({ generation: { ...generation, steps: message.payload.steps } });
+  });
 
   function notify(notice: Notice | null, durationMs = NOTICE_MS): void {
     clearTimeout(noticeTimer);
@@ -267,7 +293,7 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
     });
   }
 
-  /** Cancels a run in flight and discards a variant on show; the prompt stays. */
+  /** Cancels a run in flight and discards the variants on show; the prompt stays. */
   async function settleGeneration(): Promise<void> {
     const { generation } = store.get();
     if (runId) {
@@ -275,12 +301,9 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
       runId = null;
       void host.request({ type: 'generate.cancel', payload: { runId: cancelled } });
     }
-    store.set({ generation: { ...generation, status: 'idle', variant: null } });
-    if (generation.variant) {
-      await host.request({
-        type: 'changeset.discard',
-        payload: { changesetId: generation.variant.changesetId },
-      });
+    store.set({ generation: { ...IDLE_GENERATION, prompt: generation.prompt } });
+    if (generation.status === 'ready' && generation.runId) {
+      await host.request({ type: 'generate.discard', payload: { runId: generation.runId } });
     }
   }
 
@@ -333,7 +356,7 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
       if (!selection || !prompt || generation.status !== 'idle') return;
       const id = crypto.randomUUID();
       runId = id;
-      store.set({ generation: { ...generation, status: 'running', variant: null } });
+      store.set({ generation: { ...IDLE_GENERATION, prompt, status: 'running', runId: id } });
       const reply = await host.request({
         type: 'generate.request',
         payload: {
@@ -345,28 +368,30 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
         },
       });
       if (runId !== id) {
-        // Cancelled or closed meanwhile: a variant that was previewed anyway must go.
+        // Cancelled or closed meanwhile: variants that were previewed anyway must go.
         if (reply.type === 'generate.done') {
-          void host.request({
-            type: 'changeset.discard',
-            payload: { changesetId: reply.payload.changesetId },
-          });
+          void host.request({ type: 'generate.discard', payload: { runId: id } });
         }
         return;
       }
       runId = null;
       const latest = store.get().generation;
       if (reply.type !== 'generate.done') {
-        store.set({ generation: { ...latest, status: 'idle' } });
-        notify(failure(reply), UNDO_WINDOW_MS);
+        store.set({
+          generation: { ...IDLE_GENERATION, prompt: latest.prompt, error: failure(reply) },
+        });
         return;
       }
-      const { changesetId, label, rationale, changes, provider, elapsedMs } = reply.payload;
+      const { variants, dropped, route, elapsedMs } = reply.payload;
       store.set({
         generation: {
           ...latest,
           status: 'ready',
-          variant: { changesetId, label, rationale, changes, provider, elapsedMs },
+          variants: [...variants],
+          active: 0,
+          dropped,
+          route,
+          elapsedMs,
         },
       });
     },
@@ -375,16 +400,35 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
       if (!runId) return;
       const cancelled = runId;
       runId = null;
-      store.set({ generation: { ...store.get().generation, status: 'idle' } });
+      store.set({ generation: { ...IDLE_GENERATION, prompt: store.get().generation.prompt } });
       await host.request({ type: 'generate.cancel', payload: { runId: cancelled } });
     },
 
-    discardVariant: () => settleGeneration(),
+    /** Shows another variant in the page; the file on disk is untouched (AC-3). */
+    async selectVariant(index: number): Promise<void> {
+      const { generation } = store.get();
+      const variant = generation.variants[index];
+      if (generation.status !== 'ready' || !generation.runId || !variant) return;
+      if (index === generation.active) return;
+      selectSequence += 1;
+      const sequence = selectSequence;
+      store.set({ generation: { ...generation, active: index } });
+      const reply = await host.request({
+        type: 'variant.select',
+        payload: { runId: generation.runId, changesetId: variant.changesetId },
+      });
+      if (sequence === selectSequence && reply.type !== 'variant.selected') {
+        notify(failure(reply), UNDO_WINDOW_MS);
+      }
+    },
 
-    /** Commits the variant, then keeps the element selected for fine-tuning (J2.4). */
-    async applyVariant(): Promise<void> {
+    /** Drops the variants and goes back to the prompt, which keeps its text. */
+    editPrompt: () => settleGeneration(),
+
+    /** Commits the variant on show, then keeps the element selected for fine-tuning (J2.4). */
+    async commitVariant(): Promise<void> {
       const { selection, generation } = store.get();
-      const { variant } = generation;
+      const variant = generation.variants[generation.active];
       if (!selection || !variant) return;
       store.set({ busy: true });
       const reply = await host.request({
@@ -392,7 +436,7 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
         payload: { changesetId: variant.changesetId },
       });
       if (reply.type !== 'commit.done') {
-        store.set({ busy: false, generation: { ...generation, status: 'idle', variant: null } });
+        store.set({ busy: false, generation: { ...IDLE_GENERATION, prompt: generation.prompt } });
         notify(failure(reply), UNDO_WINDOW_MS);
         return;
       }
@@ -475,11 +519,14 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
     },
 
     async close(): Promise<void> {
+      const shown = store.get().generation.variants.length;
       const notice = hasUnsaved()
         ? 'Unsaved tweaks were reverted.'
-        : store.get().generation.variant
-          ? 'The variant was discarded.'
-          : undefined;
+        : shown > 1
+          ? 'The variants were discarded.'
+          : shown === 1
+            ? 'The variant was discarded.'
+            : undefined;
       await settleGeneration();
       await revert(notice);
       store.set({

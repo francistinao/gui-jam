@@ -8,6 +8,8 @@ const WIDGET_REQUEST_TYPES = [
   'journal.undo',
   'generate.request',
   'generate.cancel',
+  'variant.select',
+  'generate.discard',
 ] as const satisfies readonly GuijamMessage['type'][];
 
 /** The daemon gives a provider 60 s (route R1), then previews the variant. */
@@ -77,7 +79,20 @@ export function terminalLine(reply: GuijamMessage): string | undefined {
       return `✎ ${reply.payload.summary}`;
     case 'undo.done':
       return `↺ undid ${reply.payload.undoOf}`;
+    case 'generate.done':
+      return `✦ ${reply.payload.summary}`;
     default:
       return undefined;
   }
+}
+
+/** The run a widget request starts, so its progress events can find the page that asked. */
+export function generationRunId(data: unknown): string | undefined {
+  if (typeof data !== 'object' || data === null) return undefined;
+  const { type, payload } = data as { type?: unknown; payload?: unknown };
+  if (type !== 'generate.request' || typeof payload !== 'object' || payload === null) {
+    return undefined;
+  }
+  const { runId } = payload as { runId?: unknown };
+  return typeof runId === 'string' ? runId : undefined;
 }
