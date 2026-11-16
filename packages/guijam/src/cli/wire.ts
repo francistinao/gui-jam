@@ -1,0 +1,352 @@
+import { readFile, writeFile } from 'node:fs/promises';
+import { basename, join } from 'node:path';
+import MagicString from 'magic-string';
+import {
+  type ArrayExpression,
+  type ArrowFunctionExpression,
+  type Directive,
+  type Expression,
+  type Function as FunctionNode,
+  type ObjectExpression,
+  type ObjectProperty,
+  type Program,
+  parseSync,
+  type ReturnStatement,
+  type Statement,
+  Visitor,
+} from 'oxc-parser';
+import type { Project } from './detect.js';
+
+export const PLUGIN_SOURCE = 'guijam/vite';
+
+const MAX_HOPS = 8;
+
+export type EditOutcome =
+  | { kind: 'present' }
+  | { kind: 'added'; code: string }
+  | { kind: 'manual'; reason: string };
+
+export type WireResult =
+  | { status: 'added' | 'present' | 'created'; file: string }
+  | { status: 'manual'; file: string; reason: string; snippet: string }
+  | { status: 'unsupported'; reason: string };
+
+type Scope = readonly (Statement | Directive)[];
+
+type Found<T> = { node: T } | { problem: string };
+
+interface Range {
+  start: number;
+  end: number;
+}
+
+interface Bodies {
+  returns: ReturnStatement[];
+  functions: Range[];
+}
+
+const VITE_FRAMEWORKS = new Set(['vite', 'sveltekit']);
+
+const COMING_SOON: Record<string, string> = {
+  nuxt: 'Nuxt support is next on the roadmap.',
+  next: 'Next.js support is on the roadmap.',
+  astro: 'Astro support is on the roadmap.',
+  angular: 'Angular support is on the roadmap.',
+};
+
+function guijamImportOf(program: Program): string | undefined {
+  for (const statement of program.body) {
+    if (statement.type !== 'ImportDeclaration' || statement.source.value !== PLUGIN_SOURCE)
+      continue;
+    for (const specifier of statement.specifiers) {
+      if (specifier.type !== 'ImportSpecifier') continue;
+      const imported =
+        specifier.imported.type === 'Literal' ? specifier.imported.value : specifier.imported.name;
+      if (imported === 'guijam') return specifier.local.name;
+    }
+  }
+  return undefined;
+}
+
+function calls(program: Program, name: string): boolean {
+  let found = false;
+  new Visitor({
+    CallExpression(node) {
+      if (node.callee.type === 'Identifier' && node.callee.name === name) found = true;
+    },
+  }).visit(program);
+  return found;
+}
+
+function unwrap(expression: Expression): Expression {
+  let current = expression;
+  while (
+    current.type === 'ParenthesizedExpression' ||
+    current.type === 'TSAsExpression' ||
+    current.type === 'TSSatisfiesExpression' ||
+    current.type === 'TSNonNullExpression'
+  ) {
+    current = current.expression;
+  }
+  return current;
+}
+
+function declaredIn(scope: Scope, name: string): Expression | undefined {
+  for (const statement of scope) {
+    if (statement.type !== 'VariableDeclaration') continue;
+    for (const declarator of statement.declarations) {
+      if (
+        declarator.id.type === 'Identifier' &&
+        declarator.id.name === name &&
+        declarator.init !== null
+      ) {
+        return declarator.init;
+      }
+    }
+  }
+  return undefined;
+}
+
+function collectBodies(program: Program): Bodies {
+  const returns: ReturnStatement[] = [];
+  const functions: Range[] = [];
+  const addFunction = (node: Range): void => {
+    functions.push(node);
+  };
+  new Visitor({
+    ReturnStatement(node) {
+      returns.push(node);
+    },
+    FunctionDeclaration: addFunction,
+    FunctionExpression: addFunction,
+    ArrowFunctionExpression: addFunction,
+  }).visit(program);
+  return { returns, functions };
+}
+
+function contains(outer: Range, inner: Range): boolean {
+  return outer.start <= inner.start && inner.end <= outer.end;
+}
+
+function ownReturns(fn: Range, bodies: Bodies): ReturnStatement[] {
+  const nested = bodies.functions.filter(
+    (other) => (other.start !== fn.start || other.end !== fn.end) && contains(fn, other),
+  );
+  return bodies.returns.filter(
+    (node) => contains(fn, node) && !nested.some((other) => contains(other, node)),
+  );
+}
+
+function returnedFrom(
+  fn: FunctionNode | ArrowFunctionExpression,
+  scope: Scope,
+  bodies: Bodies,
+  hops: number,
+): Found<ObjectExpression> {
+  const { body } = fn;
+  if (body === null || body === undefined) return { problem: 'its config function has no body' };
+  if (body.type !== 'BlockStatement') return configObject(body, scope, bodies, hops + 1);
+  const returns = ownReturns(fn, bodies);
+  const [only] = returns;
+  if (returns.length !== 1 || only === undefined || only.argument === null) {
+    return { problem: 'its config function returns from more than one place' };
+  }
+  return configObject(only.argument, [...body.body, ...scope], bodies, hops + 1);
+}
+
+function configObject(
+  expression: Expression,
+  scope: Scope,
+  bodies: Bodies,
+  hops: number,
+): Found<ObjectExpression> {
+  if (hops > MAX_HOPS) return { problem: 'its config is too indirect' };
+  const node = unwrap(expression);
+  switch (node.type) {
+    case 'ObjectExpression':
+      return { node };
+    case 'CallExpression': {
+      const [first] = node.arguments;
+      if (first === undefined || first.type === 'SpreadElement')
+        return { problem: 'its config call has no argument' };
+      return configObject(first, scope, bodies, hops + 1);
+    }
+    case 'Identifier': {
+      const init = declaredIn(scope, node.name);
+      if (init === undefined)
+        return { problem: `it exports ${node.name}, which is not declared in the file` };
+      return configObject(init, scope, bodies, hops + 1);
+    }
+    case 'ArrowFunctionExpression':
+    case 'FunctionExpression':
+      return returnedFrom(node, scope, bodies, hops);
+    default:
+      return { problem: 'its default export is not a config object' };
+  }
+}
+
+function exportedConfig(program: Program): Found<ObjectExpression> {
+  const exported = program.body.find((statement) => statement.type === 'ExportDefaultDeclaration');
+  if (exported === undefined) return { problem: 'it has no default export' };
+  const { declaration } = exported;
+  const bodies = collectBodies(program);
+  if (declaration.type === 'FunctionDeclaration') {
+    return returnedFrom(declaration, program.body, bodies, 0);
+  }
+  if (declaration.type === 'ClassDeclaration' || declaration.type === 'TSInterfaceDeclaration') {
+    return { problem: 'its default export is not a config object' };
+  }
+  return configObject(declaration, program.body, bodies, 0);
+}
+
+function isPluginsKey(property: ObjectProperty): boolean {
+  if (property.computed) return false;
+  const { key } = property;
+  return (
+    (key.type === 'Identifier' && key.name === 'plugins') ||
+    (key.type === 'Literal' && key.value === 'plugins')
+  );
+}
+
+function insertFirst(
+  output: MagicString,
+  code: string,
+  open: number,
+  firstStart: number,
+  text: string,
+): void {
+  const between = code.slice(open, firstStart);
+  const newline = between.lastIndexOf('\n');
+  output.appendLeft(
+    firstStart,
+    newline === -1 ? `${text}, ` : `${text},\n${between.slice(newline + 1)}`,
+  );
+}
+
+function addToPlugins(
+  output: MagicString,
+  code: string,
+  config: ObjectExpression,
+  call: string,
+): string | undefined {
+  const property = config.properties.find(
+    (entry): entry is ObjectProperty => entry.type === 'Property' && isPluginsKey(entry),
+  );
+  if (property === undefined) {
+    const [first] = config.properties;
+    if (first === undefined) output.appendLeft(config.start + 1, ` plugins: [${call}] `);
+    else insertFirst(output, code, config.start + 1, first.start, `plugins: [${call}]`);
+    return undefined;
+  }
+  const value = unwrap(property.value);
+  if (value.type !== 'ArrayExpression') return 'its plugins are not a plain array';
+  const plugins: ArrayExpression = value;
+  const first = plugins.elements.find((element) => element !== null);
+  if (first === undefined || first === null) output.appendLeft(plugins.start + 1, call);
+  else insertFirst(output, code, plugins.start + 1, first.start, call);
+  return undefined;
+}
+
+function addImport(output: MagicString, code: string, program: Program): void {
+  const imports = program.body.filter((statement) => statement.type === 'ImportDeclaration');
+  const [first] = imports;
+  const last = imports.at(-1);
+  const quote = first === undefined ? "'" : (code[first.source.start] ?? "'");
+  const semicolon = last === undefined || code[last.end - 1] === ';' ? ';' : '';
+  const line = `import { guijam } from ${quote}${PLUGIN_SOURCE}${quote}${semicolon}`;
+  if (last === undefined) output.prepend(`${line}\n\n`);
+  else output.appendLeft(last.end, `\n${line}`);
+}
+
+export function callsGuijam(code: string, filename = 'vite.config.ts'): boolean {
+  const parsed = parseSync(filename, code);
+  if (parsed.errors.length > 0) return false;
+  const local = guijamImportOf(parsed.program);
+  return local !== undefined && calls(parsed.program, local);
+}
+
+export function addGuijamPlugin(code: string, filename = 'vite.config.ts'): EditOutcome {
+  const parsed = parseSync(filename, code);
+  const [error] = parsed.errors;
+  if (error !== undefined)
+    return { kind: 'manual', reason: `it could not be parsed (${error.message})` };
+  const { program } = parsed;
+  const local = guijamImportOf(program);
+  if (local !== undefined && calls(program, local)) return { kind: 'present' };
+
+  const config = exportedConfig(program);
+  if ('problem' in config) return { kind: 'manual', reason: config.problem };
+  const output = new MagicString(code);
+  const problem = addToPlugins(output, code, config.node, `${local ?? 'guijam'}()`);
+  if (problem !== undefined) return { kind: 'manual', reason: problem };
+  if (local === undefined) addImport(output, code, program);
+
+  const next = output.toString();
+  if (!callsGuijam(next, filename))
+    return { kind: 'manual', reason: 'the edit could not be verified' };
+  return { kind: 'added', code: next };
+}
+
+export function viteConfigSnippet(): string {
+  return [
+    "import { guijam } from 'guijam/vite';",
+    '',
+    'export default defineConfig({',
+    '  plugins: [guijam(), ...yourPlugins],',
+    '});',
+  ].join('\n');
+}
+
+function newViteConfig(): string {
+  return [
+    "import { guijam } from 'guijam/vite';",
+    "import { defineConfig } from 'vite';",
+    '',
+    'export default defineConfig({',
+    '  plugins: [guijam()],',
+    '});',
+    '',
+  ].join('\n');
+}
+
+export async function wireProject(project: Project): Promise<WireResult> {
+  const soon = COMING_SOON[project.framework];
+  if (soon !== undefined) {
+    return {
+      status: 'unsupported',
+      reason: `GUIJam doesn't plug into ${project.frameworkLabel} yet. ${soon}`,
+    };
+  }
+  if (!VITE_FRAMEWORKS.has(project.framework)) {
+    return {
+      status: 'unsupported',
+      reason: 'No Vite dev server found. GUIJam runs inside Vite for now.',
+    };
+  }
+  if (project.configFile === undefined) {
+    const file = join(project.root, project.typescript ? 'vite.config.ts' : 'vite.config.mjs');
+    await writeFile(file, newViteConfig(), { flag: 'wx' });
+    return { status: 'created', file };
+  }
+  const file = project.configFile;
+  const outcome = addGuijamPlugin(await readFile(file, 'utf8'), basename(file));
+  if (outcome.kind === 'manual') {
+    return {
+      status: 'manual',
+      file,
+      reason: `${basename(file)} can't be edited safely: ${outcome.reason}.`,
+      snippet: viteConfigSnippet(),
+    };
+  }
+  if (outcome.kind === 'added') await writeFile(file, outcome.code);
+  return { status: outcome.kind, file };
+}
+
+export async function isWired(project: Project): Promise<boolean> {
+  if (project.configFile === undefined) return false;
+  try {
+    return callsGuijam(await readFile(project.configFile, 'utf8'), basename(project.configFile));
+  } catch {
+    return false;
+  }
+}

@@ -15,6 +15,7 @@ import {
   type ViteDevServer,
   version as viteVersion,
 } from 'vite';
+import { findDaemonBinary, platformKey } from './daemon-binary.js';
 import { DaemonClient } from './daemon-client.js';
 import {
   checkWidgetRequest,
@@ -147,9 +148,11 @@ export function guijam(options: GuijamOptions = {}): Plugin<GuijamApi> {
 
   function connectDaemon(server: ViteDevServer): void {
     const logger = server.config.logger;
-    const binary = options.daemonBinary ?? process.env.GUIJAM_GJD_BIN;
+    const binary = findDaemonBinary(options.daemonBinary);
     if (!binary) {
-      logger.warn('[guijam] fine-tune and AI edits are off: set GUIJAM_GJD_BIN to the gjd binary');
+      logger.warn(
+        `[guijam] fine-tune and AI edits are off: no gjd binary for ${platformKey()}. Reinstall guijam, or set GUIJAM_GJD_BIN to a gjd binary.`,
+      );
       return;
     }
     const client = new DaemonClient({

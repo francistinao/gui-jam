@@ -5,6 +5,7 @@ use gjd_core::contracts::{
     EditOp, ElementStyle, ElementStyleClassSource, GenerateProgress, GenerateProgressStepsItem,
     GenerateProgressStepsItemState, RouteTier,
 };
+use gjd_providers::ProviderId;
 
 pub const MAX_OPS: usize = 40;
 pub const VARIANTS: usize = 3;
@@ -14,7 +15,6 @@ const IMPORT_SCAN_LINES: usize = 80;
 pub struct TierConfig {
     pub tier: RouteTier,
     pub label: &'static str,
-    pub model: &'static str,
     pub timeout: Duration,
     pub context_lines: usize,
 }
@@ -22,7 +22,6 @@ pub struct TierConfig {
 pub const R1: TierConfig = TierConfig {
     tier: RouteTier::R1,
     label: "R1",
-    model: "haiku",
     timeout: Duration::from_secs(60),
     context_lines: 40,
 };
@@ -30,10 +29,19 @@ pub const R1: TierConfig = TierConfig {
 pub const R2: TierConfig = TierConfig {
     tier: RouteTier::R2,
     label: "R2",
-    model: "sonnet",
     timeout: Duration::from_secs(120),
     context_lines: 120,
 };
+
+impl TierConfig {
+    #[must_use]
+    pub fn model_for(&self, provider: ProviderId) -> Option<&'static str> {
+        match self.tier {
+            RouteTier::R2 => provider.standard_model(),
+            _ => Some(provider.fast_model()),
+        }
+    }
+}
 
 pub const SYSTEM_PROMPT: &str = "\
 You change one element of a React app styled with Tailwind CSS v4, for GUIJam, a visual \

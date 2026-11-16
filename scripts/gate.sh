@@ -8,7 +8,7 @@ echo "== build";        pnpm -s build
 echo "== typecheck";    pnpm -s typecheck > /dev/null
 echo "== unit";         pnpm -s test > "$log_dir/unit.log" 2>&1 || { cat "$log_dir/unit.log"; exit 1; }
 echo "== contracts";    pnpm -s contracts:check
-echo "== package";      scripts/smoke-package.sh > "$log_dir/package.log" 2>&1 || { cat "$log_dir/package.log"; exit 1; }
+echo "== package";      { cargo build -q -p gjd-daemon && GJD_BINARY=target/debug/gjd scripts/smoke-package.sh; } > "$log_dir/package.log" 2>&1 || { cat "$log_dir/package.log"; exit 1; }
 echo "== rustfmt";      cargo fmt --all --check
 echo "== clippy";       cargo clippy -q --workspace --all-targets -- -D warnings
 echo "== cargo test";   cargo test -q --workspace > "$log_dir/cargo.log" 2>&1 || { cat "$log_dir/cargo.log"; exit 1; }

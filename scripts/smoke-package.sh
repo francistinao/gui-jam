@@ -30,11 +30,40 @@ fi
 
 pin() { node -p "require('$repo/package.json').devDependencies['$1']"; }
 
+version="$(tar -xOzf "$tarball" package/package.json | node -p 'JSON.parse(require("fs").readFileSync(0, "utf8")).version')"
+platform_tarball=()
+if [[ -n "${GJD_BINARY:-}" ]]; then
+  platform_dir="$(node "$repo/scripts/platform-package.mjs" host "$GJD_BINARY" "$version" "$work/platform")"
+  (cd "$platform_dir" && npm pack --silent --pack-destination "$work" > /dev/null)
+  platform_tarball=("$work"/guijam-gjd-*.tgz)
+fi
+
 mkdir "$work/app"
 cd "$work/app"
 echo '{ "name": "guijam-smoke", "private": true, "type": "module" }' > package.json
-npm install --silent --no-audit --no-fund "$tarball" \
+npm install --silent --no-audit --no-fund "$tarball" ${platform_tarball[@]+"${platform_tarball[@]}"} \
   "vite@$(pin vite)" "typescript@$(pin typescript)" "@types/node@$(pin @types/node)"
+
+printed="$(./node_modules/.bin/guijam --version)"
+if [[ "$printed" != "$version" ]]; then
+  echo "guijam --version printed '$printed', expected '$version'" >&2
+  exit 1
+fi
+if ! NO_COLOR=1 ./node_modules/.bin/guijam help | grep -q 'Usage: guijam <command>'; then
+  echo "guijam help did not print the usage" >&2
+  exit 1
+fi
+
+if [[ ${#platform_tarball[@]} -gt 0 ]]; then
+  node --input-type=module -e "
+import { execFileSync } from 'node:child_process';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.resolve('guijam/vite'));
+const binary = require.resolve('@guijam/gjd-' + process.platform + '-' + process.arch + '/bin/gjd');
+const version = execFileSync(binary, ['--version'], { encoding: 'utf8' });
+if (!version.startsWith('gjd ')) throw new Error('unexpected gjd --version output: ' + version);
+"
+fi
 
 node --input-type=module -e "
 import { existsSync } from 'node:fs';

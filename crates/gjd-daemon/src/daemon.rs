@@ -28,6 +28,7 @@ use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
 use crate::assets::{self, AssetFile, Format};
+use crate::config;
 use crate::diff::code_changes;
 use crate::generate::{self, Progress, Step, TierConfig};
 use crate::index::ProjectIndex;
@@ -37,7 +38,7 @@ use crate::route::{self, Tier};
 
 const UPDATE_TIMEOUT: Duration = Duration::from_secs(5);
 const AUTH_CACHE: Duration = Duration::from_mins(5);
-const PROVIDER: ProviderId = ProviderId::ClaudeCode;
+const DEFAULT_PROVIDER: ProviderId = ProviderId::ClaudeCode;
 
 fn locked<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
@@ -177,44 +178,63 @@ impl From<std::io::Error> for Failure {
 
 impl From<ProviderError> for Failure {
     fn from(error: ProviderError) -> Self {
-        let retry = "Retry, or simplify the prompt.";
-        match error {
-            ProviderError::NotInstalled(provider) => Self::new(
-                ErrorCode::ProviderNotInstalled,
-                format!("{} is not installed.", provider.display_name()),
-            )
-            .with_action(format!("Install with: {}", provider.install_command())),
-            ProviderError::NotAuthenticated {
-                provider,
-                login_command,
-            } => not_authenticated(provider, login_command),
-            ProviderError::RateLimited => Self::new(
-                ErrorCode::ProviderRateLimited,
-                format!("{} is rate limited.", PROVIDER.display_name()),
-            )
-            .with_action("Retry in a minute."),
-            ProviderError::Overloaded => Self::new(
-                ErrorCode::ProviderFailed,
-                format!("{} is overloaded.", PROVIDER.display_name()),
-            )
-            .with_action("Retry in a minute."),
-            ProviderError::Timeout(limit) => Self::new(
-                ErrorCode::ProviderTimeout,
-                format!("No answer within {} s.", limit.as_secs()),
-            )
-            .with_action(retry),
-            ProviderError::Cancelled => Self::new(ErrorCode::Cancelled, "Generation cancelled."),
-            ProviderError::InvalidOutput(detail) => invalid_output(&detail),
-            ProviderError::Crashed { .. } => Self::new(
-                ErrorCode::ProviderCrashed,
-                format!("{} stopped before answering.", PROVIDER.display_name()),
-            )
-            .with_action(retry),
-            ProviderError::Failed(_) | ProviderError::Io(_) => {
-                Self::new(ErrorCode::ProviderFailed, error.to_string()).with_action(retry)
-            }
+        provider_failure(error, None)
+    }
+}
+
+fn provider_failure(error: ProviderError, provider: Option<ProviderId>) -> Failure {
+    let name = provider.map_or("The AI tool", ProviderId::display_name);
+    let retry = "Retry, or simplify the prompt.";
+    match error {
+        ProviderError::NotInstalled(provider) => Failure::new(
+            ErrorCode::ProviderNotInstalled,
+            format!("{} is not installed.", provider.display_name()),
+        )
+        .with_action(format!("Install with: {}", provider.install_command())),
+        ProviderError::NotAuthenticated {
+            provider,
+            login_command,
+        } => not_authenticated(provider, login_command),
+        ProviderError::RateLimited => Failure::new(
+            ErrorCode::ProviderRateLimited,
+            format!("{name} is rate limited."),
+        )
+        .with_action("Retry in a minute."),
+        ProviderError::Overloaded => {
+            Failure::new(ErrorCode::ProviderFailed, format!("{name} is overloaded."))
+                .with_action("Retry in a minute.")
+        }
+        ProviderError::Timeout(limit) => Failure::new(
+            ErrorCode::ProviderTimeout,
+            format!("No answer within {} s.", limit.as_secs()),
+        )
+        .with_action(retry),
+        ProviderError::Cancelled => Failure::new(ErrorCode::Cancelled, "Generation cancelled."),
+        ProviderError::InvalidOutput(detail) => invalid_output(&detail),
+        ProviderError::Crashed { .. } => Failure::new(
+            ErrorCode::ProviderCrashed,
+            format!("{name} stopped before answering."),
+        )
+        .with_action(retry),
+        ProviderError::Failed(_) | ProviderError::Io(_) => {
+            Failure::new(ErrorCode::ProviderFailed, error.to_string()).with_action(retry)
         }
     }
+}
+
+async fn first_logged_in() -> Option<ProviderId> {
+    for id in ProviderId::ALL {
+        let Some(provider) = adapter(id) else {
+            continue;
+        };
+        let Ok(discovery) = provider.discover().await else {
+            continue;
+        };
+        if matches!(provider.check_auth(&discovery).await, AuthStatus::LoggedIn) {
+            return Some(id);
+        }
+    }
+    None
 }
 
 fn not_authenticated(provider: ProviderId, login_command: &str) -> Failure {
@@ -435,7 +455,7 @@ pub struct Daemon {
     plugin: Mutex<Option<PluginLink>>,
     runs: Mutex<HashMap<String, Run>>,
     variant_runs: Mutex<HashMap<String, VariantRun>>,
-    provider: tokio::sync::Mutex<Option<(Discovery, Instant)>>,
+    provider: tokio::sync::Mutex<Option<(ProviderId, Discovery, Instant)>>,
     next_id: AtomicU64,
     connections: AtomicUsize,
     last_disconnect: Mutex<Instant>,
@@ -936,19 +956,22 @@ impl Daemon {
     ) -> Result<GenerateDone, Failure> {
         let file = job.request.file.as_str();
         let (provider, discovery) = self.provider().await?;
-        let provider_name = provider.id().display_name();
+        let provider_id = provider.id();
+        let provider_name = provider_id.display_name();
+        let model = tier.model_for(provider_id);
+        let model_label = model.unwrap_or("default model");
         let mut progress = Progress::new(
             &job.request.run_id,
             job.style,
             &self.stylesheet_names(),
             job.request.sketch.is_some(),
             provider_name,
-            tier.model,
+            model_label,
         );
         progress.start(Step::Ask);
         self.report(&progress);
         let generation = GenerationRequest {
-            model: Some(tier.model.to_owned()),
+            model: model.map(str::to_owned),
             system_prompt: generate::SYSTEM_PROMPT.to_owned(),
             user_prompt: format!(
                 "{}{}",
@@ -963,11 +986,11 @@ impl Daemon {
         let reply = self
             .ask(&*provider, &discovery, generation, job.cancel)
             .await?;
-        let route_label = format!("{} · {provider_name} {}", tier.label, tier.model);
+        let route_label = format!("{} · {provider_name} {model_label}", tier.label);
         let route = Route {
             tier: tier.tier,
             provider: Some(provider_name.to_owned()),
-            model: Some(tier.model.to_owned()),
+            model: model.map(str::to_owned),
             notice: notice.map(str::to_owned),
         };
         let at = format!("<{}> {file}:{}", job.style.tag, job.request.line);
@@ -1070,9 +1093,9 @@ impl Daemon {
             Ok(output) => Ok(output.variant_set),
             Err(error @ ProviderError::NotAuthenticated { .. }) => {
                 *self.provider.lock().await = None;
-                Err(error.into())
+                Err(provider_failure(error, Some(provider.id())))
             }
-            Err(error) => Err(error.into()),
+            Err(error) => Err(provider_failure(error, Some(provider.id()))),
         }
     }
 
@@ -1157,21 +1180,31 @@ impl Daemon {
     }
 
     async fn provider(&self) -> Result<(Box<dyn ProviderAdapter>, Discovery), Failure> {
-        let provider = adapter(PROVIDER).ok_or_else(|| {
-            Failure::new(
-                ErrorCode::ProviderNotInstalled,
-                format!("{} is not supported yet.", PROVIDER.display_name()),
-            )
-        })?;
         let mut ready = self.provider.lock().await;
-        if let Some((discovery, checked)) = ready.as_ref()
+        let configured = config::active_provider();
+        if let Some((id, discovery, checked)) = ready.as_ref()
+            && configured.is_none_or(|configured| configured == *id)
             && checked.elapsed() < AUTH_CACHE
+            && let Some(provider) = adapter(*id)
         {
             return Ok((provider, discovery.clone()));
         }
-        let discovery = provider.discover().await?;
+        let id = match configured {
+            Some(id) => id,
+            None => first_logged_in().await.unwrap_or(DEFAULT_PROVIDER),
+        };
+        let provider = adapter(id).ok_or_else(|| {
+            Failure::new(
+                ErrorCode::ProviderNotInstalled,
+                format!("{} is not supported yet.", id.display_name()),
+            )
+        })?;
+        let discovery = provider
+            .discover()
+            .await
+            .map_err(|error| provider_failure(error, Some(id)))?;
         match provider.check_auth(&discovery).await {
-            AuthStatus::LoggedIn => *ready = Some((discovery.clone(), Instant::now())),
+            AuthStatus::LoggedIn => *ready = Some((id, discovery.clone(), Instant::now())),
             AuthStatus::NotLoggedIn { login_command } => {
                 return Err(not_authenticated(provider.id(), login_command));
             }

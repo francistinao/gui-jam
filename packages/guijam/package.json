@@ -4,6 +4,9 @@
   "description": "Draw on your running Vite app, get live UI variants from your own LLM CLI, and write minimal source edits.",
   "license": "MIT",
   "type": "module",
+  "bin": {
+    "guijam": "./dist/cli.js"
+  },
   "exports": {
     "./vite": {
       "types": "./dist/vite.d.ts",
@@ -26,6 +29,7 @@
     "vite": "^6.0.0 || ^7.0.0 || ^8.0.0"
   },
   "dependencies": {
+    "@clack/prompts": "1.8.1",
     "magic-string": "1.4.5",
     "oxc-parser": "0.159.0"
   },

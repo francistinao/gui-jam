@@ -54,7 +54,13 @@ enum DaemonCommand {
 
 #[derive(Subcommand)]
 enum ProviderCommand {
-    List,
+    List {
+        #[arg(long)]
+        json: bool,
+    },
+    Use {
+        id: ProviderId,
+    },
     Test {
         id: ProviderId,
         #[arg(long, default_value_t = 1, value_parser = clap::value_parser!(u32).range(1..))]
@@ -69,6 +75,59 @@ fn percentile(samples: &[Duration], p: usize) -> Duration {
     sorted.sort();
     let rank = (p * sorted.len()).div_ceil(100).max(1);
     sorted[rank - 1]
+}
+
+async fn list_json() -> ExitCode {
+    let active = gjd_daemon::config::active_provider();
+    let mut entries = Vec::new();
+    for id in ProviderId::ALL {
+        let mut entry = serde_json::json!({
+            "id": id.as_str(),
+            "name": id.display_name(),
+            "active": active == Some(id),
+            "installCommand": id.install_command(),
+            "installed": false,
+            "auth": "unknown",
+        });
+        if let Some(provider) = adapter(id)
+            && let Ok(discovery) = provider.discover().await
+        {
+            entry["installed"] = true.into();
+            entry["version"] = discovery.version.clone().into();
+            match provider.check_auth(&discovery).await {
+                AuthStatus::LoggedIn => entry["auth"] = "logged_in".into(),
+                AuthStatus::NotLoggedIn { login_command } => {
+                    entry["auth"] = "not_logged_in".into();
+                    entry["loginCommand"] = login_command.into();
+                }
+                AuthStatus::Unknown { reason } => entry["reason"] = reason.into(),
+            }
+        }
+        entries.push(entry);
+    }
+    println!("{}", serde_json::Value::Array(entries));
+    ExitCode::SUCCESS
+}
+
+fn use_provider(id: ProviderId) -> ExitCode {
+    if adapter(id).is_none() {
+        eprintln!("{id}: adapter not available in this build");
+        return ExitCode::FAILURE;
+    }
+    match gjd_daemon::config::set_active_provider(id) {
+        Ok(path) => {
+            println!(
+                "{} is now the AI tool for GUIJam ({})",
+                id.display_name(),
+                path.display()
+            );
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            eprintln!("cannot save the choice: {error}");
+            ExitCode::FAILURE
+        }
+    }
 }
 
 async fn list() -> ExitCode {
@@ -238,7 +297,9 @@ async fn main() -> ExitCode {
         }) => run_daemon(&project, idle_seconds).await,
         Command::Daemon(DaemonCommand::Status { project }) => daemon_status(&project),
         Command::Daemon(DaemonCommand::Stop { project }) => stop_daemon(&project).await,
-        Command::Provider(ProviderCommand::List) => list().await,
+        Command::Provider(ProviderCommand::List { json: true }) => list_json().await,
+        Command::Provider(ProviderCommand::List { json: false }) => list().await,
+        Command::Provider(ProviderCommand::Use { id }) => use_provider(id),
         Command::Provider(ProviderCommand::Test { id, runs, model }) => test(id, runs, model).await,
     }
 }
