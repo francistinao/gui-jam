@@ -21,7 +21,7 @@ test('maps rendered elements to their JSX source location', async ({ page }) => 
     'data-gj-src',
     'src/components/OrderButton.tsx:3:5',
   );
-  await expect(page.getByText('Ube Latte')).toHaveAttribute('data-gj-src', 'src/App.tsx:31:20');
+  await expect(page.getByText('Ube Latte')).toHaveAttribute('data-gj-src', 'src/App.tsx:34:20');
   await expect(page.locator('article[data-gj-src="src/components/MenuCard.tsx:11:5"]')).toHaveCount(
     3,
   );

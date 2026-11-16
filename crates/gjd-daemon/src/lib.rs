@@ -2,7 +2,9 @@ pub mod daemon;
 pub mod diff;
 pub mod gateway;
 pub mod generate;
+pub mod index;
 pub mod r0;
+pub mod references;
 pub mod route;
 pub mod run_dir;
 

@@ -16,7 +16,10 @@ export function App() {
   return (
     <div className="min-h-screen bg-crema font-sans text-espresso">
       <header className="flex items-center justify-between px-12 py-6">
-        <span className="font-display text-2xl font-bold">Brew &amp; Co.</span>
+        <span className="flex items-center gap-2 font-display text-2xl font-bold">
+          <img src="/cup.svg" alt="Coffee cup" className="size-7" />
+          Brew &amp; Co.
+        </span>
         <nav className="flex gap-8">
           <a href="#menu">Menu</a>
           <a href="#branches">Branches</a>

@@ -29,7 +29,9 @@ use tokio_util::sync::CancellationToken;
 
 use crate::diff::code_changes;
 use crate::generate::{self, Progress, Step, TierConfig};
+use crate::index::ProjectIndex;
 use crate::r0;
+use crate::references;
 use crate::route::{self, Tier};
 
 const UPDATE_TIMEOUT: Duration = Duration::from_secs(5);
@@ -382,6 +384,7 @@ impl From<Variant> for Held {
 
 pub struct Daemon {
     project: ProjectRoot,
+    index: ProjectIndex,
     journal: Arc<Journal>,
     write_lock: tokio::sync::Mutex<()>,
     tailwind_roots: Mutex<Vec<PathBuf>>,
@@ -400,6 +403,7 @@ impl Daemon {
     #[must_use]
     pub fn new(project: ProjectRoot, journal: Journal) -> Self {
         Self {
+            index: ProjectIndex::new(project.path()),
             project,
             journal: Arc::new(journal),
             write_lock: tokio::sync::Mutex::new(()),
@@ -863,7 +867,11 @@ impl Daemon {
         let generation = GenerationRequest {
             model: Some(tier.model.to_owned()),
             system_prompt: generate::SYSTEM_PROMPT.to_owned(),
-            user_prompt: generate::user_prompt(job.style, job.source, job.prompt, tier),
+            user_prompt: format!(
+                "{}{}",
+                generate::user_prompt(job.style, job.source, job.prompt, tier),
+                self.references(job).await
+            ),
             images: Vec::new(),
             tools: ToolPolicy::None,
             timeout: tier.timeout,
@@ -934,6 +942,23 @@ impl Daemon {
             dropped,
             update: Some(update),
         })
+    }
+
+    async fn references(&self, job: &Job<'_>) -> String {
+        let files = self.index.files().await;
+        let mut mentioned = Vec::new();
+        for path in references::mentioned_sources(&files, job.prompt, &job.request.file) {
+            if let Ok(content) = self.read_project_file(path).await {
+                mentioned.push((path.to_owned(), content));
+            }
+        }
+        references::section(
+            job.request.page.as_ref(),
+            &files,
+            &self.project.path().to_string_lossy(),
+            job.prompt,
+            &mentioned,
+        )
     }
 
     async fn ask(

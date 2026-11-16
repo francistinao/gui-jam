@@ -66,15 +66,20 @@ impl ProjectRoot {
     }
 }
 
-fn is_denied(relative: &Path) -> bool {
-    let first = relative
-        .components()
-        .find_map(|component| match component {
+#[must_use]
+pub fn is_denied(relative: &Path) -> bool {
+    let directories: Vec<&str> = relative
+        .parent()
+        .into_iter()
+        .flat_map(Path::components)
+        .filter_map(|component| match component {
             Component::Normal(name) => name.to_str(),
             _ => None,
         })
-        .unwrap_or_default();
-    let in_denied_dir = DENIED_DIRS.contains(&first) && relative.components().count() > 1;
+        .collect();
+    let in_denied_dir = directories
+        .iter()
+        .any(|directory| DENIED_DIRS.contains(directory));
     let file_name = relative
         .file_name()
         .and_then(|name| name.to_str())
@@ -182,5 +187,19 @@ mod tests {
             root.resolve("src/components"),
             Err(PolicyError::NotAFile("src/components".to_owned()))
         );
+    }
+
+    #[test]
+    fn denies_nested_dependency_and_build_directories() {
+        use std::path::Path;
+
+        use super::is_denied;
+
+        assert!(is_denied(Path::new("node_modules/react/index.js")));
+        assert!(is_denied(Path::new("packages/app/node_modules/x/y.js")));
+        assert!(is_denied(Path::new("apps/web/dist/main.js")));
+        assert!(is_denied(Path::new("config/.env.local")));
+        assert!(!is_denied(Path::new("src/components/Distance.tsx")));
+        assert!(!is_denied(Path::new("node_modules")));
     }
 }

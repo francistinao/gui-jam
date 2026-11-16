@@ -730,6 +730,66 @@
         "forceAi": {
           "type": "boolean",
           "description": "Ask the provider even when the prompt is an exact edit GUIJam can make itself."
+        },
+        "page": {
+          "$ref": "#/$defs/PageOutline"
+        }
+      }
+    },
+    "PageOutline": {
+      "description": "What the page around the request shows, collected by the widget: landmarks, headings, images, links and buttons with their source locations. Its text comes from the running app and is untrusted.",
+      "type": "object",
+      "required": ["items"],
+      "additionalProperties": false,
+      "properties": {
+        "items": {
+          "type": "array",
+          "maxItems": 200,
+          "items": {
+            "$ref": "#/$defs/PageItem"
+          }
+        }
+      }
+    },
+    "PageItem": {
+      "type": "object",
+      "required": ["kind", "tag", "text", "box"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": ["landmark", "heading", "image", "link", "button"]
+        },
+        "tag": {
+          "type": "string",
+          "maxLength": 40
+        },
+        "text": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "region": {
+          "type": "string",
+          "maxLength": 40
+        },
+        "src": {
+          "type": "string",
+          "maxLength": 300,
+          "description": "The element's data-gj-src."
+        },
+        "url": {
+          "type": "string",
+          "maxLength": 300,
+          "description": "For images, the URL path the page loads it from."
+        },
+        "box": {
+          "type": "array",
+          "minItems": 4,
+          "maxItems": 4,
+          "items": {
+            "type": "integer"
+          },
+          "description": "x, y, width and height in CSS pixels of the viewport."
         }
       }
     },

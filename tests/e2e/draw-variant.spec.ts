@@ -35,6 +35,7 @@ const savedEnv = { PATH: process.env.PATH };
 interface CliRun {
   args?: string[];
   request?: string;
+  assets?: string[];
   interrupted?: boolean;
 }
 
@@ -334,4 +335,21 @@ test('an open-ended request uses the standard tier, and a multi-file one says so
   await expect(prompt.getByRole('note').first()).toContainText(
     'Multi-file changes work best from your CLI session',
   );
+});
+
+test('a prompt can point at another part of the page, and the model gets that asset', async ({
+  page,
+}) => {
+  const button = page.getByRole('button', { name: 'Order now' });
+  const before = await fileSnapshot(ORDER_BUTTON);
+
+  const prompt = await askAbout(page, button, 'use the image from the header here');
+
+  const variants = prompt.getByRole('region', { name: 'Variants' });
+  await expect(variants).toContainText('<img src="/cup.svg" alt="" className="size-4" />Order now');
+  await expect(button.locator('img')).toHaveAttribute('src', '/cup.svg');
+  const run = (await cliRuns()).at(-1);
+  expect(run?.assets).toContain('public/cup.svg');
+  expect(run?.args).toEqual(expect.arrayContaining(['--model', 'sonnet']));
+  expect(await fileSnapshot(ORDER_BUTTON)).toEqual(before);
 });

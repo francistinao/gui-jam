@@ -357,6 +357,19 @@ export interface GenerateRequest {
   column: number;
   prompt: string;
   forceAi?: boolean;
+  page?: PageOutline;
+}
+export interface PageOutline {
+  items: PageItem[];
+}
+export interface PageItem {
+  kind: 'landmark' | 'heading' | 'image' | 'link' | 'button';
+  tag: string;
+  text: string;
+  region?: string;
+  src?: string;
+  url?: string;
+  box: [number, number, number, number];
 }
 export interface GenerateDoneMessage {
   type: 'generate.done';

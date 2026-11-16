@@ -19,6 +19,7 @@ import {
   samplePoints,
   type Tool,
 } from './model';
+import { collectPageOutline } from './page-outline';
 import type { Store } from './store';
 
 const PREVIEW_DEBOUNCE_MS = 120;
@@ -312,6 +313,7 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
         line: selection.line,
         column: selection.column,
         prompt,
+        page: collectPageOutline(document, host.hostElement),
         ...(forceAi ? { forceAi } : {}),
       },
     });
