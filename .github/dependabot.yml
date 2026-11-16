@@ -1,0 +1,91 @@
+version: 2
+
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    cooldown:
+      default-days: 7
+      semver-major-days: 14
+    versioning-strategy: increase
+    commit-message:
+      prefix: build
+      include: scope
+    groups:
+      biome:
+        patterns:
+          - "@biomejs/*"
+      oxc:
+        patterns:
+          - oxc-*
+      react:
+        patterns:
+          - react
+          - react-dom
+          - "@types/react"
+          - "@types/react-dom"
+      vite:
+        patterns:
+          - vite
+          - vitest
+          - "@vitejs/*"
+          - "@vitest/*"
+      tailwind:
+        patterns:
+          - tailwindcss
+          - "@tailwindcss/*"
+      minor-and-patch:
+        update-types:
+          - minor
+          - patch
+
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    cooldown:
+      default-days: 7
+      semver-major-days: 14
+    commit-message:
+      prefix: build
+      include: scope
+    groups:
+      oxc:
+        patterns:
+          - oxc_*
+      codegen:
+        patterns:
+          - typify
+          - schemars
+          - syn
+          - prettyplease
+          - regress
+      minor-and-patch:
+        update-types:
+          - minor
+          - patch
+
+  - package-ecosystem: rust-toolchain
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    commit-message:
+      prefix: build
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    cooldown:
+      default-days: 7
+    commit-message:
+      prefix: ci
+    groups:
+      actions:
+        patterns:
+          - "*"
