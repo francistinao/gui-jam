@@ -46,6 +46,11 @@ jobs:
         with:
           node-version-file: .nvmrc
           cache: pnpm
+      - name: Install the pinned toolchain from rust-toolchain.toml
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2.9.3
+      # The daemon-bridge suite drives the real gjd binary.
+      - run: cargo build -p gjd-daemon
       - run: pnpm install --frozen-lockfile
       - run: pnpm exec playwright install --with-deps chromium
       - run: pnpm test:e2e

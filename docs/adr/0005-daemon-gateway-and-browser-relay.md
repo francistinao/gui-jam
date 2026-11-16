@@ -31,4 +31,4 @@ PRD §19.1 has the browser widget open its own WebSocket to the daemon. For that
 - No browser-reachable endpoint and no token in page JS. The PRD's origin allow-list is not needed.
 - Every widget message pays one extra in-process hop through the plugin (well under a millisecond on loopback).
 - `tests/e2e/daemon-bridge.spec.ts` drives the real binary through the plugin: inspect, preview with the file untouched, commit (one line), undo (exact bytes), and `CONFLICT` without overwriting. `crates/gjd-daemon/tests/daemon_process.rs` covers admission, file modes, the single-instance lock, stop and the idle exit.
-- Open: the published `guijam/vite` entry must also export `GuijamMessage` and `GuijamOptions`, which its public `request()` and `guijam(options)` signatures use.
+- `guijam/vite` exports `GuijamMessage` and `GuijamOptions`, which its public `request()` and `guijam(options)` signatures use; the package smoke test type-checks them.

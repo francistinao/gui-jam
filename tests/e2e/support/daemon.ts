@@ -2,8 +2,7 @@ import { execFile } from 'node:child_process';
 import { access } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
-import type { GuijamMessage } from '../../../packages/contracts-ts/src/generated/contracts.js';
-import type { GuijamApi } from '../../../packages/vite-plugin/dist/index.js';
+import type { GuijamApi, GuijamMessage } from 'guijam/vite';
 
 const run = promisify(execFile);
 

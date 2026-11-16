@@ -12,7 +12,7 @@ Amendment (2026-11-17): D-11 is decided in 0008 (tsdown 0.23.7, used for the pub
 ## Decision
 
 - **One repository, two workspaces.** pnpm 10 workspaces (`packages/*`, `fixtures/*`) and a Cargo workspace (`crates/*`, resolver 3, edition 2024).
-- **Pinned toolchains and dependencies.** Node 22 (`.nvmrc`; engines `>=22.12`, the floor of Vite 8 and Vitest 5), Rust 1.97.1 (`rust-toolchain.toml`). Every dependency is pinned exactly (`.npmrc` `save-exact=true`; `=` requirements in Cargo).
+- **Pinned toolchains and dependencies.** Node 22 (`.nvmrc`; engines `>=22.12`, the floor of Vite 8 and Vitest 5), Rust 1.100.0 (`rust-toolchain.toml`; raised from 1.97.1 on 2026-11-17 because oxc 0.159 needs 1.98+). Every dependency is pinned exactly (`.npmrc` `save-exact=true`; `=` requirements in Cargo).
 - **TypeScript 7.0.2**, strict, with `noUncheckedIndexedAccess`, `exactOptionalPropertyTypes` and `verbatimModuleSyntax` (`tsconfig.base.json`).
 - **Biome 2.6.8** is the one linter and formatter (Tailwind directive parsing on). **Vitest 5.1** for unit tests, **Playwright 1.65** (Chromium) for e2e. Rust: rustfmt, clippy pedantic with `-D warnings` in CI.
 - **Contracts.** `contracts/*.schema.json` (JSON Schema 2020-12) are the source of truth. `contracts/codegen/generate.mjs` bundles them into one self-contained schema and writes TypeScript types (json-schema-to-typescript, checked in, drift-checked in CI). Rust types are generated at build time by typify in `crates/gjd-core/build.rs`, so they cannot drift.

@@ -7,7 +7,7 @@ Status: Phase 0. The repo has the contracts, the Vite overlay plugin (spike S-1)
 ## Requirements
 
 - Node 22.18 or later (`.nvmrc`; tsdown needs it, and `engine-strict` enforces it) and pnpm 10
-- Rust 1.97.1 (installed from `rust-toolchain.toml` by rustup)
+- Rust 1.100.0 (installed from `rust-toolchain.toml` by rustup)
 - Claude Code, logged in, for the live provider checks
 
 ## Setup

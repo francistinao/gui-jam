@@ -1,6 +1,6 @@
 import { readFile, writeFile } from 'node:fs/promises';
 import { expect, type Page, test } from '@playwright/test';
-import type { GuijamMessage } from '../../packages/contracts-ts/src/generated/contracts.js';
+import type { GuijamMessage } from 'guijam/vite';
 import {
   GJD_BINARY,
   requireDaemonBinary,
