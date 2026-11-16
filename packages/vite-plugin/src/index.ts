@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { mkdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -39,6 +39,8 @@ export interface GuijamApi {
 
 const CLIENT_ID = 'virtual:guijam/client';
 const CLIENT_ENTRY = normalizePath(fileURLToPath(new URL('./client.js', import.meta.url)));
+const WIDGET_URL = '/@guijam/widget.js';
+const WIDGET_FILE = fileURLToPath(new URL('./widget.js', import.meta.url));
 const UPDATE_TIMEOUT_MS = 3000;
 const JSX_MODULE = /\.[jt]sx$/;
 const CSS_ID = /\.css(?:\?.*)?$/;
@@ -244,6 +246,14 @@ export function guijam(options: GuijamOptions = {}): Plugin<GuijamApi> {
       await mkdir(candidatesDir, { recursive: true });
       server.environments.client.hot.on('gj:update-result', (data) => {
         if (isUpdateResult(data)) tracker.settle(data);
+      });
+      // The widget is one prebuilt module; serving it as is keeps it out of Vite's pipeline.
+      server.middlewares.use(WIDGET_URL, (_request, response, next) => {
+        readFile(WIDGET_FILE).then((body) => {
+          response.setHeader('Content-Type', 'text/javascript');
+          response.setHeader('Cache-Control', 'no-store');
+          response.end(body);
+        }, next);
       });
       server.environments.client.hot.on('gj:request', async (data, client) => {
         client.send('gj:response', await relay(data));

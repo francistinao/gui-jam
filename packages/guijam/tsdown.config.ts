@@ -9,6 +9,8 @@ export default defineConfig({
   // The plugin serves the browser client from `new URL('./client.js', import.meta.url)`,
   // so both entries must be plain `.js` files side by side in dist/.
   fixedExtension: false,
+  // The prebuilt React widget is served from beside the plugin, like the client.
+  copy: [{ from: '../vite-plugin/dist/widget.js' }],
   deps: {
     // Workspace packages are inlined; anything from node_modules must stay a real dependency.
     onlyBundle: [],

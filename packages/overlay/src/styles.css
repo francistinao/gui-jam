@@ -1,0 +1,17 @@
+@import "./figui/figui.css";
+
+:host {
+  all: initial;
+}
+
+.guijam-layer {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  font-family: var(--text-body-medium-font-family);
+  color: var(--color-black-800);
+}
+
+.guijam-layer [data-interactive] {
+  pointer-events: auto;
+}

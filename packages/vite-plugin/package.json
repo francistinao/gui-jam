@@ -14,7 +14,7 @@
     "dist"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.build.json && tsc -p tsconfig.client.json",
+    "build": "tsc -p tsconfig.build.json && tsc -p tsconfig.client.json && cp ../overlay/dist/widget.js dist/widget.js",
     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.client.json"
   },
   "peerDependencies": {
@@ -22,6 +22,7 @@
   },
   "devDependencies": {
     "@guijam/contracts-ts": "workspace:*",
+    "@guijam/overlay": "workspace:*",
     "@types/node": "22.20.5",
     "typescript": "7.0.2",
     "vite": "8.3.8"

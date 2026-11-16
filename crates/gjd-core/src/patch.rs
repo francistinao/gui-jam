@@ -183,16 +183,26 @@ fn current<'s>(
     Ok((path, source))
 }
 
+/// Added tokens take the place of the first removed one, so swapping `bg-brand` for
+/// `bg-[#1D4ED8]` keeps the class order; with nothing removed they are appended.
 fn merge_tokens(existing: &str, add: &[EditOpAddItem], remove: &[EditOpRemoveItem]) -> String {
-    let mut tokens: Vec<&str> = existing
-        .split_whitespace()
-        .filter(|token| !remove.iter().any(|removed| removed.as_str() == *token))
-        .collect();
-    for token in add {
-        if !tokens.contains(&token.as_str()) {
-            tokens.push(token.as_str());
+    let mut tokens = Vec::new();
+    let mut insert_at = None;
+    for token in existing.split_whitespace() {
+        if remove.iter().any(|removed| removed.as_str() == token) {
+            insert_at.get_or_insert(tokens.len());
+        } else {
+            tokens.push(token);
         }
     }
+    let mut fresh: Vec<&str> = Vec::new();
+    for token in add {
+        if !tokens.contains(&token.as_str()) && !fresh.contains(&token.as_str()) {
+            fresh.push(token.as_str());
+        }
+    }
+    let at = insert_at.unwrap_or(tokens.len());
+    tokens.splice(at..at, fresh);
     tokens.join(" ")
 }
 
@@ -251,7 +261,26 @@ mod tests {
 
         assert_eq!(
             changed[FILE],
-            "export const B = () => (\r\n  <button className=\"rounded-lg px-6 bg-[#2563EB]\">\r\n    오늘\r\n  </button>\r\n);\r\n"
+            "export const B = () => (\r\n  <button className=\"rounded-lg bg-[#2563EB] px-6\">\r\n    오늘\r\n  </button>\r\n);\r\n"
+        );
+    }
+
+    #[test]
+    fn puts_added_tokens_where_the_first_removed_token_was() {
+        let content = "const b = <b className=\"p-2 rounded-t-xl shadow rounded-lg\" />;";
+        let ops = [class_tokens(
+            content,
+            1,
+            11,
+            &["rounded-[12px]", "shadow"],
+            &["rounded-t-xl", "rounded-lg"],
+        )];
+
+        let changed = apply(&sources(content), &ops).expect("applied");
+
+        assert_eq!(
+            changed[FILE],
+            "const b = <b className=\"p-2 rounded-[12px] shadow\" />;"
         );
     }
 

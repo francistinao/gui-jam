@@ -47,9 +47,11 @@ module_name_repetitions = "allow"
 missing_errors_doc = "allow"
 missing_panics_doc = "allow"
 
-# Debug info is most of target/; keep line tables for our crates' backtraces only.
+# Debug info and incremental caches are most of target/; keep line tables for our
+# crates' backtraces only.
 [profile.dev]
 debug = "line-tables-only"
+incremental = false
 
 [profile.dev.package."*"]
 debug = false

@@ -20,6 +20,7 @@ Dev-only tool that turns a running Vite app into an editable surface: draw on an
 - `contracts/*.schema.json`: source of truth for cross-process types. `pnpm contracts:gen` writes `packages/contracts-ts/src/generated/` and `contracts/generated/`; Rust types are generated at build time by `crates/gjd-core/build.rs` (typify).
 - `crates/gjd-core`: contract types, content hash. `crates/gjd-providers`: provider CLI adapters. `crates/gjd-daemon`: the `gjd` binary.
 - `packages/vite-plugin`: in-memory overlays served through Vite, HMR result correlation, browser client.
+- `packages/overlay`: the browser widget (React 19 and vendored FigUI in the toolbar's shadow root). Vite builds it into one `widget.js`; the plugin serves it at `/@guijam/widget.js` and loads it the first time a tool is chosen.
 - `packages/guijam`: the only published package. tsdown bundles the plugin and the contract types into `guijam/vite`; the fixture and e2e import it from there. Released by `.github/workflows/release.yml` when a GitHub release is published (ADR 0008).
 - `fixtures/small-react-tailwind4`: Brew & Co. test app. `tests/e2e`: Playwright.
 - `docs/handoff/`: original handoff bundle (screenshots, prototype). The prototype is reference only.

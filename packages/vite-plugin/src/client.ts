@@ -1,6 +1,7 @@
 import type { UpdateError, UpdateResult } from '@guijam/contracts-ts';
 import type { ErrorPayload } from 'vite';
 import type { UpdateStart } from './events.js';
+import { bootToolbar } from './toolbar.js';
 
 interface PendingUpdate extends UpdateStart {
   startedAt: number;
@@ -51,4 +52,8 @@ if (hot) {
   });
 
   hot.on('vite:beforeFullReload', () => report('full_reload', []));
+
+  const boot = () => bootToolbar(hot);
+  if (document.readyState === 'complete') boot();
+  else window.addEventListener('load', boot, { once: true });
 }

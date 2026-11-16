@@ -34,6 +34,10 @@ const client = guijam().resolveId('virtual:guijam/client');
 if (typeof client !== 'string' || !existsSync(client)) {
   throw new Error('browser client not found next to guijam/vite: ' + client);
 }
+const widget = new URL('./widget.js', import.meta.resolve('guijam/vite'));
+if (!existsSync(widget)) {
+  throw new Error('browser widget not found next to guijam/vite: ' + widget);
+}
 "
 
 cat > check.ts <<'TS'
