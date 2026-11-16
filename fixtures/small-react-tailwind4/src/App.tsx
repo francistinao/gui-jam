@@ -27,6 +27,9 @@ export function App() {
         <section className="py-12">
           <h1 className="font-display text-5xl font-bold">Slow-roasted, made for mornings</h1>
           <p className="mt-4 text-lg">Order ahead and pick up at your nearest branch.</p>
+          <p className="mt-2">
+            오늘의 추천 <span className="font-semibold text-brand">Ube Latte</span>
+          </p>
           <div className="mt-6 flex items-center gap-6">
             <OrderButton />
             <Counter />

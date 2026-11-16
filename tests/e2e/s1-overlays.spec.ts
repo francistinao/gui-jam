@@ -1,16 +1,17 @@
-import { readFile, stat } from 'node:fs/promises';
-import { createRequire } from 'node:module';
-import { dirname, join } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { readFile } from 'node:fs/promises';
 import type { GuijamApi } from '@guijam/vite-plugin';
 import { expect, type Page, test } from '@playwright/test';
 import type * as Vite from 'vite';
+import {
+  fileSnapshot,
+  fixturePath,
+  openFixture as openFixtureAt,
+  replaceOnce,
+  startFixtureServer,
+} from './support/fixture.js';
 
-const FIXTURE_DIR = fileURLToPath(
-  new URL('../../fixtures/small-react-tailwind4/', import.meta.url),
-);
-const ORDER_BUTTON = join(FIXTURE_DIR, 'src/components/OrderButton.tsx');
-const COUNTER = join(FIXTURE_DIR, 'src/components/Counter.tsx');
+const ORDER_BUTTON = fixturePath('src/components/OrderButton.tsx');
+const COUNTER = fixturePath('src/components/Counter.tsx');
 const BRAND_RGB = 'rgb(190, 18, 60)';
 const LATENCY_SAMPLES = 50;
 const P95_BUDGET_MS = 300;
@@ -20,31 +21,7 @@ let server: Vite.ViteDevServer;
 let api: GuijamApi;
 let baseUrl: string;
 
-// The matrix run swaps the fixture's Vite version, so drive the Vite that the
-// fixture itself resolves rather than one hoisted to the repo root.
-async function loadFixtureVite(): Promise<typeof Vite> {
-  const vitePackageJson = createRequire(join(FIXTURE_DIR, 'package.json')).resolve(
-    'vite/package.json',
-  );
-  return import(pathToFileURL(join(dirname(vitePackageJson), 'dist/node/index.js')).href);
-}
-
-function guijamApi(devServer: Vite.ViteDevServer): GuijamApi {
-  const plugin = devServer.config.plugins.find(({ name }) => name === 'guijam');
-  if (!plugin?.api) throw new Error('guijam is not registered in the fixture vite.config.ts');
-  return plugin.api;
-}
-
-async function openFixture(page: Page): Promise<void> {
-  const connected = page.waitForEvent('console', (msg) => msg.text().includes('[vite] connected'));
-  await page.goto(baseUrl);
-  await connected;
-}
-
-async function fileSnapshot(path: string) {
-  const [content, stats] = await Promise.all([readFile(path, 'utf8'), stat(path)]);
-  return { content, mtimeMs: stats.mtimeMs };
-}
+const openFixture = (page: Page) => openFixtureAt(page, baseUrl);
 
 function randomChannel(): number {
   return Math.floor(Math.random() * 256);
@@ -60,19 +37,8 @@ function percentile(samples: readonly number[], p: number): number {
   return sorted[index] ?? Number.NaN;
 }
 
-function replaceOnce(source: string, find: string, replacement: string): string {
-  if (!source.includes(find)) throw new Error(`fixture no longer contains "${find}"`);
-  return source.replace(find, replacement);
-}
-
 test.beforeAll(async () => {
-  vite = await loadFixtureVite();
-  server = await vite.createServer({ root: FIXTURE_DIR, logLevel: 'warn' });
-  await server.listen();
-  const url = server.resolvedUrls?.local[0];
-  if (!url) throw new Error('Vite did not report a local URL');
-  baseUrl = url;
-  api = guijamApi(server);
+  ({ vite, server, api, url: baseUrl } = await startFixtureServer());
 });
 
 test.afterEach(async () => {

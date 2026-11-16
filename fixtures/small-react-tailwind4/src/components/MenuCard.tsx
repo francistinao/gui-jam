@@ -1,12 +1,14 @@
-interface MenuCardProps {
+import type { ComponentProps } from 'react';
+
+interface MenuCardProps extends ComponentProps<'article'> {
   name: string;
   description: string;
   price: number;
 }
 
-export function MenuCard({ name, description, price }: MenuCardProps) {
+export function MenuCard({ name, description, price, ...articleProps }: MenuCardProps) {
   return (
-    <article className="flex flex-col gap-3 rounded-card bg-white p-6 shadow-sm">
+    <article {...articleProps} className="flex flex-col gap-3 rounded-card bg-white p-6 shadow-sm">
       <h3 className="text-lg font-semibold">{name}</h3>
       <p className="text-sm">{description}</p>
       <div className="mt-auto flex items-center justify-between">

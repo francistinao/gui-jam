@@ -10,6 +10,7 @@ import {
   type Plugin,
   type ViteDevServer,
 } from 'vite';
+import { injectSourceLocations } from './transform-srcloc.js';
 import { createUpdateTracker, isUpdateResult } from './update-tracker.js';
 
 export type { UpdateResult } from '@guijam/contracts-ts';
@@ -28,6 +29,7 @@ export interface GuijamApi {
 const CLIENT_ID = 'virtual:guijam/client';
 const CLIENT_ENTRY = normalizePath(fileURLToPath(new URL('./client.js', import.meta.url)));
 const UPDATE_TIMEOUT_MS = 3000;
+const JSX_MODULE = /\.[jt]sx$/;
 const CSS_ID = /\.css(?:\?.*)?$/;
 const NON_STYLESHEET_QUERY = /[?&](?:worker|sharedworker|raw|url)\b/;
 const TAILWIND_ROOT = /@import\s+["']tailwindcss["']|@tailwind\s+utilities/;
@@ -156,8 +158,14 @@ export function guijam(): Plugin<GuijamApi> {
     },
 
     transform: {
+      // Must see JSX and Tailwind stylesheets before any other plugin rewrites them.
       order: 'pre',
       handler(code, id) {
+        if (JSX_MODULE.test(id)) {
+          const projectPath = normalizePath(relative(root, id));
+          if (projectPath.startsWith('..') || id.includes('/node_modules/')) return null;
+          return injectSourceLocations(code, id, projectPath);
+        }
         if (!CSS_ID.test(id) || NON_STYLESHEET_QUERY.test(id) || !TAILWIND_ROOT.test(code)) {
           return null;
         }
