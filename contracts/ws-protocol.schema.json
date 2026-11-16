@@ -1,0 +1,573 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "ws-protocol.schema.json",
+  "title": "GuijamMessage",
+  "description": "One frame on the daemon WebSocket, between the Vite plugin and gjd. Browser requests reach the daemon through the plugin, over Vite's HMR channel.",
+  "oneOf": [
+    {
+      "title": "PluginHelloMessage",
+      "type": "object",
+      "required": ["type", "payload"],
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "plugin.hello"
+        },
+        "id": {
+          "type": "string",
+          "description": "Set on requests; a reply repeats its request's id."
+        },
+        "payload": {
+          "$ref": "#/$defs/PluginHello"
+        }
+      }
+    },
+    {
+      "title": "HelloOkMessage",
+      "type": "object",
+      "required": ["type", "payload"],
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "hello.ok"
+        },
+        "id": {
+          "type": "string",
+          "description": "Set on requests; a reply repeats its request's id."
+        },
+        "payload": {
+          "$ref": "#/$defs/HelloOk"
+        }
+      }
+    },
+    {
+      "title": "TailwindRootsMessage",
+      "type": "object",
+      "required": ["type", "payload"],
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "tailwind.roots"
+        },
+        "id": {
+          "type": "string",
+          "description": "Set on requests; a reply repeats its request's id."
+        },
+        "payload": {
+          "$ref": "#/$defs/TailwindRoots"
+        }
+      }
+    },
+    {
+      "title": "OverlaySetMessage",
+      "type": "object",
+      "required": ["type", "payload"],
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "overlay.set"
+        },
+        "id": {
+          "type": "string",
+          "description": "Set on requests; a reply repeats its request's id."
+        },
+        "payload": {
+          "$ref": "#/$defs/OverlaySet"
+        }
+      }
+    },
+    {
+      "title": "OverlayClearMessage",
+      "type": "object",
+      "required": ["type", "payload"],
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "overlay.clear"
+        },
+        "id": {
+          "type": "string",
+          "description": "Set on requests; a reply repeats its request's id."
+        },
+        "payload": {
+          "$ref": "#/$defs/OverlayClear"
+        }
+      }
+    },
+    {
+      "title": "UpdateResultMessage",
+      "type": "object",
+      "required": ["type", "payload"],
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "update.result"
+        },
+        "id": {
+          "type": "string",
+          "description": "Set on requests; a reply repeats its request's id."
+        },
+        "payload": {
+          "$ref": "update-result.schema.json"
+        }
+      }
+    },
+    {
+      "title": "ElementInspectMessage",
+      "type": "object",
+      "required": ["type", "payload"],
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "element.inspect"
+        },
+        "id": {
+          "type": "string",
+          "description": "Set on requests; a reply repeats its request's id."
+        },
+        "payload": {
+          "$ref": "#/$defs/SourceRef"
+        }
+      }
+    },
+    {
+      "title": "ElementStyleMessage",
+      "type": "object",
+      "required": ["type", "payload"],
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "element.style"
+        },
+        "id": {
+          "type": "string",
+          "description": "Set on requests; a reply repeats its request's id."
+        },
+        "payload": {
+          "$ref": "element-style.schema.json"
+        }
+      }
+    },
+    {
+      "title": "FinetunePreviewMessage",
+      "type": "object",
+      "required": ["type", "payload"],
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "finetune.preview"
+        },
+        "id": {
+          "type": "string",
+          "description": "Set on requests; a reply repeats its request's id."
+        },
+        "payload": {
+          "$ref": "#/$defs/FinetunePreview"
+        }
+      }
+    },
+    {
+      "title": "FinetunePreviewedMessage",
+      "type": "object",
+      "required": ["type", "payload"],
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "finetune.previewed"
+        },
+        "id": {
+          "type": "string",
+          "description": "Set on requests; a reply repeats its request's id."
+        },
+        "payload": {
+          "$ref": "#/$defs/FinetunePreviewed"
+        }
+      }
+    },
+    {
+      "title": "ChangesetCommitMessage",
+      "type": "object",
+      "required": ["type", "payload"],
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "changeset.commit"
+        },
+        "id": {
+          "type": "string",
+          "description": "Set on requests; a reply repeats its request's id."
+        },
+        "payload": {
+          "$ref": "#/$defs/ChangesetRef"
+        }
+      }
+    },
+    {
+      "title": "CommitDoneMessage",
+      "type": "object",
+      "required": ["type", "payload"],
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "commit.done"
+        },
+        "id": {
+          "type": "string",
+          "description": "Set on requests; a reply repeats its request's id."
+        },
+        "payload": {
+          "$ref": "#/$defs/CommitDone"
+        }
+      }
+    },
+    {
+      "title": "ChangesetDiscardMessage",
+      "type": "object",
+      "required": ["type", "payload"],
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "changeset.discard"
+        },
+        "id": {
+          "type": "string",
+          "description": "Set on requests; a reply repeats its request's id."
+        },
+        "payload": {
+          "$ref": "#/$defs/ChangesetRef"
+        }
+      }
+    },
+    {
+      "title": "ChangesetDiscardedMessage",
+      "type": "object",
+      "required": ["type", "payload"],
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "changeset.discarded"
+        },
+        "id": {
+          "type": "string",
+          "description": "Set on requests; a reply repeats its request's id."
+        },
+        "payload": {
+          "$ref": "#/$defs/ChangesetRef"
+        }
+      }
+    },
+    {
+      "title": "JournalUndoMessage",
+      "type": "object",
+      "required": ["type", "payload"],
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "journal.undo"
+        },
+        "id": {
+          "type": "string",
+          "description": "Set on requests; a reply repeats its request's id."
+        },
+        "payload": {
+          "$ref": "#/$defs/JournalRef"
+        }
+      }
+    },
+    {
+      "title": "UndoDoneMessage",
+      "type": "object",
+      "required": ["type", "payload"],
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "undo.done"
+        },
+        "id": {
+          "type": "string",
+          "description": "Set on requests; a reply repeats its request's id."
+        },
+        "payload": {
+          "$ref": "#/$defs/UndoDone"
+        }
+      }
+    },
+    {
+      "title": "ErrorMessage",
+      "type": "object",
+      "required": ["type", "payload"],
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "error"
+        },
+        "id": {
+          "type": "string",
+          "description": "Set on requests; a reply repeats its request's id."
+        },
+        "payload": {
+          "$ref": "#/$defs/ErrorPayload"
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "PluginHello": {
+      "type": "object",
+      "required": ["pluginVersion", "viteVersion", "root", "tailwindRoots"],
+      "additionalProperties": false,
+      "properties": {
+        "pluginVersion": {
+          "type": "string"
+        },
+        "viteVersion": {
+          "type": "string"
+        },
+        "root": {
+          "type": "string"
+        },
+        "tailwindRoots": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Absolute paths of stylesheets that import Tailwind."
+        }
+      }
+    },
+    "HelloOk": {
+      "type": "object",
+      "required": ["daemonVersion"],
+      "additionalProperties": false,
+      "properties": {
+        "daemonVersion": {
+          "type": "string"
+        }
+      }
+    },
+    "TailwindRoots": {
+      "type": "object",
+      "required": ["files"],
+      "additionalProperties": false,
+      "properties": {
+        "files": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "OverlaySet": {
+      "description": "Serve content in place of a project file (path relative to the project root).",
+      "type": "object",
+      "required": ["file", "content"],
+      "additionalProperties": false,
+      "properties": {
+        "file": {
+          "type": "string"
+        },
+        "content": {
+          "type": "string"
+        }
+      }
+    },
+    "OverlayClear": {
+      "type": "object",
+      "required": ["file"],
+      "additionalProperties": false,
+      "properties": {
+        "file": {
+          "type": "string"
+        }
+      }
+    },
+    "SourceRef": {
+      "description": "An element's data-gj-src position.",
+      "type": "object",
+      "required": ["file", "line", "column"],
+      "additionalProperties": false,
+      "properties": {
+        "file": {
+          "type": "string"
+        },
+        "line": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "column": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "FinetunePreview": {
+      "type": "object",
+      "required": ["file", "line", "column", "props"],
+      "additionalProperties": false,
+      "properties": {
+        "file": {
+          "type": "string"
+        },
+        "line": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "column": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "props": {
+          "$ref": "finetune.schema.json"
+        }
+      }
+    },
+    "CodeChange": {
+      "description": "One changed hunk: the lines starting at line (1-based, in the current file) and what replaces them.",
+      "type": "object",
+      "required": ["file", "line", "before", "after"],
+      "additionalProperties": false,
+      "properties": {
+        "file": {
+          "type": "string"
+        },
+        "line": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "before": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "after": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "FinetunePreviewed": {
+      "type": "object",
+      "required": ["changesetId", "update", "changes"],
+      "additionalProperties": false,
+      "properties": {
+        "changesetId": {
+          "type": "string"
+        },
+        "update": {
+          "$ref": "update-result.schema.json"
+        },
+        "changes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/CodeChange"
+          }
+        }
+      }
+    },
+    "ChangesetRef": {
+      "type": "object",
+      "required": ["changesetId"],
+      "additionalProperties": false,
+      "properties": {
+        "changesetId": {
+          "type": "string"
+        }
+      }
+    },
+    "CommitDone": {
+      "type": "object",
+      "required": ["journalId", "files", "summary"],
+      "additionalProperties": false,
+      "properties": {
+        "journalId": {
+          "type": "string"
+        },
+        "files": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "summary": {
+          "type": "string"
+        }
+      }
+    },
+    "JournalRef": {
+      "type": "object",
+      "required": ["journalId"],
+      "additionalProperties": false,
+      "properties": {
+        "journalId": {
+          "type": "string"
+        }
+      }
+    },
+    "UndoDone": {
+      "type": "object",
+      "required": ["journalId", "undoOf"],
+      "additionalProperties": false,
+      "properties": {
+        "journalId": {
+          "type": "string"
+        },
+        "undoOf": {
+          "type": "string"
+        }
+      }
+    },
+    "ErrorCode": {
+      "enum": [
+        "CONFLICT",
+        "STALE_BASE",
+        "PATH_DENIED",
+        "NOT_EDITABLE",
+        "INVALID_REQUEST",
+        "UNKNOWN_CHANGESET",
+        "UNKNOWN_ENTRY",
+        "ALREADY_UNDONE",
+        "PLUGIN_UNAVAILABLE",
+        "DAEMON_UNAVAILABLE",
+        "INTERNAL"
+      ]
+    },
+    "ErrorPayload": {
+      "description": "PRD \u00a719.6: what went wrong and what the developer can do next.",
+      "type": "object",
+      "required": ["code", "message"],
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "$ref": "#/$defs/ErrorCode"
+        },
+        "message": {
+          "type": "string"
+        },
+        "action": {
+          "type": "string"
+        }
+      }
+    }
+  }
+}

@@ -17,6 +17,39 @@ export type JsxValue = JsxStringValue | JsxExpressionValue;
 export type StyleGroup = 'fill' | 'radius' | 'stroke' | 'text' | 'effects' | 'opacity';
 export type FillValue = FillToken | FillHex | FillNone;
 export type RadiusValue = RadiusToken | RadiusPx | RadiusFull;
+/**
+ * One frame on the daemon WebSocket, between the Vite plugin and gjd. Browser requests reach the daemon through the plugin, over Vite's HMR channel.
+ */
+export type GuijamMessage =
+  | PluginHelloMessage
+  | HelloOkMessage
+  | TailwindRootsMessage
+  | OverlaySetMessage
+  | OverlayClearMessage
+  | UpdateResultMessage
+  | ElementInspectMessage
+  | ElementStyleMessage
+  | FinetunePreviewMessage
+  | FinetunePreviewedMessage
+  | ChangesetCommitMessage
+  | CommitDoneMessage
+  | ChangesetDiscardMessage
+  | ChangesetDiscardedMessage
+  | JournalUndoMessage
+  | UndoDoneMessage
+  | ErrorMessage;
+export type ErrorCode =
+  | 'CONFLICT'
+  | 'STALE_BASE'
+  | 'PATH_DENIED'
+  | 'NOT_EDITABLE'
+  | 'INVALID_REQUEST'
+  | 'UNKNOWN_CHANGESET'
+  | 'UNKNOWN_ENTRY'
+  | 'ALREADY_UNDONE'
+  | 'PLUGIN_UNAVAILABLE'
+  | 'DAEMON_UNAVAILABLE'
+  | 'INTERNAL';
 
 /**
  * find must occur exactly once in the file.
@@ -189,4 +222,216 @@ export interface RadiusPx {
 }
 export interface RadiusFull {
   kind: 'full';
+}
+export interface PluginHelloMessage {
+  type: 'plugin.hello';
+  /**
+   * Set on requests; a reply repeats its request's id.
+   */
+  id?: string;
+  payload: PluginHello;
+}
+export interface PluginHello {
+  pluginVersion: string;
+  viteVersion: string;
+  root: string;
+  /**
+   * Absolute paths of stylesheets that import Tailwind.
+   */
+  tailwindRoots: string[];
+}
+export interface HelloOkMessage {
+  type: 'hello.ok';
+  /**
+   * Set on requests; a reply repeats its request's id.
+   */
+  id?: string;
+  payload: HelloOk;
+}
+export interface HelloOk {
+  daemonVersion: string;
+}
+export interface TailwindRootsMessage {
+  type: 'tailwind.roots';
+  /**
+   * Set on requests; a reply repeats its request's id.
+   */
+  id?: string;
+  payload: TailwindRoots;
+}
+export interface TailwindRoots {
+  files: string[];
+}
+export interface OverlaySetMessage {
+  type: 'overlay.set';
+  /**
+   * Set on requests; a reply repeats its request's id.
+   */
+  id?: string;
+  payload: OverlaySet;
+}
+/**
+ * Serve content in place of a project file (path relative to the project root).
+ */
+export interface OverlaySet {
+  file: string;
+  content: string;
+}
+export interface OverlayClearMessage {
+  type: 'overlay.clear';
+  /**
+   * Set on requests; a reply repeats its request's id.
+   */
+  id?: string;
+  payload: OverlayClear;
+}
+export interface OverlayClear {
+  file: string;
+}
+export interface UpdateResultMessage {
+  type: 'update.result';
+  /**
+   * Set on requests; a reply repeats its request's id.
+   */
+  id?: string;
+  payload: UpdateResult;
+}
+export interface ElementInspectMessage {
+  type: 'element.inspect';
+  /**
+   * Set on requests; a reply repeats its request's id.
+   */
+  id?: string;
+  payload: SourceRef;
+}
+/**
+ * An element's data-gj-src position.
+ */
+export interface SourceRef {
+  file: string;
+  line: number;
+  column: number;
+}
+export interface ElementStyleMessage {
+  type: 'element.style';
+  /**
+   * Set on requests; a reply repeats its request's id.
+   */
+  id?: string;
+  payload: ElementStyle;
+}
+export interface FinetunePreviewMessage {
+  type: 'finetune.preview';
+  /**
+   * Set on requests; a reply repeats its request's id.
+   */
+  id?: string;
+  payload: FinetunePreview;
+}
+export interface FinetunePreview {
+  file: string;
+  line: number;
+  column: number;
+  props: FinetuneProps;
+}
+export interface FinetunePreviewedMessage {
+  type: 'finetune.previewed';
+  /**
+   * Set on requests; a reply repeats its request's id.
+   */
+  id?: string;
+  payload: FinetunePreviewed;
+}
+export interface FinetunePreviewed {
+  changesetId: string;
+  update: UpdateResult;
+  changes: CodeChange[];
+}
+/**
+ * One changed hunk: the lines starting at line (1-based, in the current file) and what replaces them.
+ */
+export interface CodeChange {
+  file: string;
+  line: number;
+  before: string[];
+  after: string[];
+}
+export interface ChangesetCommitMessage {
+  type: 'changeset.commit';
+  /**
+   * Set on requests; a reply repeats its request's id.
+   */
+  id?: string;
+  payload: ChangesetRef;
+}
+export interface ChangesetRef {
+  changesetId: string;
+}
+export interface CommitDoneMessage {
+  type: 'commit.done';
+  /**
+   * Set on requests; a reply repeats its request's id.
+   */
+  id?: string;
+  payload: CommitDone;
+}
+export interface CommitDone {
+  journalId: string;
+  files: string[];
+  summary: string;
+}
+export interface ChangesetDiscardMessage {
+  type: 'changeset.discard';
+  /**
+   * Set on requests; a reply repeats its request's id.
+   */
+  id?: string;
+  payload: ChangesetRef;
+}
+export interface ChangesetDiscardedMessage {
+  type: 'changeset.discarded';
+  /**
+   * Set on requests; a reply repeats its request's id.
+   */
+  id?: string;
+  payload: ChangesetRef;
+}
+export interface JournalUndoMessage {
+  type: 'journal.undo';
+  /**
+   * Set on requests; a reply repeats its request's id.
+   */
+  id?: string;
+  payload: JournalRef;
+}
+export interface JournalRef {
+  journalId: string;
+}
+export interface UndoDoneMessage {
+  type: 'undo.done';
+  /**
+   * Set on requests; a reply repeats its request's id.
+   */
+  id?: string;
+  payload: UndoDone;
+}
+export interface UndoDone {
+  journalId: string;
+  undoOf: string;
+}
+export interface ErrorMessage {
+  type: 'error';
+  /**
+   * Set on requests; a reply repeats its request's id.
+   */
+  id?: string;
+  payload: ErrorPayload;
+}
+/**
+ * PRD §19.6: what went wrong and what the developer can do next.
+ */
+export interface ErrorPayload {
+  code: ErrorCode;
+  message: string;
+  action?: string;
 }

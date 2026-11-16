@@ -1,0 +1,91 @@
+//! `.guijam/run/`: how the Vite plugin (and later the MCP shim) find the daemon.
+//! `daemon.json` holds the port and the session token, so it is readable by its
+//! owner only (NFR-SEC-08).
+
+use std::fs::{self, DirBuilder, File, OpenOptions, TryLockError};
+use std::io::{self, Write};
+use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
+use std::path::{Path, PathBuf};
+
+use serde::{Deserialize, Serialize};
+
+pub const PROTOCOL_VERSION: u32 = 1;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DaemonInfo {
+    pub pid: u32,
+    pub port: u16,
+    pub token: String,
+    pub version: String,
+    pub protocol: u32,
+}
+
+pub struct RunDir {
+    dir: PathBuf,
+}
+
+impl RunDir {
+    #[must_use]
+    pub fn of(project: &Path) -> Self {
+        Self {
+            dir: project.join(".guijam").join("run"),
+        }
+    }
+
+    pub fn create(project: &Path) -> io::Result<Self> {
+        let run_dir = Self::of(project);
+        DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(&run_dir.dir)?;
+        Ok(run_dir)
+    }
+
+    #[must_use]
+    pub fn info_path(&self) -> PathBuf {
+        self.dir.join("daemon.json")
+    }
+
+    /// An exclusive lock held for the daemon's lifetime, or `None` when another
+    /// daemon already serves this project.
+    pub fn lock(&self) -> io::Result<Option<File>> {
+        let file = OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(false)
+            .mode(0o600)
+            .open(self.dir.join("lock"))?;
+        match file.try_lock() {
+            Ok(()) => Ok(Some(file)),
+            Err(TryLockError::WouldBlock) => Ok(None),
+            Err(TryLockError::Error(error)) => Err(error),
+        }
+    }
+
+    pub fn write_info(&self, info: &DaemonInfo) -> io::Result<()> {
+        let temp = self.dir.join(format!("daemon.json.{}.tmp", info.pid));
+        let mut file = OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(&temp)?;
+        file.write_all(&serde_json::to_vec(info).map_err(io::Error::other)?)?;
+        file.sync_all()?;
+        fs::rename(temp, self.info_path())
+    }
+
+    pub fn read_info(&self) -> io::Result<DaemonInfo> {
+        let bytes = fs::read(self.info_path())?;
+        serde_json::from_slice(&bytes)
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
+    }
+
+    /// Removes `daemon.json` unless a newer daemon has already replaced it.
+    pub fn remove_info_if_ours(&self, pid: u32) {
+        if self.read_info().is_ok_and(|info| info.pid == pid) {
+            // Best effort at shutdown: a stale file is detected by its dead pid.
+            let _ = fs::remove_file(self.info_path());
+        }
+    }
+}

@@ -1,19 +1,28 @@
 import { randomUUID } from 'node:crypto';
 import { mkdir, rm, writeFile } from 'node:fs/promises';
+import { createRequire } from 'node:module';
 import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { UpdateError, UpdateResult } from '@guijam/contracts-ts';
+import type { GuijamMessage, UpdateError, UpdateResult } from '@guijam/contracts-ts';
 import {
   type DevEnvironment,
   type EnvironmentModuleNode,
   normalizePath,
   type Plugin,
   type ViteDevServer,
+  version as viteVersion,
 } from 'vite';
+import { DaemonClient } from './daemon-client.js';
+import { checkWidgetRequest, errorReply, terminalLine } from './relay.js';
 import { injectSourceLocations } from './transform-srcloc.js';
 import { createUpdateTracker, isUpdateResult } from './update-tracker.js';
 
-export type { UpdateResult } from '@guijam/contracts-ts';
+export type { GuijamMessage, UpdateResult } from '@guijam/contracts-ts';
+
+export interface GuijamOptions {
+  /** The `gjd` binary that runs the project daemon. Defaults to `$GUIJAM_GJD_BIN`. */
+  daemonBinary?: string;
+}
 
 export interface GuijamApi {
   /**
@@ -24,6 +33,8 @@ export interface GuijamApi {
   setOverlay(file: string, content: string): Promise<UpdateResult>;
   /** Drops the overlay so the module is served from disk again. */
   clearOverlay(file: string): Promise<UpdateResult>;
+  /** Sends a widget request to the daemon, exactly as the browser widget does. */
+  request(message: unknown): Promise<GuijamMessage>;
 }
 
 const CLIENT_ID = 'virtual:guijam/client';
@@ -33,6 +44,13 @@ const JSX_MODULE = /\.[jt]sx$/;
 const CSS_ID = /\.css(?:\?.*)?$/;
 const NON_STYLESHEET_QUERY = /[?&](?:worker|sharedworker|raw|url)\b/;
 const TAILWIND_ROOT = /@import\s+["']tailwindcss["']|@tailwind\s+utilities/;
+const PLUGIN_VERSION = readPluginVersion();
+
+function readPluginVersion(): string {
+  const manifest: unknown = createRequire(import.meta.url)('../package.json');
+  const version = (manifest as { version?: unknown }).version;
+  return typeof version === 'string' ? version : '0.0.0';
+}
 
 function toUpdateError(error: unknown, file: string): UpdateError {
   const result: UpdateError = {
@@ -48,13 +66,92 @@ function toUpdateError(error: unknown, file: string): UpdateError {
   return result;
 }
 
-export function guijam(): Plugin<GuijamApi> {
+export function guijam(options: GuijamOptions = {}): Plugin<GuijamApi> {
   const overlays = new Map<string, string>();
   const tailwindRootIds = new Set<string>();
   const tracker = createUpdateTracker(UPDATE_TIMEOUT_MS);
   let devServer: ViteDevServer | undefined;
+  let daemon: DaemonClient | undefined;
   let root = process.cwd();
   let candidatesDir = '';
+
+  function tailwindRootFiles(): string[] {
+    return [...new Set([...tailwindRootIds].map((id) => id.split('?', 1)[0] ?? id))];
+  }
+
+  async function answerDaemon(message: GuijamMessage): Promise<GuijamMessage | undefined> {
+    switch (message.type) {
+      case 'overlay.set':
+        return {
+          type: 'update.result',
+          payload: await applyOverlay(message.payload.file, message.payload.content),
+        };
+      case 'overlay.clear':
+        return {
+          type: 'update.result',
+          payload: await applyOverlay(message.payload.file, undefined),
+        };
+      default:
+        return undefined;
+    }
+  }
+
+  async function relay(data: unknown): Promise<GuijamMessage> {
+    const checked = checkWidgetRequest(data);
+    if (!checked.ok) return checked.reply;
+    const { id } = checked.message;
+    if (!daemon) {
+      return errorReply(
+        'DAEMON_UNAVAILABLE',
+        'This dev server runs without the GUIJam daemon.',
+        id,
+        'Set GUIJAM_GJD_BIN to the gjd binary, then restart the dev server.',
+      );
+    }
+    try {
+      const reply = await daemon.request(checked.message);
+      const line = terminalLine(reply);
+      if (line) devServer?.config.logger.info(`[guijam] ${line}`, { timestamp: true });
+      return { ...reply, id };
+    } catch (error) {
+      return errorReply(
+        'DAEMON_UNAVAILABLE',
+        error instanceof Error ? error.message : String(error),
+        id,
+        'Check `gjd daemon status`, then retry.',
+      );
+    }
+  }
+
+  function connectDaemon(server: ViteDevServer): void {
+    const logger = server.config.logger;
+    const binary = options.daemonBinary ?? process.env.GUIJAM_GJD_BIN;
+    if (!binary) {
+      logger.warn('[guijam] fine-tune and AI edits are off: set GUIJAM_GJD_BIN to the gjd binary');
+      return;
+    }
+    const client = new DaemonClient({
+      root,
+      binary,
+      hello: () => ({
+        type: 'plugin.hello',
+        payload: {
+          pluginVersion: PLUGIN_VERSION,
+          viteVersion,
+          root,
+          tailwindRoots: tailwindRootFiles(),
+        },
+      }),
+      onMessage: answerDaemon,
+      onConnectionChange: (connected) => {
+        if (!connected) logger.warn('[guijam] daemon disconnected; reconnecting');
+      },
+      onUnavailable: (reason) => logger.warn(`[guijam] daemon unavailable: ${reason}`),
+    });
+    client.start();
+    server.httpServer?.once('close', () => client.stop());
+    daemon = client;
+  }
 
   // Tailwind's scanner only reads files on disk, so classes that exist only in an
   // overlay would get no CSS. Overlay text is mirrored into a git-ignored directory
@@ -130,6 +227,7 @@ export function guijam(): Plugin<GuijamApi> {
     api: {
       setOverlay: (file, content) => applyOverlay(file, content),
       clearOverlay: (file) => applyOverlay(file, undefined),
+      request: (message) => relay(message),
     },
 
     config() {
@@ -147,6 +245,10 @@ export function guijam(): Plugin<GuijamApi> {
       server.environments.client.hot.on('gj:update-result', (data) => {
         if (isUpdateResult(data)) tracker.settle(data);
       });
+      server.environments.client.hot.on('gj:request', async (data, client) => {
+        client.send('gj:response', await relay(data));
+      });
+      connectDaemon(server);
     },
 
     resolveId(source) {
@@ -169,7 +271,10 @@ export function guijam(): Plugin<GuijamApi> {
         if (!CSS_ID.test(id) || NON_STYLESHEET_QUERY.test(id) || !TAILWIND_ROOT.test(code)) {
           return null;
         }
-        if (this.environment.name === 'client') tailwindRootIds.add(id);
+        if (this.environment.name === 'client' && !tailwindRootIds.has(id)) {
+          tailwindRootIds.add(id);
+          daemon?.notify({ type: 'tailwind.roots', payload: { files: tailwindRootFiles() } });
+        }
         const cssDir = dirname(id.split('?', 1)[0] ?? id);
         const source = normalizePath(relative(cssDir, candidatesDir));
         return { code: `${code}\n@source "${source}";\n`, map: null };

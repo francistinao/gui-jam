@@ -1,13 +1,19 @@
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use clap::{Parser, Subcommand};
+use gjd_daemon::Outcome;
+use gjd_daemon::run_dir::RunDir;
 use gjd_providers::{
     AuthStatus, GenerationRequest, ProviderAdapter, ProviderId, RunTimings, ToolPolicy, adapter,
 };
+use nix::sys::signal::{Signal, kill};
+use nix::unistd::Pid;
 use tokio_util::sync::CancellationToken;
 
 const PROBE_TIMEOUT: Duration = Duration::from_mins(2);
+const STOP_WAIT: Duration = Duration::from_secs(5);
 const PROBE_SYSTEM_PROMPT: &str = "Answer only with the requested JSON.";
 const PROBE_PROMPT: &str = "Return exactly one variant: label Probe, system project, style plain, \
 rationale probe, missing empty, and a single create_file op for src/GuiJamProbe.tsx with content \
@@ -24,6 +30,30 @@ struct Cli {
 enum Command {
     #[command(subcommand)]
     Provider(ProviderCommand),
+    #[command(subcommand)]
+    Daemon(DaemonCommand),
+}
+
+#[derive(Subcommand)]
+enum DaemonCommand {
+    /// Serve a project until no client has been connected for the idle timeout.
+    Run {
+        #[arg(long)]
+        project: PathBuf,
+        /// Seconds without any connected client before the daemon exits.
+        #[arg(long, default_value_t = 1800)]
+        idle_seconds: u64,
+    },
+    /// Report whether a daemon serves the project.
+    Status {
+        #[arg(long, default_value = ".")]
+        project: PathBuf,
+    },
+    /// Stop the project's daemon.
+    Stop {
+        #[arg(long, default_value = ".")]
+        project: PathBuf,
+    },
 }
 
 #[derive(Subcommand)]
@@ -168,9 +198,71 @@ async fn test(id: ProviderId, runs: u32, model: Option<String>) -> ExitCode {
     ExitCode::SUCCESS
 }
 
+fn running_pid(project: &Path) -> Option<(Pid, u16)> {
+    let info = RunDir::of(project).read_info().ok()?;
+    let pid = Pid::from_raw(i32::try_from(info.pid).ok()?);
+    kill(pid, None).ok().map(|()| (pid, info.port))
+}
+
+async fn run_daemon(project: &Path, idle_seconds: u64) -> ExitCode {
+    tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
+        .with_ansi(false)
+        .init();
+    match gjd_daemon::run(project, Duration::from_secs(idle_seconds)).await {
+        Ok(Outcome::Stopped) => ExitCode::SUCCESS,
+        Ok(Outcome::AlreadyRunning) => {
+            eprintln!("a daemon already serves {}", project.display());
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            tracing::error!(%error, "daemon failed");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn daemon_status(project: &Path) -> ExitCode {
+    let Some((pid, port)) = running_pid(project) else {
+        println!("not running");
+        return ExitCode::FAILURE;
+    };
+    println!("running · pid {pid} · port {port}");
+    ExitCode::SUCCESS
+}
+
+async fn stop_daemon(project: &Path) -> ExitCode {
+    let Some((pid, _)) = running_pid(project) else {
+        println!("not running");
+        return ExitCode::SUCCESS;
+    };
+    if let Err(error) = kill(pid, Signal::SIGTERM) {
+        eprintln!("cannot stop pid {pid}: {error}");
+        return ExitCode::FAILURE;
+    }
+    // The daemon deletes daemon.json as the last step of a clean shutdown.
+    let info_path = RunDir::of(project).info_path();
+    let deadline = Instant::now() + STOP_WAIT;
+    while Instant::now() < deadline {
+        if !info_path.exists() {
+            println!("stopped");
+            return ExitCode::SUCCESS;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    eprintln!("pid {pid} did not stop within {STOP_WAIT:?}");
+    ExitCode::FAILURE
+}
+
 #[tokio::main]
 async fn main() -> ExitCode {
     match Cli::parse().command {
+        Command::Daemon(DaemonCommand::Run {
+            project,
+            idle_seconds,
+        }) => run_daemon(&project, idle_seconds).await,
+        Command::Daemon(DaemonCommand::Status { project }) => daemon_status(&project),
+        Command::Daemon(DaemonCommand::Stop { project }) => stop_daemon(&project).await,
         Command::Provider(ProviderCommand::List) => list().await,
         Command::Provider(ProviderCommand::Test { id, runs, model }) => test(id, runs, model).await,
     }

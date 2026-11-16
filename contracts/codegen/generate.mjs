@@ -12,6 +12,7 @@ const ROOT_SCHEMAS = [
   'update-result.schema.json',
   'element-style.schema.json',
   'finetune.schema.json',
+  'ws-protocol.schema.json',
 ];
 
 const OUTPUTS = {

@@ -1,4 +1,4 @@
-import type { UpdateResult } from '@guijam/contracts-ts';
+import type { GuijamMessage, UpdateResult } from '@guijam/contracts-ts';
 
 export interface UpdateStart {
   updateId: string;
@@ -11,5 +11,8 @@ declare module 'vite/types/customEvent.d.ts' {
   interface CustomEventMap {
     'gj:update-start': UpdateStart;
     'gj:update-result': UpdateResult;
+    /** A widget request; untrusted until `checkWidgetRequest` admits it. */
+    'gj:request': unknown;
+    'gj:response': GuijamMessage;
   }
 }

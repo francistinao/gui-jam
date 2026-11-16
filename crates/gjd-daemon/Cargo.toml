@@ -12,11 +12,21 @@ name = "gjd"
 path = "src/main.rs"
 
 [dependencies]
+axum.workspace = true
 clap.workspace = true
+getrandom.workspace = true
+gjd-core = { path = "../gjd-core" }
 gjd-providers = { path = "../gjd-providers" }
+nix.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+similar.workspace = true
 tempfile.workspace = true
+thiserror.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
