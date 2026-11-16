@@ -1,4 +1,4 @@
-import type { UpdateResult } from '@gui-jam/contracts-ts';
+import type { UpdateResult } from '@guijam/contracts-ts';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createUpdateTracker, isUpdateResult } from './update-tracker.js';
 

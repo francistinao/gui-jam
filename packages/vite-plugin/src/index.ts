@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdir, rm, writeFile } from 'node:fs/promises';
 import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { UpdateError, UpdateResult } from '@gui-jam/contracts-ts';
+import type { UpdateError, UpdateResult } from '@guijam/contracts-ts';
 import {
   type DevEnvironment,
   type EnvironmentModuleNode,
@@ -12,9 +12,9 @@ import {
 } from 'vite';
 import { createUpdateTracker, isUpdateResult } from './update-tracker.js';
 
-export type { UpdateResult } from '@gui-jam/contracts-ts';
+export type { UpdateResult } from '@guijam/contracts-ts';
 
-export interface GuiJamApi {
+export interface GuijamApi {
   /**
    * Serves `content` in place of `file` (absolute or relative to the Vite root) without
    * touching the source file. Content that does not compile is rejected with
@@ -25,7 +25,7 @@ export interface GuiJamApi {
   clearOverlay(file: string): Promise<UpdateResult>;
 }
 
-const CLIENT_ID = 'virtual:gui-jam/client';
+const CLIENT_ID = 'virtual:guijam/client';
 const CLIENT_ENTRY = normalizePath(fileURLToPath(new URL('./client.js', import.meta.url)));
 const UPDATE_TIMEOUT_MS = 3000;
 const CSS_ID = /\.css(?:\?.*)?$/;
@@ -46,7 +46,7 @@ function toUpdateError(error: unknown, file: string): UpdateError {
   return result;
 }
 
-export function guiJam(): Plugin<GuiJamApi> {
+export function guijam(): Plugin<GuijamApi> {
   const overlays = new Map<string, string>();
   const tailwindRootIds = new Set<string>();
   const tracker = createUpdateTracker(UPDATE_TIMEOUT_MS);
@@ -76,7 +76,7 @@ export function guiJam(): Plugin<GuiJamApi> {
   }
 
   async function applyOverlay(file: string, content: string | undefined): Promise<UpdateResult> {
-    if (!devServer) throw new Error('gui-jam: the Vite dev server has not started');
+    if (!devServer) throw new Error('guijam: the Vite dev server has not started');
     const client = devServer.environments.client;
     const id = normalizePath(resolve(root, file));
     const updateId = randomUUID();
@@ -121,7 +121,7 @@ export function guiJam(): Plugin<GuiJamApi> {
   }
 
   return {
-    name: 'gui-jam',
+    name: 'guijam',
     apply: 'serve',
     enforce: 'pre',
 
@@ -131,12 +131,12 @@ export function guiJam(): Plugin<GuiJamApi> {
     },
 
     config() {
-      return { server: { watch: { ignored: ['**/.gui-jam/**'] } } };
+      return { server: { watch: { ignored: ['**/.guijam/**'] } } };
     },
 
     configResolved(config) {
       root = config.root;
-      candidatesDir = join(root, '.gui-jam', 'run', 'candidates');
+      candidatesDir = join(root, '.guijam', 'run', 'candidates');
     },
 
     async configureServer(server) {

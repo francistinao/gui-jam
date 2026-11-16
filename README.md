@@ -41,7 +41,7 @@ pnpm build
 pnpm --filter small-react-tailwind4 dev
 ```
 
-The page loads the GUIJam client (`/@id/virtual:gui-jam/client`). Overlays are driven through the plugin API (`setOverlay`, `clearOverlay`); see `tests/e2e/s1-overlays.spec.ts`.
+The page loads the GUIJam client (`/@id/virtual:guijam/client`). Overlays are driven through the plugin API (`setOverlay`, `clearOverlay`); see `tests/e2e/s1-overlays.spec.ts`.
 
 ## Layout
 

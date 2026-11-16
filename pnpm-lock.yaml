@@ -11,7 +11,7 @@ importers:
       '@biomejs/biome':
         specifier: 2.6.8
         version: 2.6.8
-      '@gui-jam/vite-plugin':
+      '@guijam/vite-plugin':
         specifier: workspace:*
         version: link:packages/vite-plugin
       '@playwright/test':
@@ -42,7 +42,7 @@ importers:
         specifier: 19.3.1
         version: 19.3.1(react@19.3.1)
     devDependencies:
-      '@gui-jam/vite-plugin':
+      '@guijam/vite-plugin':
         specifier: workspace:*
         version: link:../../packages/vite-plugin
       '@tailwindcss/vite':
@@ -71,7 +71,7 @@ importers:
 
   packages/vite-plugin:
     devDependencies:
-      '@gui-jam/contracts-ts':
+      '@guijam/contracts-ts':
         specifier: workspace:*
         version: link:../contracts-ts
       '@types/node':

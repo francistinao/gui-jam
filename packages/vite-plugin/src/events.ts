@@ -1,4 +1,4 @@
-import type { UpdateResult } from '@gui-jam/contracts-ts';
+import type { UpdateResult } from '@guijam/contracts-ts';
 
 export interface UpdateStart {
   updateId: string;

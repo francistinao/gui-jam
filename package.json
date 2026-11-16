@@ -1,5 +1,5 @@
 {
-  "name": "gui-jam-monorepo",
+  "name": "guijam-monorepo",
   "private": true,
   "type": "module",
   "packageManager": "pnpm@10.10.0",
@@ -18,7 +18,7 @@
   },
   "devDependencies": {
     "@biomejs/biome": "2.6.8",
-    "@gui-jam/vite-plugin": "workspace:*",
+    "@guijam/vite-plugin": "workspace:*",
     "@playwright/test": "1.65.1",
     "@types/node": "22.20.5",
     "json-schema-to-typescript": "16.0.0",

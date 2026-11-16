@@ -169,7 +169,7 @@ async fn cancelling_terminates_the_provider_process_group_within_three_seconds()
     let adapter = ClaudeCode;
     let discovery = adapter.discover().await.expect("claude is installed");
     let marker = format!(
-        "gui-jam-cancel-probe-{}-{}",
+        "guijam-cancel-probe-{}-{}",
         std::process::id(),
         Instant::now().elapsed().as_nanos()
     );

@@ -1,4 +1,4 @@
-import type { UpdateError, UpdateResult } from '@gui-jam/contracts-ts';
+import type { UpdateError, UpdateResult } from '@guijam/contracts-ts';
 import type { ErrorPayload } from 'vite';
 import type { UpdateStart } from './events.js';
 

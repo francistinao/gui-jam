@@ -1,4 +1,4 @@
-import type { UpdateResult } from '@gui-jam/contracts-ts';
+import type { UpdateResult } from '@guijam/contracts-ts';
 
 const STATUSES: ReadonlySet<string> = new Set<UpdateResult['status']>([
   'ok',

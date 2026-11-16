@@ -14,7 +14,7 @@ GUIJam has TypeScript surfaces (Vite plugin, browser overlay, thin CLI) and a Ru
 - **TypeScript 7.0.2**, strict, with `noUncheckedIndexedAccess`, `exactOptionalPropertyTypes` and `verbatimModuleSyntax` (`tsconfig.base.json`).
 - **Biome 2.6.8** is the one linter and formatter (Tailwind directive parsing on). **Vitest 5.1** for unit tests, **Playwright 1.65** (Chromium) for e2e. Rust: rustfmt, clippy pedantic with `-D warnings` in CI.
 - **Contracts.** `contracts/*.schema.json` (JSON Schema 2020-12) are the source of truth. `contracts/codegen/generate.mjs` bundles them into one self-contained schema and writes TypeScript types (json-schema-to-typescript, checked in, drift-checked in CI). Rust types are generated at build time by typify in `crates/gjd-core/build.rs`, so they cannot drift.
-- **Packages are compiled with plain `tsc`.** D-11 (tsdown vs tsup) is deferred: tsdown 0.23.7 needs Node ≥ 22.18 and is still pre-1.0, and nothing is published yet. Decide when the `gui-jam` npm package is assembled.
+- **Packages are compiled with plain `tsc`.** D-11 (tsdown vs tsup) is deferred: tsdown 0.23.7 needs Node ≥ 22.18 and is still pre-1.0, and nothing is published yet. Decide when the `guijam` npm package is assembled.
 - **Process groups on Unix** through `tokio::process::Command::process_group` and `nix::sys::signal::killpg`. Windows Job Objects (P1) will use `process-wrap`, the maintained successor of `command-group`.
 - **Only what the current phase uses exists.** The PRD §20 layout is the target. Crates and packages (`gjd-mcp`, `gjd-route`, `gjd-refs`, overlay, ts-worker, published wrapper) are added when their phase starts, not as empty placeholders.
 

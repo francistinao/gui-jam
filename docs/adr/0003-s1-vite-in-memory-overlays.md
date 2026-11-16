@@ -42,9 +42,9 @@ Not tested: Vite 8's experimental full-bundle dev mode (`DevEnvironment.bundledD
 
 Fix, with no write to any source file and no change to the user's CSS on disk:
 
-- An `order: 'pre'` transform appends `@source "<relative path to .gui-jam/run/candidates>";` to every Tailwind root stylesheet (`@import "tailwindcss"` or `@tailwind utilities`). It runs before Tailwind's own transform regardless of plugin order.
-- Each overlay's text is mirrored into `.gui-jam/run/candidates/<path>` (git-ignored runtime data), and removed on clear.
-- The plugin adds `**/.gui-jam/**` to `server.watch.ignored`, so Vite's watcher does not react to the mirror (or to the journal and logs later).
+- An `order: 'pre'` transform appends `@source "<relative path to .guijam/run/candidates>";` to every Tailwind root stylesheet (`@import "tailwindcss"` or `@tailwind utilities`). It runs before Tailwind's own transform regardless of plugin order.
+- Each overlay's text is mirrored into `.guijam/run/candidates/<path>` (git-ignored runtime data), and removed on clear.
+- The plugin adds `**/.guijam/**` to `server.watch.ignored`, so Vite's watcher does not react to the mirror (or to the journal and logs later).
 - When an overlay is set, the plugin reloads the Tailwind root CSS modules before the component's module. Tailwind rescans incrementally and the new utilities exist before the component renders them.
 
 Consequence: candidates accumulate for the dev session, which is the same as Tailwind's own dev behaviour.
@@ -66,4 +66,4 @@ Fix: `setOverlay` pre-flights the new content with `transformRequest` (the full 
 - One pending update per page is assumed. A developer save that lands during a preview can be counted as one of the expected updates.
 - An overlay set for a module no page has loaded yet returns `ok` immediately and does not reload CSS.
 - If no browser is connected, `setOverlay` returns `timeout` after 3 s.
-- The PRD puts `.gui-jam/` at the project root; the plugin currently uses the Vite root. These are the same in the fixture and must be reconciled when the daemon owns `.gui-jam/`.
+- The PRD puts `.guijam/` at the project root; the plugin currently uses the Vite root. These are the same in the fixture and must be reconciled when the daemon owns `.guijam/`.

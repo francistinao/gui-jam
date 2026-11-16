@@ -6,12 +6,12 @@ Dev-only tool that turns a running Vite app into an editable surface: draw on an
 
 | PRD text | Use in code |
 |---|---|
-| `magic-canvas`, `npx magic-canvas …` | `gui-jam`, `npx gui-jam …` |
-| `magicCanvas()` from `magic-canvas/vite` | `guiJam()` from `gui-jam/vite` |
-| `magic-canvas.toml`, `.magic-canvas/`, `~/.config/magic-canvas/` | `gui-jam.toml`, `.gui-jam/`, `~/.config/gui-jam/` |
+| `magic-canvas`, `npx magic-canvas …` | `guijam`, `npx guijam …` |
+| `magicCanvas()` from `magic-canvas/vite` | `guijam()` from `guijam/vite` |
+| `magic-canvas.toml`, `.magic-canvas/`, `~/.config/magic-canvas/` | `guijam.toml`, `.guijam/`, `~/.config/guijam/` |
 | `mcd`, crates `mcd-*` | `gjd`, crates `gjd-*` |
-| MCP server `magic-canvas`, tools `mc_*` | `gui-jam`, `gj_*` |
-| `data-mc-src`, events `mc:*`, `virtual:magic-canvas/client` | `data-gj-src`, `gj:*`, `virtual:gui-jam/client` |
+| MCP server `magic-canvas`, tools `mc_*` | `guijam`, `gj_*` |
+| `data-mc-src`, events `mc:*`, `virtual:magic-canvas/client` | `data-gj-src`, `gj:*`, `virtual:guijam/client` |
 
 `docs/PRD.md` lost table cells that contained `|` inside code when it was converted. For FR-080, the §9.2 capability matrix, the §11.5 tool table, `hmr.observed` in §19.1 and the §23.1 command table, read `docs/handoff/PRD-magic-canvas.md`.
 
@@ -24,6 +24,8 @@ Dev-only tool that turns a running Vite app into an editable surface: draw on an
 - `docs/handoff/`: original handoff bundle (screenshots, prototype). The prototype is reference only.
 
 ## Commands
+
+`scripts/gate.sh` runs every gate below and stops at the first failure. Don't pipe gate commands into `tail`/`grep`: that hides the exit code.
 
 ```bash
 pnpm install

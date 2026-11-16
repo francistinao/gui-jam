@@ -4,8 +4,8 @@ node_modules/
 dist/
 target/
 *.tsbuildinfo
-**/.gui-jam/run/
-**/.gui-jam/logs/
-**/.gui-jam/journal/
+**/.guijam/run/
+**/.guijam/logs/
+**/.guijam/journal/
 test-results/
 playwright-report/

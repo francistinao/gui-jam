@@ -1,5 +1,5 @@
 {
-  "name": "@gui-jam/vite-plugin",
+  "name": "@guijam/vite-plugin",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -20,7 +20,7 @@
     "vite": "^6.0.0 || ^7.0.0 || ^8.0.0"
   },
   "devDependencies": {
-    "@gui-jam/contracts-ts": "workspace:*",
+    "@guijam/contracts-ts": "workspace:*",
     "@types/node": "22.20.5",
     "typescript": "7.0.2",
     "vite": "8.3.8"

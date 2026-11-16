@@ -2,7 +2,7 @@ import { readFile, stat } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import type { GuiJamApi } from '@gui-jam/vite-plugin';
+import type { GuijamApi } from '@guijam/vite-plugin';
 import { expect, type Page, test } from '@playwright/test';
 import type * as Vite from 'vite';
 
@@ -17,7 +17,7 @@ const P95_BUDGET_MS = 300;
 
 let vite: typeof Vite;
 let server: Vite.ViteDevServer;
-let api: GuiJamApi;
+let api: GuijamApi;
 let baseUrl: string;
 
 // The matrix run swaps the fixture's Vite version, so drive the Vite that the
@@ -29,9 +29,9 @@ async function loadFixtureVite(): Promise<typeof Vite> {
   return import(pathToFileURL(join(dirname(vitePackageJson), 'dist/node/index.js')).href);
 }
 
-function guiJamApi(devServer: Vite.ViteDevServer): GuiJamApi {
-  const plugin = devServer.config.plugins.find(({ name }) => name === 'gui-jam');
-  if (!plugin?.api) throw new Error('gui-jam is not registered in the fixture vite.config.ts');
+function guijamApi(devServer: Vite.ViteDevServer): GuijamApi {
+  const plugin = devServer.config.plugins.find(({ name }) => name === 'guijam');
+  if (!plugin?.api) throw new Error('guijam is not registered in the fixture vite.config.ts');
   return plugin.api;
 }
 
@@ -72,7 +72,7 @@ test.beforeAll(async () => {
   const url = server.resolvedUrls?.local[0];
   if (!url) throw new Error('Vite did not report a local URL');
   baseUrl = url;
-  api = guiJamApi(server);
+  api = guijamApi(server);
 });
 
 test.afterEach(async () => {
