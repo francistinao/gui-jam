@@ -1,0 +1,104 @@
+zai/glm-4.6
+{
+  "id": "glm-4.6",
+  "providerID": "zai",
+  "name": "GLM-4.6",
+  "family": "glm",
+  "api": {
+    "id": "glm-4.6",
+    "url": "https://api.z.ai/api/paas/v4",
+    "npm": "@ai-sdk/openai-compatible"
+  },
+  "status": "active",
+  "headers": {},
+  "options": {},
+  "cost": {
+    "input": 0.6,
+    "output": 2.2,
+    "cache": {
+      "read": 0.11,
+      "write": 0
+    }
+  },
+  "limit": {
+    "context": 204800,
+    "output": 131072
+  },
+  "capabilities": {
+    "temperature": true,
+    "reasoning": true,
+    "attachment": false,
+    "toolcall": true,
+    "input": {
+      "text": true,
+      "audio": false,
+      "image": false,
+      "video": false,
+      "pdf": false
+    },
+    "output": {
+      "text": true,
+      "audio": false,
+      "image": false,
+      "video": false,
+      "pdf": false
+    },
+    "interleaved": {
+      "field": "reasoning_content"
+    }
+  },
+  "release_date": "2025-09-30",
+  "variants": {}
+}
+zai/glm-4.6v
+{
+  "id": "glm-4.6v",
+  "providerID": "zai",
+  "name": "GLM-4.6V",
+  "family": "glm",
+  "api": {
+    "id": "glm-4.6v",
+    "url": "https://api.z.ai/api/paas/v4",
+    "npm": "@ai-sdk/openai-compatible"
+  },
+  "status": "active",
+  "headers": {},
+  "options": {},
+  "cost": {
+    "input": 0.3,
+    "output": 0.9,
+    "cache": {
+      "read": 0.05,
+      "write": 0
+    }
+  },
+  "limit": {
+    "context": 128000,
+    "output": 32768
+  },
+  "capabilities": {
+    "temperature": true,
+    "reasoning": true,
+    "attachment": true,
+    "toolcall": true,
+    "input": {
+      "text": true,
+      "audio": false,
+      "image": true,
+      "video": true,
+      "pdf": false
+    },
+    "output": {
+      "text": true,
+      "audio": false,
+      "image": false,
+      "video": false,
+      "pdf": false
+    },
+    "interleaved": {
+      "field": "reasoning_content"
+    }
+  },
+  "release_date": "2025-12-08",
+  "variants": {}
+}

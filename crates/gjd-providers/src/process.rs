@@ -8,6 +8,7 @@ use nix::sys::signal::{Signal, killpg};
 use nix::unistd::Pid;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader, Lines};
 use tokio::process::{Child, ChildStdout, Command};
+use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
@@ -24,6 +25,13 @@ pub(crate) struct ProviderProcess {
     group: Pid,
     stdout: Lines<BufReader<ChildStdout>>,
     stderr_tail: JoinHandle<String>,
+    stderr_lines: Option<mpsc::UnboundedReceiver<String>>,
+}
+
+#[derive(Default)]
+pub(crate) struct SpawnOptions {
+    pub(crate) env: Vec<(String, String)>,
+    pub(crate) watch_stderr: bool,
 }
 
 impl ProviderProcess {
@@ -37,8 +45,23 @@ impl ProviderProcess {
         I: IntoIterator<Item = S>,
         S: AsRef<OsStr>,
     {
+        Self::spawn_with(binary, args, cwd, stdin_payload, SpawnOptions::default()).await
+    }
+
+    pub(crate) async fn spawn_with<I, S>(
+        binary: &Path,
+        args: I,
+        cwd: &Path,
+        stdin_payload: &[u8],
+        options: SpawnOptions,
+    ) -> io::Result<Self>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
         let mut child = Command::new(binary)
             .args(args)
+            .envs(options.env)
             .current_dir(cwd)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -58,23 +81,54 @@ impl ProviderProcess {
         stdin.write_all(stdin_payload).await?;
         drop(stdin);
 
-        let stderr_tail = tokio::spawn(async move {
-            let mut buf = Vec::new();
-            let _ = stderr.read_to_end(&mut buf).await;
-            let start = buf.len().saturating_sub(STDERR_TAIL_BYTES);
-            String::from_utf8_lossy(&buf[start..]).into_owned()
-        });
+        let (stderr_tail, stderr_lines) = if options.watch_stderr {
+            let (sender, receiver) = mpsc::unbounded_channel();
+            let tail = tokio::spawn(async move {
+                let mut lines = BufReader::new(stderr).lines();
+                let mut tail = String::new();
+                while let Ok(Some(line)) = lines.next_line().await {
+                    tail.push_str(&line);
+                    tail.push('\n');
+                    if tail.len() > STDERR_TAIL_BYTES * 2 {
+                        tail = keep_tail(&tail);
+                    }
+                    let _ = sender.send(line);
+                }
+                keep_tail(&tail)
+            });
+            (tail, Some(receiver))
+        } else {
+            let tail = tokio::spawn(async move {
+                let mut buf = Vec::new();
+                let _ = stderr.read_to_end(&mut buf).await;
+                let start = buf.len().saturating_sub(STDERR_TAIL_BYTES);
+                String::from_utf8_lossy(&buf[start..]).into_owned()
+            });
+            (tail, None)
+        };
 
         Ok(Self {
             child,
             group,
             stdout: BufReader::new(stdout).lines(),
             stderr_tail,
+            stderr_lines,
         })
     }
 
-    pub(crate) async fn next_line(&mut self) -> io::Result<Option<String>> {
-        self.stdout.next_line().await
+    async fn next_event(&mut self) -> io::Result<Option<Line>> {
+        loop {
+            let Some(receiver) = self.stderr_lines.as_mut() else {
+                return Ok(self.stdout.next_line().await?.map(Line::Stdout));
+            };
+            tokio::select! {
+                line = self.stdout.next_line() => return Ok(line?.map(Line::Stdout)),
+                line = receiver.recv() => match line {
+                    Some(line) => return Ok(Some(Line::Stderr(line))),
+                    None => self.stderr_lines = None,
+                },
+            }
+        }
     }
 
     pub(crate) async fn exit_code_and_stderr(mut self) -> (Option<i32>, String) {
@@ -118,6 +172,19 @@ impl ProviderProcess {
     }
 }
 
+enum Line {
+    Stdout(String),
+    Stderr(String),
+}
+
+fn keep_tail(text: &str) -> String {
+    let mut start = text.len().saturating_sub(STDERR_TAIL_BYTES);
+    while !text.is_char_boundary(start) {
+        start += 1;
+    }
+    text[start..].to_owned()
+}
+
 pub(crate) trait EventFold {
     type Answer;
 
@@ -126,6 +193,10 @@ pub(crate) trait EventFold {
         line: &str,
         elapsed: Duration,
     ) -> Option<Result<Self::Answer, ProviderError>>;
+
+    fn feed_stderr(&mut self, _line: &str) -> Option<Result<Self::Answer, ProviderError>> {
+        None
+    }
 }
 
 async fn read_answer<F: EventFold>(
@@ -133,8 +204,12 @@ async fn read_answer<F: EventFold>(
     fold: &mut F,
     started: Instant,
 ) -> io::Result<Option<Result<F::Answer, ProviderError>>> {
-    while let Some(line) = process.next_line().await? {
-        if let Some(finished) = fold.feed(&line, started.elapsed()) {
+    while let Some(line) = process.next_event().await? {
+        let finished = match line {
+            Line::Stdout(line) => fold.feed(&line, started.elapsed()),
+            Line::Stderr(line) => fold.feed_stderr(&line),
+        };
+        if let Some(finished) = finished {
             return Ok(Some(finished));
         }
     }

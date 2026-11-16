@@ -18,7 +18,7 @@
 
 GUIJam turns the app running in your Vite dev server into an editable canvas. Point at an element, circle it, or sketch what you want, describe the change in plain words, and GUIJam previews it live in the page before anything touches your files. When you keep a change, it lands as a minimal edit in the component that renders it, with one-click undo.
 
-GUIJam drives the AI coding CLI you already use and are logged into, such as Claude Code or Codex. There are no API keys to configure and no credentials leave your machine. Everything runs only in development: production builds are byte-for-byte the same with or without it.
+GUIJam drives the AI coding CLI you already use and are logged into, such as Claude Code, Codex or OpenCode. There are no API keys to configure and no credentials leave your machine. Everything runs only in development: production builds are byte-for-byte the same with or without it.
 
 ## Quick start
 
@@ -33,7 +33,7 @@ npx guijam@latest init
 1. Detects your package manager, framework and styling.
 2. Adds `guijam` as a dev dependency.
 3. Adds `guijam()` to your Vite config. If the config is too dynamic to edit safely, it shows the lines to add.
-4. Lists the AI coding CLIs on your machine, such as Claude Code and Codex, and saves the one you pick.
+4. Lists the AI coding CLIs on your machine (Claude Code, Codex, OpenCode) and saves the one you pick. With OpenCode it also lets you choose the model, such as DeepSeek or GLM.
 5. Runs that CLI's own login if you aren't logged in yet. GUIJam never reads your credentials.
 
 Then start your dev server as usual:
@@ -60,7 +60,7 @@ Every applied change shows an **Undo** for 10 seconds, and `Alt+Shift+M` hides t
 - Node `^20.19.0` or `>=22.12.0`, on macOS or Linux
 - Vite 6, 7 or 8, with React, Preact or Solid. Vue, Svelte, Nuxt, Next.js and Angular support is in progress.
 - Tailwind CSS for the fine-tune panel. Draw and Ask work with any CSS.
-- An AI coding CLI, installed and logged in: [Claude Code](https://claude.com/claude-code) or [Codex](https://github.com/openai/codex). `init` helps with both.
+- An AI coding CLI, installed and logged in: [Claude Code](https://claude.com/claude-code), [Codex](https://github.com/openai/codex) or [OpenCode](https://opencode.ai). OpenCode reaches DeepSeek, GLM and many other models with your own key. `init` helps you pick one and log in.
 
 ### Pages rendered by a backend
 
@@ -85,8 +85,8 @@ With Laravel's `@vite` directive, Inertia, or any server that renders the HTML i
 ```
  Browser                       Vite dev server                 gjd daemon (Rust)               Provider CLI
 ┌──────────────────┐  HMR   ┌────────────────────────┐   WS    ┌───────────────────────┐ stdio ┌──────────────┐
-│ GUIJam widget    │◀──────▶│ guijam() plugin        │◀───────▶│ inspect · patch ·     │◀─────▶│ Claude Code  │
-│ in a shadow root │        │ source locations,      │  token  │ journal · routing ·   │       │ or Codex     │
+│ GUIJam widget    │◀──────▶│ guijam() plugin        │◀───────▶│ inspect · patch ·     │◀─────▶│ Your AI CLI  │
+│ in a shadow root │        │ source locations,      │  token  │ journal · routing ·   │       │ (headless)   │
 └──────────────────┘        │ in-memory previews     │         │ providers             │       └──────────────┘
                             └────────────────────────┘         └───────────────────────┘
 ```
@@ -151,7 +151,7 @@ Publish a GitHub release tagged `vX.Y.Z`. CI runs every check on the tag, builds
 - [Vite](https://vite.dev) and the [oxc](https://oxc.rs) parser
 - [Tokio](https://tokio.rs) and [axum](https://github.com/tokio-rs/axum)
 - [Clack](https://github.com/bombshell-dev/clack) and [magicast](https://github.com/unjs/magicast), behind `guijam init`
-- [Claude Code](https://claude.com/claude-code) and [Codex](https://github.com/openai/codex), the CLIs GUIJam drives
+- [Claude Code](https://claude.com/claude-code), [Codex](https://github.com/openai/codex) and [OpenCode](https://opencode.ai), the CLIs GUIJam drives
 
 ## License
 

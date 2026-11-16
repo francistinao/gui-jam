@@ -60,6 +60,13 @@ enum ProviderCommand {
     },
     Use {
         id: ProviderId,
+        #[arg(long)]
+        model: Option<String>,
+    },
+    Models {
+        id: ProviderId,
+        #[arg(long)]
+        json: bool,
     },
     Test {
         id: ProviderId,
@@ -89,6 +96,9 @@ async fn list_json() -> ExitCode {
             "installed": false,
             "auth": "unknown",
         });
+        if let Some(model) = gjd_daemon::config::provider_model(id) {
+            entry["model"] = model.into();
+        }
         if let Some(provider) = adapter(id)
             && let Ok(discovery) = provider.discover().await
         {
@@ -109,15 +119,16 @@ async fn list_json() -> ExitCode {
     ExitCode::SUCCESS
 }
 
-fn use_provider(id: ProviderId) -> ExitCode {
+fn use_provider(id: ProviderId, model: Option<&str>) -> ExitCode {
     if adapter(id).is_none() {
         eprintln!("{id}: adapter not available in this build");
         return ExitCode::FAILURE;
     }
-    match gjd_daemon::config::set_active_provider(id) {
+    match gjd_daemon::config::set_active_provider(id, model) {
         Ok(path) => {
+            let with = model.map_or_else(String::new, |model| format!(" with {model}"));
             println!(
-                "{} is now the AI tool for GUIJam ({})",
+                "{}{with} is now the AI tool for GUIJam ({})",
                 id.display_name(),
                 path.display()
             );
@@ -128,6 +139,45 @@ fn use_provider(id: ProviderId) -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+async fn models(id: ProviderId, json: bool) -> ExitCode {
+    let Some(provider) = adapter(id) else {
+        eprintln!("{id}: adapter not available in this build");
+        return ExitCode::FAILURE;
+    };
+    let listed = match provider.discover().await {
+        Ok(discovery) => provider.models(&discovery).await,
+        Err(error) => Err(error),
+    };
+    let models = match listed {
+        Ok(models) => models,
+        Err(error) => {
+            eprintln!("{id}: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    if json {
+        let entries: Vec<serde_json::Value> = models
+            .iter()
+            .map(|model| {
+                serde_json::json!({
+                    "id": model.id,
+                    "name": model.name,
+                    "images": model.images,
+                    "free": model.free,
+                })
+            })
+            .collect();
+        println!("{}", serde_json::Value::Array(entries));
+    } else {
+        for model in &models {
+            let images = if model.images { " · images" } else { "" };
+            let free = if model.free { " · free" } else { "" };
+            println!("{:<40} {}{images}{free}", model.id, model.name);
+        }
+    }
+    ExitCode::SUCCESS
 }
 
 async fn list() -> ExitCode {
@@ -193,11 +243,18 @@ async fn test(id: ProviderId, runs: u32, model: Option<String>) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let model = model.unwrap_or_else(|| id.fast_model().to_owned());
+    let model = model.or_else(|| id.fast_model().map(str::to_owned));
     let mut ready = Vec::new();
     let mut answer = Vec::new();
     for run in 1..=runs {
-        match run_probe(provider.as_ref(), &discovery, Some(&model), workdir.path()).await {
+        match run_probe(
+            provider.as_ref(),
+            &discovery,
+            model.as_deref(),
+            workdir.path(),
+        )
+        .await
+        {
             Ok((timings, cost)) => {
                 println!(
                     "run {run}: ready {} ms · answer {} ms{}",
@@ -299,7 +356,8 @@ async fn main() -> ExitCode {
         Command::Daemon(DaemonCommand::Stop { project }) => stop_daemon(&project).await,
         Command::Provider(ProviderCommand::List { json: true }) => list_json().await,
         Command::Provider(ProviderCommand::List { json: false }) => list().await,
-        Command::Provider(ProviderCommand::Use { id }) => use_provider(id),
+        Command::Provider(ProviderCommand::Use { id, model }) => use_provider(id, model.as_deref()),
+        Command::Provider(ProviderCommand::Models { id, json }) => models(id, json).await,
         Command::Provider(ProviderCommand::Test { id, runs, model }) => test(id, runs, model).await,
     }
 }

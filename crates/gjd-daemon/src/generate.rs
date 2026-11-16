@@ -39,7 +39,7 @@ impl TierConfig {
     pub fn model_for(&self, provider: ProviderId) -> Option<&'static str> {
         match self.tier {
             RouteTier::R2 => provider.standard_model(),
-            _ => Some(provider.fast_model()),
+            _ => provider.fast_model(),
         }
     }
 }

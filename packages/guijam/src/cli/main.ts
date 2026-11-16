@@ -17,7 +17,8 @@ Commands
 
 Options
   -y, --yes            Use the defaults instead of asking
-      --provider <id>  The AI tool to use, such as claude-code or codex
+      --provider <id>  The AI tool to use: claude-code, codex or opencode
+      --model <id>     The model to use with it, such as deepseek/deepseek-chat
       --skip-install   Don't add guijam to package.json
       --cwd <dir>      Run in another folder
   -h, --help           Show this help
@@ -43,6 +44,7 @@ function parse(argv: string[]) {
     options: {
       yes: { type: 'boolean', short: 'y' },
       provider: { type: 'string' },
+      model: { type: 'string' },
       'skip-install': { type: 'boolean' },
       cwd: { type: 'string' },
       help: { type: 'boolean', short: 'h' },
@@ -94,6 +96,7 @@ export async function main(argv: string[]): Promise<number> {
         interactive:
           values.yes !== true && process.stdin.isTTY === true && process.stdout.isTTY === true,
         provider: values.provider,
+        model: values.model,
         skipInstall: values['skip-install'] === true,
         gjd: findDaemonBinary(),
         missingGjd: missingGjd(),

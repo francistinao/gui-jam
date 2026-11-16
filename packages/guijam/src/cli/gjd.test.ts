@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { defaultProvider, parseProviderList, providerHint } from './gjd.js';
+import {
+  defaultProvider,
+  parseModelList,
+  parseProviderList,
+  providerHint,
+  rankModels,
+} from './gjd.js';
 
 const LIST = JSON.stringify([
   {
@@ -61,5 +67,26 @@ describe('providerHint', () => {
     expect(providerHint(claude)).toBe('not logged in · 2.1.325');
     expect(providerHint(codex)).toBe('logged in · 0.169.0');
     expect(providerHint({ ...codex, installed: false })).toBe('not installed');
+  });
+});
+
+describe('models', () => {
+  it('reads the model list and puts DeepSeek and GLM first, free models last', () => {
+    const models = parseModelList(
+      JSON.stringify([
+        { id: 'opencode/glm-5.3-flash-free', name: 'GLM Free', images: false, free: true },
+        { id: 'openai/gpt-5', name: 'GPT-5', images: true, free: false },
+        { id: 'zai/glm-4.6v', name: 'GLM-4.6V', images: true, free: false },
+        { id: 'deepseek/deepseek-chat', name: 'DeepSeek Chat', images: false, free: false },
+      ]),
+    );
+
+    expect(rankModels(models).map((model) => model.id)).toEqual([
+      'deepseek/deepseek-chat',
+      'zai/glm-4.6v',
+      'openai/gpt-5',
+      'opencode/glm-5.3-flash-free',
+    ]);
+    expect(() => parseModelList('[{"id":1}]')).toThrow(/unexpected model entry/);
   });
 });

@@ -6,9 +6,12 @@ import { cancel, confirm, intro, log, note, outro, select, spinner } from '@clac
 import { describeProject, detectProject, type Project, runScriptCommand } from './detect.js';
 import {
   defaultProvider,
+  listModels,
   listProviders,
+  type ModelInfo,
   type ProviderInfo,
   providerHint,
+  rankModels,
   runAttached,
   useProvider,
 } from './gjd.js';
@@ -20,6 +23,7 @@ export interface InitOptions {
   version: string;
   interactive: boolean;
   provider: string | undefined;
+  model: string | undefined;
   skipInstall: boolean;
   gjd: string | undefined;
   missingGjd: string;
@@ -232,6 +236,71 @@ async function ensureReady(
   return provider;
 }
 
+async function loadModels(gjd: string, provider: ProviderInfo): Promise<ModelInfo[]> {
+  try {
+    return rankModels(await listModels(gjd, provider.id));
+  } catch (error) {
+    log.warn(`Could not list the ${provider.name} models: ${messageOf(error)}`);
+    return [];
+  }
+}
+
+function modelHint(model: ModelInfo): string | undefined {
+  const notes = [model.free ? 'free' : undefined, model.images ? 'reads sketches' : 'text only'];
+  return notes.filter((note): note is string => note !== undefined).join(' · ');
+}
+
+const ADD_KEY = '\u0000add-key';
+
+async function modelStep(gjd: string, provider: ProviderInfo, options: InitOptions): Promise<void> {
+  let models = await loadModels(gjd, provider);
+  if (models.length === 0 && options.model === undefined) return;
+  const save = async (model: string): Promise<void> => {
+    await useProvider(gjd, provider.id, model);
+    log.success(`${provider.name} will answer with ${model}`);
+  };
+  if (options.model !== undefined) {
+    if (models.length > 0 && !models.some((model) => model.id === options.model)) {
+      throw new SetupError(`${provider.name} has no model "${options.model}".`);
+    }
+    await save(options.model);
+    return;
+  }
+  if (!options.interactive) {
+    const current = provider.model ?? models[0]?.id;
+    if (current !== undefined) await save(current);
+    return;
+  }
+  for (;;) {
+    const login =
+      provider.loginCommand ?? (provider.id === 'opencode' ? 'opencode auth login' : undefined);
+    const choice = answered<string>(
+      await select({
+        message: `Which ${provider.name} model should GUIJam use?`,
+        options: [
+          ...models.map((model) => {
+            const hint = modelHint(model);
+            return { value: model.id, label: model.id, ...(hint ? { hint } : {}) };
+          }),
+          ...(login === undefined
+            ? []
+            : [{ value: ADD_KEY, label: 'Add a provider key first', hint: `runs ${login}` }]),
+        ],
+        initialValue: provider.model ?? models[0]?.id ?? ADD_KEY,
+      }),
+    );
+    if (choice !== ADD_KEY) {
+      await save(choice);
+      return;
+    }
+    if (login === undefined) return;
+    await runAttached(login, options.cwd).catch((error: unknown) => {
+      log.error(`Could not run ${login}: ${messageOf(error)}`);
+    });
+    models = await loadModels(gjd, provider);
+  }
+}
+
 async function providerStep(options: InitOptions): Promise<boolean> {
   const { gjd } = options;
   if (gjd === undefined) {
@@ -242,6 +311,7 @@ async function providerStep(options: InitOptions): Promise<boolean> {
   await useProvider(gjd, chosen.id);
   log.success(`GUIJam will drive ${chosen.name}`);
   const provider = await ensureReady(gjd, chosen, options);
+  if (provider.installed) await modelStep(gjd, provider, options);
   if (provider.auth === 'logged_in') {
     log.success(`${provider.name} is logged in`);
     return true;

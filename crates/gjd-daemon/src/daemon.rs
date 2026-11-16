@@ -1005,8 +1005,16 @@ impl Daemon {
         let (provider, discovery) = self.provider().await?;
         let provider_id = provider.id();
         let provider_name = provider_id.display_name();
-        let model = tier.model_for(provider_id);
-        let model_label = model.unwrap_or("default model");
+        if job.request.sketch.is_some() && !provider.capabilities().image_input {
+            return Err(Failure::new(
+                ErrorCode::InvalidRequest,
+                format!("{provider_name} can't read images, so sketches need an AI tool that can."),
+            )
+            .with_action("Choose another with npx guijam provider use <id>."));
+        }
+        let model = config::provider_model(provider_id)
+            .or_else(|| tier.model_for(provider_id).map(str::to_owned));
+        let model_label = model.as_deref().unwrap_or("default model");
         let mut progress = Progress::new(
             &job.request.run_id,
             job.style,
@@ -1018,7 +1026,7 @@ impl Daemon {
         progress.start(Step::Ask);
         self.report(&progress);
         let generation = GenerationRequest {
-            model: model.map(str::to_owned),
+            model: model.clone(),
             system_prompt: generate::SYSTEM_PROMPT.to_owned(),
             user_prompt: format!(
                 "{}{}",
@@ -1037,7 +1045,7 @@ impl Daemon {
         let route = Route {
             tier: tier.tier,
             provider: Some(provider_name.to_owned()),
-            model: model.map(str::to_owned),
+            model: model.clone(),
             notice: notice.map(str::to_owned),
         };
         let at = format!("<{}> {file}:{}", job.style.tag, job.request.line);

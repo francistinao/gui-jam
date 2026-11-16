@@ -28,7 +28,18 @@ pub fn active_provider_in(path: &Path) -> Option<ProviderId> {
     ProviderId::from_str(active).ok()
 }
 
-pub fn set_active_provider_in(path: &Path, id: ProviderId) -> io::Result<()> {
+#[must_use]
+pub fn provider_model_in(path: &Path, id: ProviderId) -> Option<String> {
+    let table = read_table(path).ok()?;
+    let model = table
+        .get("providers")?
+        .get(id.as_str())?
+        .get("model")?
+        .as_str()?;
+    (!model.trim().is_empty()).then(|| model.to_owned())
+}
+
+pub fn set_active_provider_in(path: &Path, id: ProviderId, model: Option<&str>) -> io::Result<()> {
     let mut table = read_table(path)?;
     let providers = table
         .entry("providers")
@@ -43,6 +54,19 @@ pub fn set_active_provider_in(path: &Path, id: ProviderId) -> io::Result<()> {
         "active".to_owned(),
         toml::Value::String(id.as_str().to_owned()),
     );
+    if let Some(model) = model {
+        let entry = providers
+            .entry(id.as_str())
+            .or_insert_with(|| toml::Value::Table(toml::Table::new()));
+        let toml::Value::Table(entry) = entry else {
+            return Err(io::Error::other(format!(
+                "{}: [providers.{}] is not a table",
+                path.display(),
+                id.as_str()
+            )));
+        };
+        entry.insert("model".to_owned(), toml::Value::String(model.to_owned()));
+    }
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -54,10 +78,15 @@ pub fn active_provider() -> Option<ProviderId> {
     config_path().and_then(|path| active_provider_in(&path))
 }
 
-pub fn set_active_provider(id: ProviderId) -> io::Result<PathBuf> {
+#[must_use]
+pub fn provider_model(id: ProviderId) -> Option<String> {
+    config_path().and_then(|path| provider_model_in(&path, id))
+}
+
+pub fn set_active_provider(id: ProviderId, model: Option<&str>) -> io::Result<PathBuf> {
     let path =
         config_path().ok_or_else(|| io::Error::other("neither XDG_CONFIG_HOME nor HOME is set"))?;
-    set_active_provider_in(&path, id)?;
+    set_active_provider_in(&path, id, model)?;
     Ok(path)
 }
 
@@ -67,7 +96,7 @@ mod tests {
 
     use gjd_providers::ProviderId;
 
-    use super::{active_provider_in, set_active_provider_in};
+    use super::{active_provider_in, provider_model_in, set_active_provider_in};
 
     #[test]
     fn saves_the_active_provider_and_keeps_other_settings() {
@@ -77,12 +106,24 @@ mod tests {
 
         fs::create_dir_all(path.parent().expect("parent")).expect("dir");
         fs::write(&path, "[widget]\nshortcut = \"Alt+Shift+G\"\n").expect("seed");
-        set_active_provider_in(&path, ProviderId::Codex).expect("saved");
+        set_active_provider_in(&path, ProviderId::Codex, None).expect("saved");
 
         assert_eq!(active_provider_in(&path), Some(ProviderId::Codex));
         let text = fs::read_to_string(&path).expect("read");
         assert!(text.contains("shortcut = \"Alt+Shift+G\""), "{text}");
         assert!(text.contains("active = \"codex\""), "{text}");
+        assert_eq!(provider_model_in(&path, ProviderId::Codex), None);
+
+        set_active_provider_in(&path, ProviderId::OpenCode, Some("deepseek/deepseek-chat"))
+            .expect("saved with a model");
+
+        assert_eq!(active_provider_in(&path), Some(ProviderId::OpenCode));
+        assert_eq!(
+            provider_model_in(&path, ProviderId::OpenCode).as_deref(),
+            Some("deepseek/deepseek-chat")
+        );
+        let text = fs::read_to_string(&path).expect("read");
+        assert!(text.contains("shortcut = \"Alt+Shift+G\""), "{text}");
     }
 
     #[test]

@@ -1,0 +1,3 @@
+{"type":"step_start","timestamp":0,"sessionID":"ses_redacted","part":{"id":"redacted","messageID":"redacted","sessionID":"redacted","type":"step-start"}}
+{"type":"text","timestamp":0,"sessionID":"ses_redacted","part":{"id":"redacted","messageID":"redacted","sessionID":"redacted","type":"text","text":"hi","time":{}}}
+{"type":"step_finish","timestamp":0,"sessionID":"ses_redacted","part":{"id":"redacted","reason":"stop","messageID":"redacted","sessionID":"redacted","type":"step-finish","tokens":{"total":7861,"input":6066,"output":3,"reasoning":0,"cache":{"write":0,"read":1792}},"cost":0}}

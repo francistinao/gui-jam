@@ -1,7 +1,10 @@
 mod claude_code;
 mod codex;
 mod error;
+mod opencode;
 mod process;
+mod schema;
+mod text_answer;
 
 use std::fmt;
 use std::path::PathBuf;
@@ -15,21 +18,24 @@ use tokio_util::sync::CancellationToken;
 pub use claude_code::ClaudeCode;
 pub use codex::Codex;
 pub use error::ProviderError;
+pub use opencode::OpenCode;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ProviderId {
     ClaudeCode,
     Codex,
+    OpenCode,
 }
 
 impl ProviderId {
-    pub const ALL: [Self; 2] = [Self::ClaudeCode, Self::Codex];
+    pub const ALL: [Self; 3] = [Self::ClaudeCode, Self::Codex, Self::OpenCode];
 
     #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {
             Self::ClaudeCode => "claude-code",
             Self::Codex => "codex",
+            Self::OpenCode => "opencode",
         }
     }
 
@@ -38,14 +44,16 @@ impl ProviderId {
         match self {
             Self::ClaudeCode => "Claude Code",
             Self::Codex => "Codex",
+            Self::OpenCode => "OpenCode",
         }
     }
 
     #[must_use]
-    pub fn fast_model(self) -> &'static str {
+    pub fn fast_model(self) -> Option<&'static str> {
         match self {
-            Self::ClaudeCode => "haiku",
-            Self::Codex => "gpt-6-luna",
+            Self::ClaudeCode => Some("haiku"),
+            Self::Codex => Some("gpt-6-luna"),
+            Self::OpenCode => None,
         }
     }
 
@@ -53,7 +61,7 @@ impl ProviderId {
     pub fn standard_model(self) -> Option<&'static str> {
         match self {
             Self::ClaudeCode => Some("sonnet"),
-            Self::Codex => None,
+            Self::Codex | Self::OpenCode => None,
         }
     }
 
@@ -62,6 +70,7 @@ impl ProviderId {
         match self {
             Self::ClaudeCode => "npm install -g @anthropic-ai/claude-code",
             Self::Codex => "npm install -g @openai/codex",
+            Self::OpenCode => "npm install -g opencode-ai",
         }
     }
 }
@@ -76,13 +85,16 @@ impl FromStr for ProviderId {
     type Err = String;
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
-        match value {
-            "claude-code" => Ok(Self::ClaudeCode),
-            "codex" => Ok(Self::Codex),
-            other => Err(format!(
-                "unknown provider `{other}` (expected claude-code or codex)"
-            )),
-        }
+        Self::ALL
+            .into_iter()
+            .find(|id| id.as_str() == value)
+            .ok_or_else(|| {
+                let known: Vec<&str> = Self::ALL.iter().map(|id| id.as_str()).collect();
+                format!(
+                    "unknown provider `{value}` (expected one of {})",
+                    known.join(", ")
+                )
+            })
     }
 }
 
@@ -90,6 +102,14 @@ impl FromStr for ProviderId {
 pub struct Discovery {
     pub binary: PathBuf,
     pub version: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ModelInfo {
+    pub id: String,
+    pub name: String,
+    pub images: bool,
+    pub free: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -164,6 +184,10 @@ pub trait ProviderAdapter: Send + Sync {
 
     fn capabilities(&self) -> Capabilities;
 
+    async fn models(&self, _discovery: &Discovery) -> Result<Vec<ModelInfo>, ProviderError> {
+        Ok(Vec::new())
+    }
+
     async fn generate(
         &self,
         discovery: &Discovery,
@@ -177,5 +201,6 @@ pub fn adapter(id: ProviderId) -> Option<Box<dyn ProviderAdapter>> {
     match id {
         ProviderId::ClaudeCode => Some(Box::new(ClaudeCode)),
         ProviderId::Codex => Some(Box::new(Codex)),
+        ProviderId::OpenCode => Some(Box::new(OpenCode)),
     }
 }

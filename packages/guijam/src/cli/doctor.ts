@@ -90,8 +90,9 @@ async function toolChecks(options: DoctorOptions): Promise<Check[]> {
     });
   } else if (provider.auth === 'logged_in') {
     const how = provider.active ? 'chosen' : 'first logged-in CLI';
-    const name =
+    const version =
       provider.version === undefined ? provider.name : `${provider.name} ${provider.version}`;
+    const name = provider.model === undefined ? version : `${version} with ${provider.model}`;
     checks.push({ level: 'ok', message: `${name} is logged in (${how})` });
   } else if (provider.auth === 'not_logged_in') {
     checks.push({

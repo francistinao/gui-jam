@@ -17,6 +17,7 @@ export interface ProviderInfo {
   version: string | undefined;
   loginCommand: string | undefined;
   reason: string | undefined;
+  model: string | undefined;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -51,6 +52,7 @@ function toProvider(entry: unknown): ProviderInfo {
     version: optionalString(entry.version),
     loginCommand: optionalString(entry.loginCommand),
     reason: optionalString(entry.reason),
+    model: optionalString(entry.model),
   };
 }
 
@@ -65,8 +67,52 @@ export async function listProviders(gjd: string): Promise<ProviderInfo[]> {
   return parseProviderList(stdout);
 }
 
-export async function useProvider(gjd: string, id: string): Promise<void> {
-  await run(gjd, ['provider', 'use', id]);
+export interface ModelInfo {
+  id: string;
+  name: string;
+  images: boolean;
+  free: boolean;
+}
+
+function toModel(entry: unknown): ModelInfo {
+  if (!isRecord(entry) || typeof entry.id !== 'string' || typeof entry.name !== 'string') {
+    throw new Error(`gjd printed an unexpected model entry: ${JSON.stringify(entry)}`);
+  }
+  return {
+    id: entry.id,
+    name: entry.name,
+    images: entry.images === true,
+    free: entry.free === true,
+  };
+}
+
+export function parseModelList(stdout: string): ModelInfo[] {
+  const parsed: unknown = JSON.parse(stdout);
+  if (!Array.isArray(parsed)) throw new Error('gjd printed something other than a model list');
+  return parsed.map(toModel);
+}
+
+export async function listModels(gjd: string, id: string): Promise<ModelInfo[]> {
+  const { stdout } = await run(gjd, ['provider', 'models', id, '--json'], {
+    timeout: LIST_TIMEOUT_MS,
+  });
+  return parseModelList(stdout);
+}
+
+const PREFERRED_PROVIDERS = ['deepseek', 'zai', 'zhipuai'];
+
+export function rankModels(models: readonly ModelInfo[]): ModelInfo[] {
+  const rank = (model: ModelInfo): number => {
+    const provider = model.id.split('/', 1)[0] ?? '';
+    const preferred = PREFERRED_PROVIDERS.indexOf(provider);
+    if (preferred !== -1) return preferred;
+    return model.free ? PREFERRED_PROVIDERS.length + 1 : PREFERRED_PROVIDERS.length;
+  };
+  return [...models].sort((a, b) => rank(a) - rank(b) || a.id.localeCompare(b.id));
+}
+
+export async function useProvider(gjd: string, id: string, model?: string): Promise<void> {
+  await run(gjd, ['provider', 'use', id, ...(model === undefined ? [] : ['--model', model])]);
 }
 
 export async function gjdVersion(gjd: string): Promise<string> {

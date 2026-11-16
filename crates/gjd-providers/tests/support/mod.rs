@@ -54,7 +54,9 @@ fn request(
     user_prompt: String,
 ) -> GenerationRequest {
     GenerationRequest {
-        model: Some(adapter.id().fast_model().to_owned()),
+        model: std::env::var("GUIJAM_LIVE_MODEL")
+            .ok()
+            .or_else(|| adapter.id().fast_model().map(str::to_owned)),
         system_prompt: system_prompt.to_owned(),
         user_prompt,
         images: Vec::new(),
@@ -176,9 +178,12 @@ pub async fn cancelling_stops_the_process_group_within_three_seconds(
         Instant::now().elapsed().as_nanos()
     );
     let system_prompt = format!("{SYSTEM_PROMPT} Run marker: {marker}.");
-    let prompt = widget_prompt(
-        &source,
-        "Return 3 very different variants with long rationales.",
+    let prompt = format!(
+        "{}\nRun marker: {marker}.",
+        widget_prompt(
+            &source,
+            "Return 3 very different variants with long rationales.",
+        )
     );
     let cancel = CancellationToken::new();
 
