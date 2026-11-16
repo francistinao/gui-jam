@@ -8,8 +8,6 @@ fn main() {
     let bundle = fs::read_to_string(&bundle_path)
         .unwrap_or_else(|e| panic!("read {}: {e}", bundle_path.display()));
 
-    // typify 0.10 reads schemars 0.8 (draft-07) root schemas, which keep shared
-    // definitions under `definitions`; the contracts are written in 2020-12 with `$defs`.
     let draft07 = bundle
         .replace("\"#/$defs/", "\"#/definitions/")
         .replace("\"$defs\":", "\"definitions\":");

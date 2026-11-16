@@ -26,7 +26,6 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - name: Lint and format (Biome)
         run: pnpm check
-      # The fixture type-checks against the built plugin, so build before typecheck.
       - run: pnpm build
       - run: pnpm typecheck
       - name: Generated contracts are up to date

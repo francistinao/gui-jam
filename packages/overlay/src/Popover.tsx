@@ -12,10 +12,8 @@ interface PopoverProps {
   children: ReactNode;
 }
 
-/** A dialog beside the selected element, fully inside the viewport (FR-031). */
 export function Popover({ label, anchor, children }: PopoverProps) {
   const [height, setHeight] = useState(360);
-  // The popover mounts and unmounts with the selection, so its size is tracked from the ref.
   const measure = useCallback((element: HTMLDivElement | null) => {
     if (!element) return;
     const observer = new ResizeObserver(() => setHeight(element.offsetHeight));
@@ -82,7 +80,6 @@ function numbered(first: number, sign: string, lines: readonly string[]): string
   return lines.map((line, index) => `${first + index} ${sign} ${line.trim()}`).join('\n');
 }
 
-/** The exact source lines a change replaces (FR-064). */
 export function CodeChanges({ changes }: { changes: readonly CodeChange[] }) {
   if (changes.length === 0) {
     return <p className="typography-body-medium py-3 text-grey-500">No changes yet.</p>;

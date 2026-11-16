@@ -1,6 +1,4 @@
 #!/usr/bin/env bash
-# Runs every quality gate CI runs, stopping at the first failure. Logs of the
-# long-running suites land in $GATE_LOG_DIR (default: a fresh temp directory).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 log_dir="${GATE_LOG_DIR:-$(mktemp -d)}"

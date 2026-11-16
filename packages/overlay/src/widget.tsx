@@ -11,8 +11,6 @@ export type { Widget, WidgetHost, WidgetModule } from './host';
 
 const PROPERTY_RULE = /@property\s+[^{]+\{[^}]*\}/g;
 
-// Registered @property rules are ignored inside a shadow root, so they are the one
-// thing the widget adds to the page's document (FR-023). They only name --tw-* properties.
 function adoptStyles(shadowRoot: ShadowRoot): void {
   const properties = css.match(PROPERTY_RULE) ?? [];
   if (properties.length > 0 && !document.querySelector('style[data-guijam-properties]')) {
@@ -30,7 +28,6 @@ export function mount(host: WidgetHost): Widget {
   adoptStyles(host.shadowRoot);
   const layer = document.createElement('div');
   layer.className = 'guijam-layer';
-  // React clears its root on mount, so the draw canvas sits beside the root, not in it.
   const container = document.createElement('div');
   layer.append(container);
   host.shadowRoot.append(layer);
@@ -51,7 +48,6 @@ export function mount(host: WidgetHost): Widget {
       });
     },
   });
-  // The stroke stays on screen while its prompt is open, and goes when it closes.
   let selected = false;
   store.subscribe(() => {
     const now = store.get().selection !== null;

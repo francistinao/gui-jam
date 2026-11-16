@@ -20,14 +20,12 @@ export async function stopDaemon(projectDir: string): Promise<void> {
   await run(GJD_BINARY, ['daemon', 'stop', '--project', projectDir]);
 }
 
-/** Sends widget requests the way the browser widget does, with fresh ids. */
 export function widgetRequests(api: GuijamApi) {
   let next = 1;
   return (type: string, payload: object): Promise<GuijamMessage> =>
     api.request({ type, id: `e2e-${next++}`, payload });
 }
 
-/** Retries until the plugin has started or reached the daemon. */
 export async function waitForDaemon(
   send: ReturnType<typeof widgetRequests>,
   probe: object,

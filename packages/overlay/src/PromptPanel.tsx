@@ -33,7 +33,6 @@ function StepIcon({ state }: { state: ProgressStep['state'] }) {
   );
 }
 
-/** Screenshot 07: what the run is doing, from the daemon's `generate.progress`. */
 function Progress({ steps }: { steps: readonly ProgressStep[] }) {
   return (
     <ol aria-label="Progress" className="flex flex-col gap-1.5">
@@ -54,7 +53,6 @@ function Progress({ steps }: { steps: readonly ProgressStep[] }) {
   );
 }
 
-/** Ask AI: describe a change, watch the run, then pick one of the variants it previews. */
 export function PromptPanel({ store, controller }: PanelProps) {
   const selection = useStore(store, (state) => state.selection);
   const anchor = useStore(store, (state) => state.anchor);

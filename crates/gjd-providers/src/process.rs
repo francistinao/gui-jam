@@ -15,8 +15,6 @@ const STDERR_TAIL_BYTES: usize = 4096;
 const SIGINT_GRACE: Duration = Duration::from_secs(2);
 const SIGTERM_GRACE: Duration = Duration::from_secs(3);
 
-/// A provider CLI running as the leader of its own process group, so that
-/// cancellation reaches every process it spawned (MCP servers, tool runners).
 pub(crate) struct ProviderProcess {
     child: Child,
     group: Pid,
@@ -58,7 +56,6 @@ impl ProviderProcess {
 
         let stderr_tail = tokio::spawn(async move {
             let mut buf = Vec::new();
-            // Reading errors only shorten the diagnostic tail; the exit status is authoritative.
             let _ = stderr.read_to_end(&mut buf).await;
             let start = buf.len().saturating_sub(STDERR_TAIL_BYTES);
             String::from_utf8_lossy(&buf[start..]).into_owned()
@@ -87,8 +84,6 @@ impl ProviderProcess {
         (exit_code, stderr)
     }
 
-    /// SIGINT first so the CLI can end its turn cleanly, then SIGTERM, then SIGKILL,
-    /// each sent to the whole process group.
     pub(crate) async fn terminate(mut self) {
         for (signal, grace) in [
             (Signal::SIGINT, SIGINT_GRACE),
@@ -98,7 +93,6 @@ impl ProviderProcess {
                 return;
             }
             if timeout(grace, self.child.wait()).await.is_ok() {
-                // The leader is gone; children that ignored the signal still get SIGKILL.
                 let _ = self.signal_group(Signal::SIGKILL);
                 return;
             }
@@ -107,8 +101,6 @@ impl ProviderProcess {
         let _ = self.child.wait().await;
     }
 
-    /// The CLI keeps running for a while after it has printed its answer; let it
-    /// finish on its own, and terminate it if it outlives `grace`.
     pub(crate) fn reap_in_background(mut self, grace: Duration) {
         tokio::spawn(async move {
             if timeout(grace, self.child.wait()).await.is_err() {

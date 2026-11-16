@@ -66,7 +66,6 @@ struct Answer {
     cost_usd: Option<f64>,
 }
 
-/// Folds `--output-format stream-json` events, one line at a time, into the answer.
 #[derive(Default)]
 struct ClaudeStream {
     ready: Option<Duration>,
@@ -100,8 +99,6 @@ impl ClaudeStream {
         }
     }
 
-    // A failed run still ends with `subtype: "success"`; only `is_error` and
-    // `api_error_status` say what happened (verified on 2.1.325).
     fn finish(&self, result: ResultEvent) -> Result<Answer, ProviderError> {
         if result.is_error {
             let authentication_failed = result.api_error_status == Some(401)
@@ -146,8 +143,6 @@ fn args(request: &GenerationRequest) -> Vec<&str> {
         "--permission-mode",
         "dontAsk",
         "--no-session-persistence",
-        // Without this, MCP tools the developer allow-listed in their own settings
-        // would be callable from a widget run.
         "--strict-mcp-config",
         "--json-schema",
         VARIANT_SET_PROVIDER_SCHEMA,
@@ -242,8 +237,6 @@ impl ProviderAdapter for ClaudeCode {
                 };
             }
         };
-        // Only `loggedIn` is read: the report also carries account details that
-        // GUIJam has no reason to hold.
         match serde_json::from_str::<AuthStatusReport>(&stdout) {
             Ok(report) if report.logged_in => AuthStatus::LoggedIn,
             Ok(_) => AuthStatus::NotLoggedIn {

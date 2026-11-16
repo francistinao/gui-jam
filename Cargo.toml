@@ -6,7 +6,7 @@ members = ["crates/*"]
 version = "0.0.0"
 edition = "2024"
 rust-version = "1.100"
-license = "UNLICENSED"
+license = "MIT"
 publish = false
 
 [workspace.dependencies]
@@ -47,8 +47,6 @@ module_name_repetitions = "allow"
 missing_errors_doc = "allow"
 missing_panics_doc = "allow"
 
-# Debug info and incremental caches are most of target/; keep line tables for our
-# crates' backtraces only.
 [profile.dev]
 debug = "line-tables-only"
 incremental = false

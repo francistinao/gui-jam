@@ -4,15 +4,10 @@ const STROKE_COLOR = '#0d99ff';
 const STROKE_WIDTH = 3;
 
 interface DrawLayerOptions {
-  /** Where the canvas goes: before the panels, so they paint above it. */
   parent: HTMLElement;
   onStroke(bounds: Rect): void;
 }
 
-/**
- * Draw mode covers the page with a canvas, so strokes never reach the page. Points are
- * painted on animation frames instead of re-rendering React per pointer move.
- */
 export function createDrawLayer({ parent, onStroke }: DrawLayerOptions) {
   const canvas = document.createElement('canvas');
   canvas.className = 'guijam-draw';

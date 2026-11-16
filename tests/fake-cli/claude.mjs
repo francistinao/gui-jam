@@ -1,9 +1,3 @@
-// A stand-in for `claude` that answers like Claude Code 2.1.325 in headless
-// stream-json mode, so e2e runs exercise the real adapter without spending tokens.
-// It answers three recolourings of the element it is asked about. Words in the request
-// change that: "slow" never answers (cancellation), "crash" exits without an answer,
-// "invalid" makes the second variant miss its snippet, and "pause" answers after 1.5 s. With GUIJAM_FAKE_CLAUDE_LOG
-// set it appends what it was run with, and when it was interrupted.
 import { appendFileSync } from 'node:fs';
 
 const log = (entry) => {
@@ -65,7 +59,6 @@ if (/slow/i.test(text)) {
           'bg-brand',
           'bg-[#2563EB]',
         ),
-        // "invalid" in the prompt makes this one miss, so the daemon drops it.
         /invalid/i.test(text)
           ? variant('Deep blue', 'Deep', 'A darker blue.', 'bg-nowhere', 'bg-[#1D4ED8]')
           : variant('Deep blue', 'Deep', 'A darker blue.', 'bg-brand', 'bg-[#1D4ED8]'),

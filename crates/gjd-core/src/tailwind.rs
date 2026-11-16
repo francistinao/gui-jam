@@ -1,6 +1,3 @@
-//! Classifies Tailwind v4 class tokens into the fine-tune panel's style groups.
-//! Tokens outside these groups (spacing, layout, …) are not classified.
-
 use crate::contracts::StyleGroup;
 use crate::theme::{Theme, normalize_color};
 
@@ -75,8 +72,6 @@ pub struct ParsedToken<'t> {
     pub utility: &'t str,
 }
 
-/// Splits `hover:md:!bg-red-500` into variants and the utility. Colons inside
-/// brackets (`bg-[color:var(--x)]`) are part of the value.
 #[must_use]
 pub fn parse_token(token: &str) -> ParsedToken<'_> {
     let mut variants = Vec::new();
@@ -121,7 +116,6 @@ fn classified(
     }
 }
 
-/// The style group of a utility (variants already removed), if it has one.
 #[must_use]
 pub fn classify(utility: &str, theme: &Theme) -> Option<Classified> {
     if let Some(value) = utility.strip_prefix("bg-") {
@@ -201,8 +195,6 @@ fn color(value: &str, theme: &Theme) -> Option<ColorRef> {
     })
 }
 
-/// Drops an opacity or line-height modifier (`/50`, `/[.5]`, `/6`): everything
-/// after the last `/` outside brackets.
 fn without_modifier(value: &str) -> &str {
     let mut depth = 0i32;
     let mut cut = value.len();

@@ -37,8 +37,6 @@ pub enum RunError {
     Journal(#[from] CommitError),
 }
 
-/// Serves `project` until a signal arrives or no client has been connected for
-/// `idle_timeout`. Returns at once when another daemon already serves the project.
 pub async fn run(project: &Path, idle_timeout: Duration) -> Result<Outcome, RunError> {
     let project = ProjectRoot::new(project)?;
     let run_dir = RunDir::create(project.path())?;

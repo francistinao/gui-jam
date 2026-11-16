@@ -1,8 +1,5 @@
 name: release
 
-# Publishing a GitHub release tagged vX.Y.Z publishes guijam@X.Y.Z to npm. Pre-releases
-# (vX.Y.Z-rc.N, marked "Set as a pre-release") go to the `next` dist-tag, others to `latest`.
-
 on:
   release:
     types: [published]
@@ -27,7 +24,7 @@ jobs:
     environment: npm
     permissions:
       contents: read
-      id-token: write # npm trusted publishing (OIDC) and provenance
+      id-token: write
     steps:
       - uses: actions/checkout@v7.0.1
 
@@ -63,8 +60,6 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
 
-      # npm rejects provenance unless repository.url matches the repository that built it.
-      # devDependencies name private workspace packages that never reach the registry.
       - name: Prepare guijam's published package.json
         working-directory: packages/guijam
         env:

@@ -25,7 +25,6 @@ export function createStore<T extends object>(initial: T): Store<T> {
   };
 }
 
-/** `select` must return a stable value (a primitive or an object already in the state). */
 export function useStore<T, S>(store: Store<T>, select: (state: T) => S): S {
   return useSyncExternalStore(store.subscribe, () => select(store.get()));
 }

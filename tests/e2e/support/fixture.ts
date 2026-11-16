@@ -21,8 +21,6 @@ export interface FixtureServer {
   url: string;
 }
 
-// The matrix run swaps the fixture's Vite version, so drive the Vite that the
-// fixture itself resolves rather than one hoisted to the repo root.
 async function loadFixtureVite(): Promise<typeof Vite> {
   const vitePackageJson = createRequire(join(FIXTURE_DIR, 'package.json')).resolve(
     'vite/package.json',
@@ -30,7 +28,6 @@ async function loadFixtureVite(): Promise<typeof Vite> {
   return import(pathToFileURL(join(dirname(vitePackageJson), 'dist/node/index.js')).href);
 }
 
-/** `configFile` is relative to the fixture; the default is its `vite.config.ts`. */
 export async function startFixtureServer(configFile?: string): Promise<FixtureServer> {
   const vite = await loadFixtureVite();
   const server = await vite.createServer({

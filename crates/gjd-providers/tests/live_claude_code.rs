@@ -1,7 +1,3 @@
-//! Contract checks against the real Claude Code CLI. They spend tokens on the
-//! developer's subscription, so they only run on request:
-//! `cargo test -p gjd-providers --test live_claude_code -- --ignored --test-threads=1`
-
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;

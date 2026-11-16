@@ -1,3 +1,2 @@
 #!/bin/sh
-# Stands in for the Claude Code CLI in e2e runs; see claude.mjs.
 exec node "$(dirname "$0")/claude.mjs" "$@"

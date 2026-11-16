@@ -53,16 +53,13 @@ export type ProgressStep = GenerateProgress['steps'][number];
 export interface Generation {
   prompt: string;
   status: 'idle' | 'running' | 'ready';
-  /** The run whose progress or variants are on show. */
   runId: string | null;
   steps: ProgressStep[];
   variants: VariantPreview[];
-  /** Which variant the page shows. */
   active: number;
   dropped: GenerateDone['dropped'];
   route: Route | null;
   elapsedMs: number;
-  /** Why the last run failed; shown in the panel with Retry. */
   error: Notice | null;
 }
 
@@ -81,14 +78,12 @@ const IDLE_GENERATION: Generation = {
 
 export interface WidgetState {
   tool: Tool | null;
-  /** Which popover the selection shows: Figma-style fine-tune, or a prompt for Ask AI. */
   mode: PanelMode;
   generation: Generation;
   hovered: Rect | null;
   selection: Selection | null;
   anchor: Rect | null;
   style: ElementStyle | null;
-  /** What the element looks like now, for labelling controls. */
   current: { fill: HexColor | null; radiusPx: number | null } | null;
   draft: Draft;
   preview: { changesetId: string; changes: CodeChange[] } | null;
@@ -116,7 +111,6 @@ export function rectOf(element: Element): Rect {
   return { left, top, width, height };
 }
 
-/** Splits `src/a.tsx:3:5` from the end, so paths may contain colons. */
 export function parseSrc(src: string): Omit<Selection, 'instances'> | null {
   const match = /^(.+):(\d+):(\d+)$/.exec(src);
   if (!match?.[1] || !match[2] || !match[3]) return null;
@@ -127,7 +121,6 @@ function elementsAt(src: string): HTMLElement[] {
   return [...document.querySelectorAll<HTMLElement>(`[${SRC_ATTRIBUTE}="${CSS.escape(src)}"]`)];
 }
 
-/** The annotated element a stroke means (FR-030), looked up under five points of it. */
 function elementUnder(stroke: Rect): Element | null {
   const found = new Set<Element>();
   for (const { x, y } of samplePoints(stroke)) {
@@ -169,9 +162,7 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
   let previewing: Promise<void> | undefined;
   let noticeTimer: ReturnType<typeof setTimeout> | undefined;
   let editSequence = 0;
-  /** The generation whose reply is still wanted; cleared by cancel and close. */
   let runId: string | null = null;
-  /** Bumped on each variant switch, so only the last switch's failure is reported. */
   let selectSequence = 0;
   const styled = new Set<HTMLElement>();
 
@@ -216,7 +207,6 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
     }
   }
 
-  // FR-060: the page reflects a tweak within a frame, before the source-backed preview lands.
   function applyOptimistic(draft: Draft, selection: Selection): void {
     const { style } = store.get();
     const fill = optimisticFill(draft.fill, style);
@@ -286,14 +276,12 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
       notify(failure(reply));
       return;
     }
-    // The reply comes after the plugin's HMR update, so the page now shows the source change.
     clearOptimistic();
     store.set({
       preview: { changesetId: reply.payload.changesetId, changes: reply.payload.changes },
     });
   }
 
-  /** Cancels a run in flight and discards the variants on show; the prompt stays. */
   async function settleGeneration(): Promise<void> {
     const { generation } = store.get();
     if (runId) {
@@ -330,7 +318,6 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
   return {
     select: (element: Element) => open(element, 'finetune'),
 
-    /** Opens the prompt for the element a stroke marks; false when there is none. */
     async draw(stroke: Rect): Promise<boolean> {
       const element = elementUnder(stroke);
       if (!element) {
@@ -368,7 +355,6 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
         },
       });
       if (runId !== id) {
-        // Cancelled or closed meanwhile: variants that were previewed anyway must go.
         if (reply.type === 'generate.done') {
           void host.request({ type: 'generate.discard', payload: { runId: id } });
         }
@@ -404,7 +390,6 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
       await host.request({ type: 'generate.cancel', payload: { runId: cancelled } });
     },
 
-    /** Shows another variant in the page; the file on disk is untouched (AC-3). */
     async selectVariant(index: number): Promise<void> {
       const { generation } = store.get();
       const variant = generation.variants[index];
@@ -422,10 +407,8 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
       }
     },
 
-    /** Drops the variants and goes back to the prompt, which keeps its text. */
     editPrompt: () => settleGeneration(),
 
-    /** Commits the variant on show, then keeps the element selected for fine-tuning (J2.4). */
     async commitVariant(): Promise<void> {
       const { selection, generation } = store.get();
       const variant = generation.variants[generation.active];
@@ -477,8 +460,6 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
     async apply(): Promise<void> {
       const { selection } = store.get();
       if (!selection) return;
-      // Commit what the last edit previewed: flush a pending debounce, or wait for the
-      // preview in flight, so Apply never commits an older changeset.
       if (previewTimer) {
         clearTimeout(previewTimer);
         previewTimer = undefined;
@@ -541,7 +522,6 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
 
     dismissNotice: () => notify(null),
 
-    /** Keeps the popover next to its element while the page scrolls or resizes. */
     reanchor(): void {
       const { selection } = store.get();
       const element = selection ? elementsAt(selection.src)[0] : undefined;

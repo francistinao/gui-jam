@@ -13,8 +13,6 @@ export interface AnnotatedModule {
   map: SourceMap;
 }
 
-// Lines split on "\n" only and columns count UTF-16 code units, 1-based. The
-// daemon resolves `data-gj-src` with the same convention (docs/adr/0007).
 function lineStartsOf(code: string): number[] {
   const starts = [0];
   for (let index = code.indexOf('\n'); index !== -1; index = code.indexOf('\n', index + 1)) {
@@ -60,10 +58,6 @@ function mayHoldTagName(node: Expression | null | undefined): boolean {
   }
 }
 
-/**
- * Names like shadcn's `const Comp = asChild ? Slot.Root : 'button'`: a capitalized
- * binding that can hold an intrinsic tag, so `<Comp>` may render a DOM element itself.
- */
 function polymorphicTagNames(program: Program): Set<string> {
   const names = new Set<string>();
   new Visitor({
@@ -80,12 +74,6 @@ function polymorphicTagNames(program: Program): Set<string> {
   return names;
 }
 
-/**
- * Adds `data-gj-src="<path>:<line>:<column>"` to every intrinsic JSX element, and to
- * polymorphic tag variables, so a rendered DOM node can be traced back to the element
- * that produced it. `prepend` is put before the module in the same source map. Returns null
- * when the module does not parse, or when nothing was annotated and there is nothing to prepend.
- */
 export function injectSourceLocations(
   code: string,
   id: string,

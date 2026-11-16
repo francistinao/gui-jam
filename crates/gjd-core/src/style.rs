@@ -1,5 +1,3 @@
-//! What the fine-tune panel needs about one element, read from its source.
-
 use std::num::NonZeroU64;
 
 use crate::content_hash;
@@ -46,8 +44,6 @@ pub fn inspect(
     })
 }
 
-/// Classified tokens of one class string. Tokens with variants (`hover:`) and tokens
-/// outside the editable literal are reported but marked read-only.
 fn style_tokens(classes: &str, in_editable_literal: bool, theme: &Theme) -> Vec<StyleToken> {
     classes
         .split_whitespace()

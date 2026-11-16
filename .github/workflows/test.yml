@@ -34,7 +34,6 @@ jobs:
       - name: Install the pinned toolchain from rust-toolchain.toml
         run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2.9.3
-      # Live provider contract tests are #[ignore]d: they need a logged-in CLI and spend tokens.
       - run: cargo test --workspace
 
   e2e:
@@ -49,7 +48,6 @@ jobs:
       - name: Install the pinned toolchain from rust-toolchain.toml
         run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2.9.3
-      # The daemon-bridge suite drives the real gjd binary.
       - run: cargo build -p gjd-daemon
       - run: pnpm install --frozen-lockfile
       - run: pnpm exec playwright install --with-deps chromium

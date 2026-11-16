@@ -1,6 +1,3 @@
-//! Which project paths may be written: inside the project root, never through a
-//! symlink that leaves it, and never on the deny-list (PRD §21.2).
-
 use std::io;
 use std::path::{Component, Path, PathBuf};
 
@@ -34,8 +31,6 @@ impl ProjectRoot {
         &self.root
     }
 
-    /// The absolute path of a project-relative file that may be written. The
-    /// file may not exist yet, but its directory must.
     pub fn resolve(&self, relative: &str) -> Result<PathBuf, PolicyError> {
         let outside = || PolicyError::OutsideProject(relative.to_owned());
         let candidate = Path::new(relative);
@@ -61,7 +56,6 @@ impl ProjectRoot {
             Err(_) => return Err(outside()),
         };
         let inside = resolved.strip_prefix(&self.root).map_err(|_| outside())?;
-        // A symlink inside the project can still point at a denied path.
         if is_denied(inside) {
             return Err(PolicyError::Denied(relative.to_owned()));
         }

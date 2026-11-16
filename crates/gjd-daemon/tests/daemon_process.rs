@@ -1,6 +1,3 @@
-//! Runs the real `gjd daemon` against a temporary project and checks its run files
-//! and the gateway's admission rules (FR-025, FR-026, NFR-SEC-08).
-
 use std::fmt::Write as _;
 use std::fs;
 use std::io::{Read, Write as _};
@@ -19,7 +16,6 @@ struct DaemonProcess(Child);
 
 impl Drop for DaemonProcess {
     fn drop(&mut self) {
-        // Cleanup after a failed assertion; the daemon may already have exited.
         let _ = self.0.kill();
         let _ = self.0.wait();
     }

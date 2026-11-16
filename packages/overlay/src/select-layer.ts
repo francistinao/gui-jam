@@ -7,11 +7,6 @@ interface SelectLayerOptions {
   onPick(element: Element): void;
 }
 
-/**
- * Select mode works in the capture phase on the document, so a click picks the
- * element instead of reaching the page's own handlers (FR-032). Events from inside
- * GUIJam's shadow root pass through untouched.
- */
 export function createSelectLayer({ hostElement, onHover, onPick }: SelectLayerOptions) {
   const fromWidget = (event: Event) => event.composedPath().includes(hostElement);
   const annotated = (event: Event) =>

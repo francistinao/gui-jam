@@ -36,20 +36,16 @@ enum Command {
 
 #[derive(Subcommand)]
 enum DaemonCommand {
-    /// Serve a project until no client has been connected for the idle timeout.
     Run {
         #[arg(long)]
         project: PathBuf,
-        /// Seconds without any connected client before the daemon exits.
         #[arg(long, default_value_t = 1800)]
         idle_seconds: u64,
     },
-    /// Report whether a daemon serves the project.
     Status {
         #[arg(long, default_value = ".")]
         project: PathBuf,
     },
-    /// Stop the project's daemon.
     Stop {
         #[arg(long, default_value = ".")]
         project: PathBuf,
@@ -58,22 +54,16 @@ enum DaemonCommand {
 
 #[derive(Subcommand)]
 enum ProviderCommand {
-    /// Show each supported provider CLI with its version and login status.
     List,
-    /// Check that a provider can answer a widget request, and time it.
     Test {
-        /// claude-code or codex
         id: ProviderId,
-        /// Number of probe requests; with more than one, p50 and p95 are printed.
         #[arg(long, default_value_t = 1, value_parser = clap::value_parser!(u32).range(1..))]
         runs: u32,
-        /// Model argument passed to the CLI; defaults to the provider's fast tier.
         #[arg(long)]
         model: Option<String>,
     },
 }
 
-// Aliases the CLIs document; a provider without one uses its own default model.
 fn fast_tier_model(id: ProviderId) -> Option<&'static str> {
     match id {
         ProviderId::ClaudeCode => Some("haiku"),
@@ -240,7 +230,6 @@ async fn stop_daemon(project: &Path) -> ExitCode {
         eprintln!("cannot stop pid {pid}: {error}");
         return ExitCode::FAILURE;
     }
-    // The daemon deletes daemon.json as the last step of a clean shutdown.
     let info_path = RunDir::of(project).info_path();
     let deadline = Instant::now() + STOP_WAIT;
     while Instant::now() < deadline {

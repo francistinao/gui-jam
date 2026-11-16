@@ -1,7 +1,3 @@
-//! Request handling: element inspection for the fine-tune panel, fine-tune and
-//! generated previews served as in-memory overlays through the Vite plugin, and
-//! journaled commits and undos.
-
 use std::collections::{BTreeMap, HashMap};
 use std::num::NonZeroU64;
 use std::path::PathBuf;
@@ -34,22 +30,16 @@ use crate::diff::code_changes;
 use crate::generate::{self, Progress, Step};
 
 const UPDATE_TIMEOUT: Duration = Duration::from_secs(5);
-/// PRD §8: a login seen within this window is not asked for again.
 const AUTH_CACHE: Duration = Duration::from_mins(5);
-/// Only Claude Code has an adapter so far; Codex follows its S-3 spike.
 const PROVIDER: ProviderId = ProviderId::ClaudeCode;
 
 fn locked<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    // Every critical section only swaps plain data, so a panic elsewhere cannot leave
-    // the value half-updated.
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 #[derive(Debug)]
 pub struct ConnectionClosed;
 
-/// One Vite plugin connection: messages to send it, and overlay requests awaiting
-/// the plugin's `update.result`.
 #[derive(Clone)]
 pub struct PluginLink {
     outbox: mpsc::UnboundedSender<GuijamMessage>,
@@ -65,7 +55,6 @@ impl PluginLink {
         }
     }
 
-    /// Fails only when the plugin has disconnected.
     pub fn send(&self, message: GuijamMessage) -> Result<(), ConnectionClosed> {
         self.outbox.send(message).map_err(|_| ConnectionClosed)
     }
@@ -238,7 +227,6 @@ fn invalid_output(detail: &str) -> Failure {
     .with_action("Retry, or simplify the prompt.")
 }
 
-/// The content of `file` after a variant's ops, which may only touch that file.
 fn apply_variant(ops: &[EditOp], file: &str, current: &str) -> Result<String, Failure> {
     if ops.is_empty() || ops.len() > generate::MAX_OPS {
         return Err(invalid_output(&format!(
@@ -267,8 +255,6 @@ fn apply_variant(ops: &[EditOp], file: &str, current: &str) -> Result<String, Fa
     Ok(content)
 }
 
-/// A patch error in edits the model proposed is the model's mistake, except that the
-/// file may have changed while it was thinking.
 fn model_patch_failure(error: PatchError) -> Failure {
     match error {
         PatchError::StaleBase { file, .. } => Failure::new(
@@ -282,9 +268,6 @@ fn model_patch_failure(error: PatchError) -> Failure {
 
 type Validated = (Vec<(Variant, String)>, Vec<GenerateDoneDroppedItem>);
 
-/// The variants whose edits apply to `current`, each with its new content, and why each
-/// other one was dropped (FR-052). A file saved while the model worked makes every
-/// variant stale, so that fails the whole run.
 fn validate_variants(
     variants: Vec<Variant>,
     file: &str,
@@ -329,7 +312,6 @@ fn variants_phrase(count: usize) -> String {
     }
 }
 
-/// The prompt as quoted in the terminal line, cut at `limit` characters.
 fn quoted(prompt: &str, limit: usize) -> String {
     let mut chars = prompt.chars();
     let head: String = chars.by_ref().take(limit).collect();
@@ -352,20 +334,16 @@ struct Changeset {
     origin: &'static str,
 }
 
-/// A generation in progress, so `generate.cancel` and a newer run on the same file
-/// can stop it.
 struct Run {
     file: String,
     cancel: CancellationToken,
 }
 
-/// The variants a finished run left pending; at most one of them is shown.
 struct VariantRun {
     file: String,
     changesets: Vec<String>,
 }
 
-/// How a variant is described to the developer, whichever route produced it.
 struct Held {
     label: String,
     system: String,
@@ -433,7 +411,6 @@ impl Daemon {
         }
     }
 
-    /// How long the daemon has had no client, or `None` while one is connected.
     #[must_use]
     pub fn idle_for(&self) -> Option<Duration> {
         (self.connections.load(Ordering::SeqCst) == 0)
@@ -444,7 +421,6 @@ impl Daemon {
         format!("{prefix}{}", self.next_id.fetch_add(1, Ordering::SeqCst))
     }
 
-    /// Handles one message from a plugin connection and returns the reply, if any.
     pub async fn handle(&self, message: GuijamMessage, link: &PluginLink) -> Option<GuijamMessage> {
         match message {
             GuijamMessage::PluginHello { id, payload } => {
@@ -465,7 +441,6 @@ impl Daemon {
             GuijamMessage::UpdateResult { id, payload } => {
                 let waiter = id.and_then(|id| locked(&link.pending).remove(&id));
                 if let Some(waiter) = waiter {
-                    // The requester may have timed out already; then the result is moot.
                     let _ = waiter.send(payload);
                 }
                 None
@@ -474,7 +449,6 @@ impl Daemon {
         }
     }
 
-    /// Answers a request the widget sent through the plugin.
     async fn handle_request(&self, message: GuijamMessage) -> GuijamMessage {
         match message {
             GuijamMessage::ElementInspect { id, payload } => reply(
@@ -584,7 +558,6 @@ impl Daemon {
         let roots = locked(&self.tailwind_roots).clone();
         let mut stylesheets = Vec::with_capacity(roots.len());
         for root in roots {
-            // A stylesheet that disappeared only costs token labels, not correctness.
             if let Ok(css) = tokio::fs::read_to_string(&root).await {
                 stylesheets.push(css);
             }
@@ -650,7 +623,6 @@ impl Daemon {
         })
     }
 
-    /// Stops a generation if it is still running; cancelling a finished run is a no-op.
     fn cancel_run(&self, id: Option<String>, run: RunRef) -> GuijamMessage {
         if let Some(running) = locked(&self.runs).get(&run.run_id) {
             running.cancel.cancel();
@@ -658,9 +630,6 @@ impl Daemon {
         GuijamMessage::GenerateCancelled { id, payload: run }
     }
 
-    /// Runs `request` under a cancellation token that `generate.cancel` can reach. A
-    /// newer request on the same file replaces the older run and its variants
-    /// (NFR-CON-02).
     async fn generate(&self, request: GenerateRequest) -> Result<GenerateDone, Failure> {
         let run_id = request.run_id.clone();
         let cancel = CancellationToken::new();
@@ -695,8 +664,6 @@ impl Daemon {
         result
     }
 
-    /// Sends the run's step list to the page that asked; a missing plugin only costs
-    /// the progress display.
     fn report(&self, progress: &Progress) {
         if let Some(link) = locked(&self.plugin).clone() {
             let _ = link.send(GuijamMessage::GenerateProgress {
@@ -736,8 +703,6 @@ impl Daemon {
         })
     }
 
-    /// Drops a run's variants and shows the file from disk again. A run that is gone
-    /// already (used, discarded or replaced) is not an error.
     async fn discard_run(&self, run_id: &str) -> Result<(), Failure> {
         let Some(run) = locked(&self.variant_runs).remove(run_id) else {
             return Ok(());
@@ -752,7 +717,6 @@ impl Daemon {
         Ok(())
     }
 
-    /// Ends the variant run `changeset_id` belongs to and drops its other variants.
     fn settle_variant_run(&self, changeset_id: &str) {
         let siblings = {
             let mut runs = locked(&self.variant_runs);
@@ -812,7 +776,6 @@ impl Daemon {
         progress.relabel(Step::Check, format!("Checking {checked}"));
         progress.start(Step::Check);
         self.report(&progress);
-        // Read again: the developer may have saved the file while the model was working.
         let current = self.read_project_file(file).await?;
         let (valid, dropped) = validate_variants(proposed, file, &current)?;
         if cancel.is_cancelled() {
@@ -854,8 +817,6 @@ impl Daemon {
         })
     }
 
-    /// Runs the provider and returns the variants it proposed. A login failure forgets
-    /// the cached login, so the next request checks it again.
     async fn ask(
         &self,
         provider: &dyn ProviderAdapter,
@@ -873,8 +834,6 @@ impl Daemon {
         }
     }
 
-    /// Keeps each variant as a pending changeset and registers them as the run of
-    /// `request`. Returns what the widget shows and the first variant's content.
     fn hold_variants(
         &self,
         request: &GenerateRequest,
@@ -930,8 +889,6 @@ impl Daemon {
         (variants, first)
     }
 
-    /// Shows the run's first variant. If that fails, or the run was cancelled
-    /// meanwhile, the run's variants are dropped and the file shows from disk again.
     async fn preview_run(
         &self,
         run_id: &str,
@@ -950,8 +907,6 @@ impl Daemon {
         Ok(update)
     }
 
-    /// The provider CLI and its discovery, with the login checked at most every
-    /// `AUTH_CACHE` (and again after any authentication failure).
     async fn provider(&self) -> Result<(Box<dyn ProviderAdapter>, Discovery), Failure> {
         let provider = adapter(PROVIDER).ok_or_else(|| {
             Failure::new(
@@ -971,7 +926,6 @@ impl Daemon {
             AuthStatus::NotLoggedIn { login_command } => {
                 return Err(not_authenticated(provider.id(), login_command));
             }
-            // A run that is not logged in still fails with a clear error of its own.
             AuthStatus::Unknown { reason } => {
                 tracing::warn!(%reason, "could not read the provider's login status");
             }
@@ -979,7 +933,6 @@ impl Daemon {
         Ok((provider, discovery))
     }
 
-    /// Keeps one fine-tune changeset per element, so each preview replaces the last.
     fn store_changeset(
         &self,
         element: Option<(String, NonZeroU64, NonZeroU64)>,
@@ -1037,8 +990,6 @@ impl Daemon {
             let origin = changeset.origin;
             tokio::task::spawn_blocking(move || journal.commit(&changes, origin, &summary)).await
         };
-        // Cleared after the rename, so Vite's reload from disk shows the same content.
-        // On a conflict this reveals the developer's version on disk.
         for file in &files {
             self.show(file, None).await?;
         }
@@ -1074,8 +1025,6 @@ impl Daemon {
         })
     }
 
-    /// Shows `content` in place of `file` in the running app, or the file on disk
-    /// again when `content` is `None`, and waits for the plugin's HMR result.
     async fn show(&self, file: &str, content: Option<&str>) -> Result<UpdateResult, Failure> {
         let link = locked(&self.plugin)
             .clone()
@@ -1108,12 +1057,10 @@ impl Daemon {
         })
     }
 
-    /// A reconnecting plugin starts with no overlays; send the current ones again.
     fn resend_overlays(&self, link: &PluginLink) {
         let overlays = locked(&self.overlays).clone();
         for (file, content) in overlays {
             let id = self.new_id("d");
-            // A closed link gets every overlay again on its next hello.
             let _ = link.send(overlay_message(Some(id), &file, Some(&content)));
         }
     }
@@ -1188,7 +1135,6 @@ fn duration_ms(duration: Duration) -> f64 {
     f64::from(u32::try_from(duration.as_millis()).unwrap_or(u32::MAX))
 }
 
-/// One line for the terminal and the journal: `src/A.tsx:3 — bg-brand → bg-[#1D4ED8]`.
 fn summarize(file: &str, line: NonZeroU64, op: &EditOp) -> String {
     let EditOp::ClassTokens { add, remove, .. } = op else {
         return format!("{file}:{line}");

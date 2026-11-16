@@ -31,7 +31,6 @@ impl ProviderId {
         }
     }
 
-    /// The product name, for messages to the developer.
     #[must_use]
     pub fn display_name(self) -> &'static str {
         match self {
@@ -101,13 +100,9 @@ pub struct Capabilities {
     pub tool_restriction: bool,
 }
 
-/// Which built-in tools the provider may use. Write tools are never offered to
-/// widget-initiated runs; edits come back as data and the daemon applies them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ToolPolicy {
-    /// R1: all context is inlined in the prompt.
     None,
-    /// R2: the model may read the project to find what it needs.
     ReadOnly,
 }
 
@@ -130,9 +125,7 @@ pub struct GenerationRequest {
 
 #[derive(Clone, Copy, Debug)]
 pub struct RunTimings {
-    /// Spawn until the CLI reported it was initialised (cold start).
     pub ready: Option<Duration>,
-    /// Spawn until the final answer was parsed.
     pub answer: Duration,
 }
 
@@ -147,10 +140,8 @@ pub struct GenerationOutput {
 pub trait ProviderAdapter: Send + Sync {
     fn id(&self) -> ProviderId;
 
-    /// Resolves the CLI on PATH and reads its version.
     async fn discover(&self) -> Result<Discovery, ProviderError>;
 
-    /// Asks the CLI itself; never reads the provider's credential files.
     async fn check_auth(&self, discovery: &Discovery) -> AuthStatus;
 
     fn capabilities(&self) -> Capabilities;

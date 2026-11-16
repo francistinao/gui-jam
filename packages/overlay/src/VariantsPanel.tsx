@@ -10,7 +10,6 @@ interface VariantsPanelProps {
   controller: Controller;
 }
 
-/** Screenshot 08: pick one of the variants previewed live, then Use, Discard or Edit prompt. */
 export function VariantsPanel({ generation, busy, controller }: VariantsPanelProps) {
   const { variants, active, dropped, route, elapsedMs } = generation;
   const variant = variants[active];

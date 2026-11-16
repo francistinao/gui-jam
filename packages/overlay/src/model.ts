@@ -7,14 +7,11 @@ export interface Range {
   max: number;
 }
 
-/** FR-062 ranges. */
 export const RADIUS_RANGE: Range = { min: 0, max: 999 };
 export const OPACITY_RANGE: Range = { min: 0, max: 100 };
 
-/** Groups this build can edit directly; the rest are shown read-only. */
 const WRITABLE: ReadonlySet<StyleGroup> = new Set<StyleGroup>(['radius', 'fill']);
 
-/** Figma UI3 order: layout (radius) first, then fill, stroke, text, effects. */
 const SECTION_ORDER: readonly StyleGroup[] = [
   'radius',
   'fill',
@@ -36,7 +33,6 @@ const TEXTLESS_TAGS: ReadonlySet<string> = new Set([
   'picture',
 ]);
 
-/** FR-061: six hex digits, with or without `#`, any case. Returns `#RRGGBB` or null. */
 export function parseHex(input: string): string | null {
   const digits = input.trim().replace(/^#/, '');
   return /^[0-9a-fA-F]{6}$/.test(digits) ? `#${digits.toUpperCase()}` : null;
@@ -48,11 +44,9 @@ export function clamp(value: number, range: Range): number {
 
 export interface HexColor {
   hex: string;
-  /** 0–100. */
   opacity: number;
 }
 
-/** Converts a computed `rgb()`/`rgba()` colour to hex and percent opacity. */
 export function hexOfComputedColor(css: string): HexColor | null {
   const match = /^rgba?\(([^)]+)\)$/.exec(css.trim());
   if (!match?.[1]) return null;
@@ -68,17 +62,11 @@ export function hexOfComputedColor(css: string): HexColor | null {
   return { hex: `#${hex.join('').toUpperCase()}`, opacity: Math.round(a * 100) };
 }
 
-/** `rgba()` for an optimistic inline style. */
 export function cssColor({ hex, opacity }: HexColor): string {
   const channel = (start: number) => Number.parseInt(hex.slice(start, start + 2), 16);
   return `rgba(${channel(1)}, ${channel(3)}, ${channel(5)}, ${opacity / 100})`;
 }
 
-/**
- * The colour a fill token writes, when the source states it as hex (a theme colour or
- * an arbitrary value). Inspect re-reads the source after Apply and Undo, so this stays
- * right while the page is still catching up; the computed style is the fallback.
- */
 export function fillOfToken(token: StyleToken | undefined): HexColor | null {
   const hex = parseHex(token?.value ?? '');
   if (!token || !hex) return null;
@@ -86,7 +74,6 @@ export function fillOfToken(token: StyleToken | undefined): HexColor | null {
   return { hex, opacity: modifier === undefined ? 100 : clamp(Number(modifier), OPACITY_RANGE) };
 }
 
-/** The radius a token writes, when the source states it in px. */
 export function radiusOfToken(token: StyleToken | undefined): number | null {
   const value = token?.value;
   if (!value?.endsWith('px')) return null;
@@ -102,12 +89,6 @@ export interface PanelSection {
   tokens: StyleToken[];
 }
 
-/**
- * The adaptive panel: groups the element uses come first in UI3 order, editable when
- * this build can write them; writable groups it does not use are offered as "+" rows;
- * groups that do not apply to the element's kind are left out. A className computed
- * at runtime makes every section read-only.
- */
 export function panelSections(style: ElementStyle): PanelSection[] {
   const dynamic = style.classSource === 'dynamic';
   return SECTION_ORDER.flatMap((group): PanelSection[] => {
@@ -138,7 +119,6 @@ export interface Placement {
   side: 'right' | 'left' | 'below';
 }
 
-/** FR-031: beside the element (right, else left, else below), fully inside the viewport. */
 export function placePopover(anchor: Rect, popover: Size, viewport: Size, gap = 12): Placement {
   const fitsTop = (top: number) =>
     Math.min(Math.max(top, gap), Math.max(gap, viewport.height - popover.height - gap));
@@ -169,7 +149,6 @@ export function boundsOf(points: readonly Point[]): Rect {
   return { left, top, width: Math.max(...xs) - left, height: Math.max(...ys) - top };
 }
 
-/** The centre of the stroke and four points around it, where elements are looked up. */
 export function samplePoints({ left, top, width, height }: Rect): Point[] {
   const x = left + width / 2;
   const y = top + height / 2;
@@ -192,11 +171,6 @@ function overlap(a: Rect, b: Rect): number {
 
 const DRAW_COVERAGE = 0.6;
 
-/**
- * FR-030: which element a stroke means. A mark drawn around elements picks the largest
- * one it mostly encloses; a mark drawn on an element picks the smallest one that mostly
- * covers the mark. Returns the index into `candidates`, or null.
- */
 export function chooseDrawTarget(stroke: Rect, candidates: readonly Rect[]): number | null {
   const strokeArea = Math.max(area(stroke), 1);
   let enclosed: number | null = null;
@@ -209,7 +183,6 @@ export function chooseDrawTarget(stroke: Rect, candidates: readonly Rect[]): num
       const best = enclosed === null ? undefined : candidates[enclosed];
       if (!best || size > area(best)) enclosed = index;
     }
-    // A tap has no area; it means the element under it.
     const covers =
       area(stroke) === 0 ? isInside(stroke, rect) : shared / strokeArea >= DRAW_COVERAGE;
     if (covers) {

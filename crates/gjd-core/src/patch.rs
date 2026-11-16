@@ -1,6 +1,3 @@
-//! Resolves edit ops to byte ranges in the exact content they were proposed for,
-//! applies them, and checks that every changed file still parses (FR-052).
-
 use std::collections::BTreeMap;
 use std::ops::Range;
 
@@ -42,8 +39,6 @@ struct TextEdit {
     text: String,
 }
 
-/// Applies `ops` to `sources` (project path → current content) and returns the
-/// new content of every changed file, or the first problem found.
 pub fn apply(
     sources: &BTreeMap<String, String>,
     ops: &[EditOp],
@@ -183,8 +178,6 @@ fn current<'s>(
     Ok((path, source))
 }
 
-/// Added tokens take the place of the first removed one, so swapping `bg-brand` for
-/// `bg-[#1D4ED8]` keeps the class order; with nothing removed they are appended.
 fn merge_tokens(existing: &str, add: &[EditOpAddItem], remove: &[EditOpRemoveItem]) -> String {
     let mut tokens = Vec::new();
     let mut insert_at = None;

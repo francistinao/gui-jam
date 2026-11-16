@@ -39,7 +39,6 @@ afterAll(async () => {
 });
 
 describe('production build', () => {
-  // FR-022: the plugin is dev-only (`apply: 'serve'`), so it must leave no trace in builds.
   it('is byte-identical with and without guijam() configured', async () => {
     const withGuijam = await filesUnder(await buildInto({ withGuijam: true }));
     const without = await filesUnder(await buildInto({ withGuijam: false }));

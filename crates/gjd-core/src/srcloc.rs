@@ -1,7 +1,3 @@
-//! Converts oxc's UTF-8 byte offsets to and from `data-gj-src` positions: 1-based
-//! lines split on `\n` and 1-based columns counted in UTF-16 code units, the
-//! convention the Vite plugin writes (docs/adr/0007).
-
 pub struct LineIndex<'s> {
     source: &'s str,
     line_starts: Vec<usize>,
@@ -19,8 +15,6 @@ impl<'s> LineIndex<'s> {
         }
     }
 
-    /// Byte offset of a position, or `None` when the position is past the end of
-    /// its line or points into the middle of a character.
     #[must_use]
     pub fn offset(&self, line: u64, column: u64) -> Option<usize> {
         let line_index = usize::try_from(line).ok()?.checked_sub(1)?;
@@ -43,7 +37,6 @@ impl<'s> LineIndex<'s> {
         (units == wanted).then_some(end)
     }
 
-    /// `(line, column)` of a byte offset that lies on a character boundary.
     #[must_use]
     pub fn position(&self, offset: usize) -> (u64, u64) {
         let line = self.line_starts.partition_point(|&start| start <= offset);

@@ -1,7 +1,3 @@
-//! `.guijam/run/`: how the Vite plugin (and later the MCP shim) find the daemon.
-//! `daemon.json` holds the port and the session token, so it is readable by its
-//! owner only (NFR-SEC-08).
-
 use std::fs::{self, DirBuilder, File, OpenOptions, TryLockError};
 use std::io::{self, Write};
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
@@ -46,8 +42,6 @@ impl RunDir {
         self.dir.join("daemon.json")
     }
 
-    /// An exclusive lock held for the daemon's lifetime, or `None` when another
-    /// daemon already serves this project.
     pub fn lock(&self) -> io::Result<Option<File>> {
         let file = OpenOptions::new()
             .create(true)
@@ -81,10 +75,8 @@ impl RunDir {
             .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
     }
 
-    /// Removes `daemon.json` unless a newer daemon has already replaced it.
     pub fn remove_info_if_ours(&self, pid: u32) {
         if self.read_info().is_ok_and(|info| info.pid == pid) {
-            // Best effort at shutdown: a stale file is detected by its dead pid.
             let _ = fs::remove_file(self.info_path());
         }
     }

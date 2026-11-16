@@ -1,7 +1,3 @@
-//! The daemon's only endpoint: a WebSocket at `/ws` on 127.0.0.1 for the Vite plugin.
-//! Browsers never connect directly (the plugin relays their requests over Vite's
-//! HMR channel), so a request carrying an `Origin` header is refused outright.
-
 use std::sync::Arc;
 
 use axum::Router;
@@ -60,13 +56,11 @@ fn admit(headers: &HeaderMap, gateway: &Gateway) -> Result<(), StatusCode> {
             .and_then(|value| value.to_str().ok())
             .unwrap_or_default()
     };
-    // FR-026: a Host other than the loopback address defeats DNS rebinding.
     let host = header_text(header::HOST);
     let port = gateway.port;
     if host != format!("127.0.0.1:{port}") && host != format!("localhost:{port}") {
         return Err(StatusCode::FORBIDDEN);
     }
-    // FR-025: every browser sends Origin; the plugin and the shim never do.
     if headers.contains_key(header::ORIGIN) {
         return Err(StatusCode::FORBIDDEN);
     }
@@ -79,7 +73,6 @@ fn admit(headers: &HeaderMap, gateway: &Gateway) -> Result<(), StatusCode> {
     Ok(())
 }
 
-// Compare every byte so the time taken does not reveal how much of the token matched.
 fn constant_time_eq(presented: &[u8], expected: &[u8]) -> bool {
     presented.len() == expected.len()
         && presented
@@ -115,7 +108,6 @@ fn dispatch(daemon: &Arc<Daemon>, link: &PluginLink, text: &str) {
     let message = match serde_json::from_str::<GuijamMessage>(text) {
         Ok(message) => message,
         Err(error) => {
-            // If the plugin already disconnected there is no one to tell.
             let _ = link.send(
                 Failure::invalid_request(format!("unreadable message: {error}")).into_message(None),
             );
@@ -126,7 +118,6 @@ fn dispatch(daemon: &Arc<Daemon>, link: &PluginLink, text: &str) {
     let link = link.clone();
     tokio::spawn(async move {
         if let Some(reply) = daemon.handle(message, &link).await {
-            // The plugin disconnected while this ran; the reply has no reader.
             let _ = link.send(reply);
         }
     });

@@ -1,7 +1,3 @@
-//! Fine-tune tweaks as a `class_tokens` op: each tweaked style group's base-state
-//! tokens are replaced by one token, a theme token when the value matches one
-//! exactly (FR-067), otherwise an arbitrary value.
-
 use crate::contracts::{
     EditOp, EditOpAddItem, EditOpRemoveItem, ElementStyle, ElementStyleClassSource, FillValue,
     FinetuneProps, ProjectPath, RadiusValue, SrcLoc, StyleGroup,

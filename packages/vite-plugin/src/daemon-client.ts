@@ -20,12 +20,9 @@ interface DaemonInfo {
 export interface DaemonClientOptions {
   root: string;
   binary: string;
-  /** Sent first on every connection, so a restarted daemon learns about the plugin. */
   hello(): GuijamMessage;
-  /** A message the daemon sent; the returned message is sent back as its reply. */
   onMessage(message: GuijamMessage): Promise<GuijamMessage | undefined>;
   onConnectionChange(connected: boolean): void;
-  /** Called once per outage with the reason the daemon cannot be reached. */
   onUnavailable(reason: string): void;
 }
 
@@ -37,7 +34,6 @@ interface Pending {
 
 export class DaemonUnavailableError extends Error {}
 
-/** Anything sent to the daemon; it validates every message against the protocol. */
 export interface OutgoingMessage {
   type: string;
   payload: unknown;
@@ -81,10 +77,6 @@ function opened(socket: WebSocket): Promise<void> {
   });
 }
 
-/**
- * The Vite plugin's connection to `gjd`, which it starts when no daemon serves the
- * project yet and reconnects to after a restart.
- */
 export class DaemonClient {
   readonly #options: DaemonClientOptions;
   readonly #infoPath: string;
@@ -112,12 +104,10 @@ export class DaemonClient {
     this.#failPending(new DaemonUnavailableError('the dev server is shutting down'));
   }
 
-  /** Sends a message that expects no reply; dropped while disconnected. */
   notify(message: GuijamMessage): void {
     if (this.#socket?.readyState === WebSocket.OPEN) this.#socket.send(JSON.stringify(message));
   }
 
-  /** Sends a request and resolves with the daemon's reply (which may be an `error`). */
   request(message: OutgoingMessage, timeoutMs = REQUEST_TIMEOUT_MS): Promise<GuijamMessage> {
     const socket = this.#socket;
     if (socket?.readyState !== WebSocket.OPEN) {
@@ -179,7 +169,6 @@ export class DaemonClient {
       const parsed: unknown = JSON.parse(await readFile(this.#infoPath, 'utf8'));
       return isDaemonInfo(parsed) && parsed.protocol === PROTOCOL_VERSION ? parsed : undefined;
     } catch {
-      // Missing or half-written daemon.json means no daemon is ready yet.
       return undefined;
     }
   }

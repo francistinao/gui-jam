@@ -1,10 +1,5 @@
-//! Design tokens from Tailwind v4 `@theme { --color-*: …; --radius-*: … }` blocks,
-//! used to label classes in the fine-tune panel and to prefer token utilities over
-//! arbitrary values when a chosen value matches a token (FR-067).
-
 use crate::contracts::{ThemeColor, ThemeRadius, ThemeTokens};
 
-/// Tailwind v4's built-in `--radius-*` scale, in px (`tailwindcss/theme.css`).
 const DEFAULT_RADII: [(&str, f64); 8] = [
     ("xs", 2.0),
     ("sm", 4.0),
@@ -25,7 +20,6 @@ pub struct Theme {
 }
 
 impl Theme {
-    /// Reads every `@theme` block in the given stylesheets; later declarations win.
     #[must_use]
     pub fn from_css<'c>(stylesheets: impl IntoIterator<Item = &'c str>) -> Self {
         let mut theme = Self::default();
@@ -82,7 +76,6 @@ impl Theme {
         self.fonts.iter().any(|font| font == name)
     }
 
-    /// The project colour token whose value is exactly `hex` (`#RRGGBB`, any case).
     #[must_use]
     pub fn color_named(&self, hex: &str) -> Option<&str> {
         let hex = normalize_color(hex)?;
@@ -92,7 +85,6 @@ impl Theme {
             .map(|(name, _)| name.as_str())
     }
 
-    /// The radius token worth exactly `px` in this project.
     #[must_use]
     pub fn radius_named(&self, px: f64) -> Option<String> {
         self.radius_scale()
@@ -100,7 +92,6 @@ impl Theme {
             .map(|(name, _)| name.to_owned())
     }
 
-    /// Project radii first, then Tailwind's defaults that the project does not override.
     fn radius_scale(&self) -> impl Iterator<Item = (&str, f64)> {
         let custom = self.radii.iter().map(|(name, px)| (name.as_str(), *px));
         let defaults = DEFAULT_RADII
@@ -109,7 +100,6 @@ impl Theme {
         custom.chain(defaults)
     }
 
-    /// Presets for the panel: project colours and every radius token.
     #[must_use]
     pub fn tokens(&self) -> ThemeTokens {
         ThemeTokens {
@@ -198,7 +188,6 @@ fn length_px(value: &str) -> Option<f64> {
         .map(|rem| rem * REM_PX)
 }
 
-/// `#rgb`, `#rrggbb` and `rgb(r g b)` / `rgb(r, g, b)` as uppercase `#RRGGBB`.
 #[must_use]
 pub fn normalize_color(value: &str) -> Option<String> {
     let value = value.trim();

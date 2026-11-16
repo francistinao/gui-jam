@@ -3,13 +3,11 @@
 @custom-variant dark (&:is(.dark *, [data-theme="dark"] *));
 
 @theme {
-  /* disable all tailwind default colors */
   --color-*: initial;
 }
 
 :root,
 :host {
-  /* Selection color */
   --selection-color: #0d9aff6f;
 
   ::selection {
@@ -21,7 +19,6 @@
     background: var(--selection-color);
     text-shadow: none;
   }
-  /* Sizing */
   --radius-full: 9999px;
   --radius-large: 0.8125rem;
   --radius-medium: 0.3125rem;
@@ -43,7 +40,6 @@
   --font-weight-strong: 550;
   --font-weight-heavy: 550;
 
-  /* Typography */
   --text-body-large-font-family: var(--font-family-default);
   --text-body-large-font-size: 0.8125rem;
   --text-body-large-font-weight: var(--font-weight-default);

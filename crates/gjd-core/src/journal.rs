@@ -1,16 +1,3 @@
-//! The change journal and commit protocol (PRD §13.5–13.6). Every write of project
-//! source goes through [`Journal::commit`]:
-//!
-//! 1. each file's current hash must equal the hash the change was built from;
-//! 2. its previous content is kept as a blob;
-//! 3. a `begin` record is written and fsynced;
-//! 4. new contents go to temp files beside the targets (fsynced), which are then
-//!    renamed into place in path order; if a rename fails, files already renamed are
-//!    restored;
-//! 5. directories are fsynced and a `commit` record is written.
-//!
-//! Callers must serialize writes to the same file.
-
 use std::fs::{self, DirBuilder, File, OpenOptions};
 use std::io::{self, BufRead, BufReader, Write};
 use std::os::unix::fs::DirBuilderExt;
@@ -29,8 +16,6 @@ const MS_PER_DAY: u64 = 86_400_000;
 #[derive(Debug, Clone)]
 pub struct FileChange {
     pub path: String,
-    /// Hash of the content the change was built from. The commit fails if the
-    /// file no longer has it.
     pub expected_hash: ContentHash,
     pub content: String,
 }
@@ -53,12 +38,8 @@ pub enum CommitError {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Recovery {
-    /// Every file already had its new content; the entry is now committed.
     Completed(String),
-    /// No file had been changed; the entry is now aborted.
     NotApplied(String),
-    /// Some files had been changed and were restored. Files that held content this
-    /// entry did not write were left alone and are listed.
     RolledBack { id: String, untouched: Vec<String> },
 }
 
@@ -121,7 +102,6 @@ impl Journal {
         })
     }
 
-    /// Writes every change or none of them, and returns the journal entry id.
     pub fn commit(
         &self,
         changes: &[FileChange],
@@ -131,7 +111,6 @@ impl Journal {
         self.write_entry(changes, origin, label, None)
     }
 
-    /// Restores the files of a committed entry, provided none changed since.
     pub fn undo(&self, id: &str) -> Result<String, CommitError> {
         let records = self.records()?;
         let files = committed_files(&records, id)
@@ -156,7 +135,6 @@ impl Journal {
         self.write_entry(&changes, "undo", &format!("undo {id}"), Some(id))
     }
 
-    /// Settles entries a crash left between `begin` and `commit`.
     pub fn recover(&self) -> Result<Vec<Recovery>, CommitError> {
         let records = self.records()?;
         let mut outcomes = Vec::new();
@@ -358,8 +336,6 @@ fn write_all_or_none(id: &str, planned: &[Planned]) -> io::Result<()> {
             for temp in &temps[index..] {
                 remove_quietly(temp);
             }
-            // Best effort: if a restore fails too, `recover` finds the entry
-            // without a commit record and settles it from the blobs.
             for restored in &planned[..index] {
                 if let Ok(back) = write_temp(&restored.target, restored.previous.as_bytes(), id) {
                     let _ = fs::rename(back, &restored.target);
@@ -411,7 +387,6 @@ fn sync_parents<'p>(targets: impl Iterator<Item = &'p Path>) -> io::Result<()> {
 }
 
 fn remove_quietly(path: &Path) {
-    // Missing temp files are the normal case; anything else is cleaned up by recovery.
     let _ = fs::remove_file(path);
 }
 
@@ -462,8 +437,6 @@ fn journal_file_name(at_ms: u64) -> String {
     format!("{year:04}-{month:02}.jsonl")
 }
 
-/// Year and month of a day count since 1970-01-01 (Howard Hinnant's
-/// `civil_from_days`, proleptic Gregorian calendar).
 fn year_month(days: i64) -> (i64, i64) {
     let shifted = days + 719_468;
     let era = shifted.div_euclid(146_097);

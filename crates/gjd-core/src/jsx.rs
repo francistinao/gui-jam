@@ -1,6 +1,3 @@
-//! Finds the JSX element a `data-gj-src` position points at and reads how its
-//! `className` is written, so edits touch only the literal that holds the classes.
-
 use std::ops::Range;
 
 use oxc_allocator::Allocator;
@@ -29,29 +26,23 @@ pub enum JsxError {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClassLiteral {
     pub value: String,
-    /// Byte range of the text between the quotes.
     pub range: Range<usize>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ClassSource {
-    /// No `className`; one can be inserted at [`JsxElement::insert_at`].
     None,
     Static(ClassLiteral),
-    /// `cn('…', cond && '…')`: the first string argument is editable. Strings in the
-    /// other arguments apply only under a condition and are never rewritten.
     Call {
         literal: ClassLiteral,
         conditional: Vec<String>,
     },
-    /// Computed at runtime, or overridable by spread props: only an AI edit can change it.
     Dynamic,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct JsxElement {
     pub tag: String,
-    /// Byte offset right after the tag name, where a new attribute can be inserted.
     pub insert_at: usize,
     pub class: ClassSource,
 }
@@ -60,7 +51,6 @@ fn source_type(path: &str) -> Result<SourceType, JsxError> {
     SourceType::from_path(path).map_err(|_| JsxError::UnsupportedFile(path.to_owned()))
 }
 
-/// Fails with the first parser error when `source` is not valid for its extension.
 pub fn check_syntax(path: &str, source: &str) -> Result<(), JsxError> {
     let allocator = Allocator::default();
     let parsed = Parser::new(&allocator, source, source_type(path)?).parse();
@@ -155,7 +145,6 @@ fn is_class_name(name: &JSXAttributeName<'_>) -> bool {
 
 fn read_class(source: &str, value: Option<&JSXAttributeValue<'_>>) -> ClassSource {
     match value {
-        // JSX attribute strings have no backslash escapes, so the raw text is the value.
         Some(JSXAttributeValue::StringLiteral(literal)) => {
             ClassSource::Static(between_delimiters(source, literal.span))
         }
@@ -224,7 +213,6 @@ fn between_delimiters(source: &str, span: Span) -> ClassLiteral {
     }
 }
 
-// Escapes would make the raw text differ from the value, so such literals are not edited.
 fn plain_js_string(source: &str, literal: &StringLiteral<'_>) -> Option<ClassLiteral> {
     let inner = between_delimiters(source, literal.span);
     (!inner.value.contains('\\')).then_some(inner)

@@ -12,17 +12,14 @@ const WIDGET_REQUEST_TYPES = [
   'generate.discard',
 ] as const satisfies readonly GuijamMessage['type'][];
 
-/** The daemon gives a provider 60 s (route R1), then previews the variant. */
 const GENERATION_REPLY_MS = 90_000;
 
-/** How long to wait for the daemon's reply, or undefined for the default. */
 export function replyWindowMs(type: GuijamMessage['type']): number | undefined {
   return type === 'generate.request' ? GENERATION_REPLY_MS : undefined;
 }
 
 type WidgetRequestType = (typeof WIDGET_REQUEST_TYPES)[number];
 
-/** A request the widget may send. Its payload is validated by the daemon. */
 export interface WidgetRequest {
   type: WidgetRequestType;
   id: string;
@@ -47,9 +44,6 @@ export type WidgetRequestCheck =
   | { ok: true; message: WidgetRequest }
   | { ok: false; reply: GuijamMessage };
 
-/**
- * Admits only the request types the widget may send, each with an id for its reply.
- */
 export function checkWidgetRequest(data: unknown): WidgetRequestCheck {
   if (typeof data !== 'object' || data === null) {
     return {
@@ -72,7 +66,6 @@ export function checkWidgetRequest(data: unknown): WidgetRequestCheck {
   return { ok: true, message: { type, id, payload } };
 }
 
-/** The Vite terminal line for a reply worth announcing (F-DX-06), if any. */
 export function terminalLine(reply: GuijamMessage): string | undefined {
   switch (reply.type) {
     case 'commit.done':
@@ -86,7 +79,6 @@ export function terminalLine(reply: GuijamMessage): string | undefined {
   }
 }
 
-/** The run a widget request starts, so its progress events can find the page that asked. */
 export function generationRunId(data: unknown): string | undefined {
   if (typeof data !== 'object' || data === null) return undefined;
   const { type, payload } = data as { type?: unknown; payload?: unknown };

@@ -1,4 +1,3 @@
-skills
 .DS_Store
 node_modules/
 dist/
@@ -9,3 +8,7 @@ target/
 **/.guijam/journal/
 test-results/
 playwright-report/
+.env
+docs/
+skills/
+CLAUDE.md

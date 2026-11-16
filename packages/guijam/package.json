@@ -2,7 +2,7 @@
   "name": "guijam",
   "version": "0.0.0",
   "description": "Draw on your running Vite app, get live UI variants from your own LLM CLI, and write minimal source edits.",
-  "license": "UNLICENSED",
+  "license": "MIT",
   "type": "module",
   "exports": {
     "./vite": {

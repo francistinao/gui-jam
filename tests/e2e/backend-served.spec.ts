@@ -25,8 +25,6 @@ let backend: Server;
 let pageUrl: string;
 let viteOrigin: string;
 
-// What Laravel's `@viteReactRefresh` and `@vite('src/main.tsx')` print: the page comes from
-// the backend, and every script from the Vite dev server.
 function backendPage(vite: string): string {
   return `<!doctype html>
 <html lang="en">

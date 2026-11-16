@@ -78,8 +78,6 @@ fn variant_label_over_40_chars_is_rejected() {
     assert!(serde_json::from_value::<VariantSet>(doc).is_err());
 }
 
-// typify does not enforce array length bounds (minItems/maxItems); the daemon's
-// validation step must check variant and op counts itself.
 #[test]
 fn variant_counts_are_not_enforced_by_deserialization() {
     let doc = json!({ "variants": [] });

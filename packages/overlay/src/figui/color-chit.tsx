@@ -1,14 +1,11 @@
 import { cn } from './cn';
 
 interface ColorChitProps {
-  /** Any CSS colour; the panel only passes validated `#RRGGBB` values. */
   color: string;
-  /** 0–100. */
   opacity?: number;
   className?: string;
 }
 
-// The right half shows the colour at its opacity over a checkerboard, the left half opaque.
 function ColorChit({ color, opacity, className }: ColorChitProps) {
   return (
     <div

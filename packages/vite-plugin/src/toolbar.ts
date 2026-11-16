@@ -6,7 +6,6 @@ type HotContext = NonNullable<ImportMeta['hot']>;
 
 const WIDGET_URL = '/@guijam/widget.js';
 const REQUEST_TIMEOUT_MS = 20_000;
-/** A little over the plugin's own 90 s window for a generation. */
 const GENERATION_TIMEOUT_MS = 95_000;
 
 const TOOLS: readonly { tool: Tool; label: string; icon: string }[] = [
@@ -85,10 +84,6 @@ function createRequester(hot: HotContext): WidgetHost['request'] {
     });
 }
 
-/**
- * The always-visible toolbar is plain DOM; the React widget behind it is fetched the
- * first time a tool is chosen, so pages pay almost nothing until GUIJam is used.
- */
 export function bootToolbar(hot: HotContext): void {
   const hostElement = document.createElement('div');
   hostElement.id = 'guijam-root';
@@ -145,7 +140,6 @@ export function bootToolbar(hot: HotContext): void {
     return widget;
   };
 
-  // A button only shows its tool as active once the widget is listening for it.
   for (const { tool, button } of buttons) {
     button.addEventListener('click', () => {
       const next = active === tool ? null : tool;

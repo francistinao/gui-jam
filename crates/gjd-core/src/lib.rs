@@ -15,7 +15,6 @@ pub mod contracts {
 
 use contracts::ContentHash;
 
-/// The `VariantSet` schema as provider CLIs receive it: self-contained, no `$schema`.
 pub const VARIANT_SET_PROVIDER_SCHEMA: &str =
     include_str!("../../../contracts/generated/variant-set.provider.schema.json");
 

@@ -2,17 +2,11 @@ import type { GuijamMessage } from '@guijam/contracts-ts';
 
 export type Tool = 'select' | 'draw';
 
-/** What the plugin's browser client gives the widget when it loads it. */
 export interface WidgetHost {
-  /** The toolbar's shadow root; the widget renders and adopts its styles here. */
   shadowRoot: ShadowRoot;
-  /** Element hosting the shadow root; events inside it belong to GUIJam, not the page. */
   hostElement: HTMLElement;
-  /** Sends a widget request to the daemon (through the Vite plugin) and returns the reply. */
   request(message: { type: string; payload: object }): Promise<GuijamMessage>;
-  /** Messages the daemon pushes to this page, such as `generate.progress`. Returns an unsubscribe. */
   onEvent(listener: (message: GuijamMessage) => void): () => void;
-  /** Called when the widget leaves a tool on its own, e.g. on Escape. */
   onToolChange(tool: Tool | null): void;
 }
 

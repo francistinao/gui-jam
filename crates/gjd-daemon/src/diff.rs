@@ -1,5 +1,3 @@
-//! The exact before/after lines a change writes, for the Code tab (FR-064).
-
 use std::num::NonZeroU64;
 
 use gjd_core::contracts::CodeChange;

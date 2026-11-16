@@ -28,20 +28,12 @@ import { createUpdateTracker, isUpdateResult } from './update-tracker.js';
 export type { GuijamMessage, UpdateResult } from '@guijam/contracts-ts';
 
 export interface GuijamOptions {
-  /** The `gjd` binary that runs the project daemon. Defaults to `$GUIJAM_GJD_BIN`. */
   daemonBinary?: string;
 }
 
 export interface GuijamApi {
-  /**
-   * Serves `content` in place of `file` (absolute or relative to the Vite root) without
-   * touching the source file. Content that does not compile is rejected with
-   * `compile_error` and the previous state is kept.
-   */
   setOverlay(file: string, content: string): Promise<UpdateResult>;
-  /** Drops the overlay so the module is served from disk again. */
   clearOverlay(file: string): Promise<UpdateResult>;
-  /** Sends a widget request to the daemon, exactly as the browser widget does. */
   request(message: unknown): Promise<GuijamMessage>;
 }
 
@@ -64,10 +56,6 @@ function readPluginVersion(): string {
   return typeof version === 'string' ? version : '0.0.0';
 }
 
-/**
- * Script entries named in the build input. Backend-served pages (Laravel's `@vite`,
- * Inertia) load these directly, so `transformIndexHtml` never runs for them.
- */
 function scriptEntriesOf(config: ResolvedConfig): Set<string> {
   const input = config.build.rolldownOptions?.input ?? config.build.rollupOptions?.input;
   const files =
@@ -102,7 +90,6 @@ export function guijam(options: GuijamOptions = {}): Plugin<GuijamApi> {
   let root = process.cwd();
   let candidatesDir = '';
   let scriptEntries = new Set<string>();
-  /** The page that started each generation in flight; only it gets that run's progress. */
   const runPages = new Map<string, { send(event: string, payload?: unknown): void }>();
 
   function tailwindRootFiles(): string[] {
@@ -186,9 +173,6 @@ export function guijam(options: GuijamOptions = {}): Plugin<GuijamApi> {
     daemon = client;
   }
 
-  // Tailwind's scanner only reads files on disk, so classes that exist only in an
-  // overlay would get no CSS. Overlay text is mirrored into a git-ignored directory
-  // that every Tailwind root CSS file lists as an @source (added in transform below).
   async function syncCandidates(id: string, content: string | undefined): Promise<void> {
     const name = relative(root, id).replaceAll(/[\\/]/g, '__');
     const path = join(candidatesDir, name);
@@ -236,11 +220,8 @@ export function guijam(options: GuijamOptions = {}): Plugin<GuijamApi> {
     }
 
     await syncCandidates(id, content);
-    // No page has imported the file yet, so there is nothing to update; the
-    // overlay is served when the module is first requested.
     if (modules.length === 0) return { updateId, status: 'ok', latencyMs: 0, errors: [] };
 
-    // Stylesheets go first so new utilities exist before the component renders them.
     const reloads = [...(content === undefined ? [] : tailwindRootModules(client)), ...modules];
     const result = tracker.begin(updateId);
     client.hot.send('gj:update-start', {
@@ -279,7 +260,6 @@ export function guijam(options: GuijamOptions = {}): Plugin<GuijamApi> {
       server.environments.client.hot.on('gj:update-result', (data) => {
         if (isUpdateResult(data)) tracker.settle(data);
       });
-      // The widget is one prebuilt module; serving it as is keeps it out of Vite's pipeline.
       server.middlewares.use(WIDGET_URL, (_request, response, next) => {
         readFile(WIDGET_FILE).then((body) => {
           response.setHeader('Content-Type', 'text/javascript');
@@ -308,7 +288,6 @@ export function guijam(options: GuijamOptions = {}): Plugin<GuijamApi> {
     },
 
     transform: {
-      // Must see JSX and Tailwind stylesheets before any other plugin rewrites them.
       order: 'pre',
       handler(code, id) {
         const prepend =

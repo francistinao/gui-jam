@@ -7,7 +7,6 @@ interface NumericInputRootProps
   extends Omit<NumberField.Root.Props, 'value' | 'onValueChange' | 'step'> {
   value: number | null;
   onValueChange(next: number | null): void;
-  /** Arrow keys and scrubbing change the value by this much. */
   nudgeAmount?: number;
 }
 
