@@ -10,12 +10,14 @@ import {
   droppedNote,
   fillOfToken,
   hexOfComputedColor,
+  invertChanges,
   OPACITY_RANGE,
   panelSections,
   parseHex,
   placePopover,
   RADIUS_RANGE,
   radiusOfToken,
+  shiftedLine,
   splitPaths,
   unionRect,
 } from './model';
@@ -291,5 +293,30 @@ describe('containerIndex', () => {
     expect(containerIndex(sketch, [page, hero, row])).toBe(1);
     expect(containerIndex({ left: -10, top: 0, width: 5, height: 5 }, [hero])).toBeNull();
     expect(unionRect(sketch, row)).toEqual({ left: 48, top: 260, width: 1184, height: 90 });
+  });
+});
+
+describe('shiftedLine', () => {
+  it('moves a line by what a change added or removed above it', () => {
+    const changes = [
+      { line: 1, before: ['import a;'], after: ['import b;', 'import a;'] },
+      { line: 40, before: ['x'], after: ['x', 'y', 'z'] },
+    ];
+    expect(shiftedLine(30, changes)).toBe(31);
+    expect(shiftedLine(50, changes)).toBe(53);
+    expect(shiftedLine(1, changes)).toBe(1);
+  });
+});
+
+describe('invertChanges', () => {
+  it('maps lines after a change back to where they were', () => {
+    const changes = [
+      { line: 1, before: ['import a;'], after: ['import b;', 'import a;'] },
+      { line: 40, before: ['x'], after: ['x', 'y', 'z'] },
+    ];
+    const inverted = invertChanges(changes);
+    expect(inverted.map((change) => change.line)).toEqual([1, 41]);
+    expect(shiftedLine(shiftedLine(50, changes), inverted)).toBe(50);
+    expect(shiftedLine(31, inverted)).toBe(30);
   });
 });

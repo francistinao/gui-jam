@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::num::NonZeroU64;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
@@ -11,8 +11,8 @@ use gjd_core::contracts::{
     CodeChange, CommitDone, EditOp, ElementStyle, ErrorCode, ErrorPayload, FinetunePreview,
     FinetunePreviewed, GenerateDone, GenerateDoneDroppedItem, GenerateRequest, GuijamMessage,
     HelloOk, OverlayClear, OverlaySet, Route, RouteTier, RunRef, SourceRef, UndoDone, UpdateResult,
-    UpdateResultStatus, UpdateResultUpdateId, Variant, VariantPreview, VariantSelect,
-    VariantSelected, VariantSet,
+    UpdateResultStatus, UpdateResultUpdateId, Variant, VariantAssetsItemFormat, VariantPreview,
+    VariantSelect, VariantSelected, VariantSet,
 };
 use gjd_core::journal::{CommitError, FileChange, Journal};
 use gjd_core::jsx::JsxError;
@@ -27,6 +27,7 @@ use gjd_providers::{
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
+use crate::assets::{self, AssetFile, Format};
 use crate::diff::code_changes;
 use crate::generate::{self, Progress, Step, TierConfig};
 use crate::index::ProjectIndex;
@@ -271,25 +272,50 @@ fn model_patch_failure(error: PatchError) -> Failure {
     }
 }
 
-type Validated = (Vec<(Variant, String)>, Vec<GenerateDoneDroppedItem>);
+type Validated = (
+    Vec<(Variant, String, Vec<AssetFile>)>,
+    Vec<GenerateDoneDroppedItem>,
+);
+
+fn assets_for(variant: &Variant, dir: &str, existing: &[String]) -> Result<Vec<AssetFile>, String> {
+    let mut files: Vec<AssetFile> = Vec::new();
+    for asset in &variant.assets {
+        let format = match asset.format {
+            VariantAssetsItemFormat::Svg => Format::Svg,
+            VariantAssetsItemFormat::Webp => Format::Webp,
+        };
+        let width = asset.width.and_then(|width| u16::try_from(width).ok());
+        let file = assets::prepare(&asset.name, format, &asset.svg, width, dir, existing)?;
+        if files.iter().any(|other| other.path == file.path) {
+            return Err(format!("It adds {} twice.", file.path));
+        }
+        files.push(file);
+    }
+    Ok(files)
+}
 
 fn validate_variants(
     variants: Vec<Variant>,
     file: &str,
     current: &str,
+    assets_dir: &str,
+    existing: &[String],
 ) -> Result<Validated, Failure> {
-    let mut valid: Vec<(Variant, String)> = Vec::new();
+    let mut valid: Vec<(Variant, String, Vec<AssetFile>)> = Vec::new();
     let mut dropped = Vec::new();
     for variant in variants.into_iter().take(generate::VARIANTS) {
         let label = String::from(variant.label.clone());
         let reason = match apply_variant(&variant.ops, file, current) {
-            Ok(content) if valid.iter().any(|(_, other)| *other == content) => {
+            Ok(content) if valid.iter().any(|(_, other, _)| *other == content) => {
                 "It is the same as another variant.".to_owned()
             }
-            Ok(content) => {
-                valid.push((variant, content));
-                continue;
-            }
+            Ok(content) => match assets_for(&variant, assets_dir, existing) {
+                Ok(files) => {
+                    valid.push((variant, content, files));
+                    continue;
+                }
+                Err(reason) => reason,
+            },
             Err(failure) if failure.code == ErrorCode::StaleBase => return Err(failure),
             Err(failure) => failure.message,
         };
@@ -349,6 +375,7 @@ struct Changeset {
     files: BTreeMap<String, Version>,
     summary: String,
     origin: &'static str,
+    created: Vec<AssetFile>,
 }
 
 struct Run {
@@ -359,6 +386,7 @@ struct Run {
 struct VariantRun {
     file: String,
     changesets: Vec<String>,
+    shown: Vec<String>,
 }
 
 struct Job<'a> {
@@ -381,15 +409,17 @@ struct Held {
     system: String,
     style: String,
     rationale: String,
+    assets: Vec<AssetFile>,
 }
 
-impl From<Variant> for Held {
-    fn from(variant: Variant) -> Self {
+impl Held {
+    fn from_variant(variant: Variant, assets: Vec<AssetFile>) -> Self {
         Self {
             label: variant.label.into(),
             system: variant.system,
             style: variant.style.into(),
             rationale: variant.rationale.into(),
+            assets,
         }
     }
 }
@@ -647,6 +677,7 @@ impl Daemon {
             )]),
             summary,
             "finetune",
+            Vec::new(),
         );
         let shown = (content != source).then_some(content.as_str());
         let update = self.show(&file, shown).await?;
@@ -715,22 +746,54 @@ impl Daemon {
             .collect()
     }
 
-    async fn select_variant(&self, request: VariantSelect) -> Result<VariantSelected, Failure> {
-        let (file, content) = {
-            let runs = locked(&self.variant_runs);
+    async fn show_variant(
+        &self,
+        run_id: &str,
+        changeset_id: &str,
+    ) -> Result<UpdateResult, Failure> {
+        let (file, content, previews, stale) = {
+            let mut runs = locked(&self.variant_runs);
             let run = runs
-                .get(&request.run_id)
-                .filter(|run| run.changesets.contains(&request.changeset_id))
-                .ok_or_else(|| unknown_changeset(&request.changeset_id))?;
+                .get_mut(run_id)
+                .filter(|run| run.changesets.iter().any(|id| id == changeset_id))
+                .ok_or_else(|| unknown_changeset(changeset_id))?;
             let changesets = locked(&self.changesets);
-            let content = changesets
-                .get(&request.changeset_id)
-                .and_then(|changeset| changeset.files.get(&run.file))
+            let changeset = changesets
+                .get(changeset_id)
+                .ok_or_else(|| unknown_changeset(changeset_id))?;
+            let content = changeset
+                .files
+                .get(&run.file)
                 .map(|version| version.content.clone())
-                .ok_or_else(|| unknown_changeset(&request.changeset_id))?;
-            (run.file.clone(), content)
+                .ok_or_else(|| unknown_changeset(changeset_id))?;
+            let previews: Vec<(String, String)> = changeset
+                .created
+                .iter()
+                .map(|asset| (asset.path.clone(), asset.preview.clone()))
+                .collect();
+            let stale: Vec<String> = run
+                .shown
+                .iter()
+                .filter(|path| !previews.iter().any(|(shown, _)| shown == *path))
+                .cloned()
+                .collect();
+            run.shown = previews.iter().map(|(path, _)| path.clone()).collect();
+            (run.file.clone(), content, previews, stale)
         };
+        for (path, preview) in &previews {
+            self.show(path, Some(preview)).await?;
+        }
         let update = self.show(&file, Some(&content)).await?;
+        for path in stale {
+            self.show(&path, None).await?;
+        }
+        Ok(update)
+    }
+
+    async fn select_variant(&self, request: VariantSelect) -> Result<VariantSelected, Failure> {
+        let update = self
+            .show_variant(&request.run_id, &request.changeset_id)
+            .await?;
         Ok(VariantSelected {
             changeset_id: request.changeset_id,
             update,
@@ -748,26 +811,31 @@ impl Daemon {
             }
         }
         self.show(&run.file, None).await?;
+        for path in &run.shown {
+            self.show(path, None).await?;
+        }
         Ok(())
     }
 
-    fn settle_variant_run(&self, changeset_id: &str) {
-        let siblings = {
+    fn settle_variant_run(&self, changeset_id: &str) -> Vec<String> {
+        let settled = {
             let mut runs = locked(&self.variant_runs);
             let run_id = runs
                 .iter()
                 .find(|(_, run)| run.changesets.iter().any(|id| id == changeset_id))
                 .map(|(id, _)| id.clone());
-            run_id
-                .and_then(|id| runs.remove(&id))
-                .map(|run| run.changesets)
+            run_id.and_then(|id| runs.remove(&id))
+        };
+        let Some(run) = settled else {
+            return Vec::new();
         };
         let mut changesets = locked(&self.changesets);
-        for id in siblings.unwrap_or_default() {
+        for id in &run.changesets {
             if id != changeset_id {
-                changesets.remove(&id);
+                changesets.remove(id);
             }
         }
+        run.shown
     }
 
     async fn run_generation(
@@ -831,11 +899,12 @@ impl Daemon {
             system: "Your project".to_owned(),
             style: "Exact".to_owned(),
             rationale: "Made without a model call.".to_owned(),
+            assets: Vec::new(),
         };
         let (variants, first) =
             self.hold_variants(job.request, job.source, vec![(held, content)], "R0");
         let update = self
-            .preview_run(&job.request.run_id, file, &first, job.cancel)
+            .preview_run(&job.request.run_id, &first, job.cancel)
             .await?;
         Ok(GenerateDone {
             run_id: job.request.run_id.clone(),
@@ -928,19 +997,21 @@ impl Daemon {
         progress.start(Step::Check);
         self.report(&progress);
         let current = self.read_project_file(file).await?;
-        let (valid, dropped) = validate_variants(proposed, file, &current)?;
+        let existing = self.index.files().await;
+        let assets_dir = assets::assets_dir(&existing);
+        let (valid, dropped) = validate_variants(proposed, file, &current, &assets_dir, &existing)?;
         if job.cancel.is_cancelled() {
             return Err(ProviderError::Cancelled.into());
         }
         let held = valid
             .into_iter()
-            .map(|(variant, content)| (Held::from(variant), content))
+            .map(|(variant, content, files)| (Held::from_variant(variant, files), content))
             .collect();
         let (variants, first) = self.hold_variants(job.request, &current, held, &route_label);
         progress.start(Step::Preview);
         self.report(&progress);
         let update = self
-            .preview_run(&job.request.run_id, file, &first, job.cancel)
+            .preview_run(&job.request.run_id, &first, job.cancel)
             .await?;
         Ok(GenerateDone {
             run_id: job.request.run_id.clone(),
@@ -984,7 +1055,8 @@ impl Daemon {
             job.prompt,
             &mentioned,
         );
-        format!("{sketch}{found}")
+        let folder = assets::prompt_note(&job.request.file, &assets::assets_dir(&files));
+        format!("{sketch}{found}{folder}")
     }
 
     async fn ask(
@@ -1012,9 +1084,6 @@ impl Daemon {
         route_label: &str,
     ) -> (Vec<VariantPreview>, String) {
         let file = &request.file;
-        let first = held
-            .first()
-            .map_or_else(String::new, |(_, content)| content.clone());
         let variants: Vec<VariantPreview> = held
             .into_iter()
             .map(|(variant, content)| {
@@ -1023,6 +1092,11 @@ impl Daemon {
                     request.line, variant.label
                 );
                 let changes = code_changes(file, current, &content);
+                let created = variant
+                    .assets
+                    .iter()
+                    .map(|asset| asset.path.clone())
+                    .collect();
                 let changeset_id = self.store_changeset(
                     None,
                     BTreeMap::from([(
@@ -1034,10 +1108,12 @@ impl Daemon {
                     )]),
                     summary,
                     "ai",
+                    variant.assets,
                 );
                 VariantPreview {
                     changes,
                     changeset_id,
+                    created,
                     file: file.clone(),
                     label: variant.label,
                     rationale: variant.rationale,
@@ -1054,19 +1130,22 @@ impl Daemon {
                     .iter()
                     .map(|variant| variant.changeset_id.clone())
                     .collect(),
+                shown: Vec::new(),
             },
         );
+        let first = variants
+            .first()
+            .map_or_else(String::new, |variant| variant.changeset_id.clone());
         (variants, first)
     }
 
     async fn preview_run(
         &self,
         run_id: &str,
-        file: &str,
-        content: &str,
+        changeset_id: &str,
         cancel: &CancellationToken,
     ) -> Result<UpdateResult, Failure> {
-        let update = self.show(file, Some(content)).await;
+        let update = self.show_variant(run_id, changeset_id).await;
         if update.is_err() || cancel.is_cancelled() {
             self.discard_run(run_id).await?;
         }
@@ -1109,6 +1188,7 @@ impl Daemon {
         files: BTreeMap<String, Version>,
         summary: String,
         origin: &'static str,
+        created: Vec<AssetFile>,
     ) -> String {
         let mut changesets = locked(&self.changesets);
         let existing = element.as_ref().and_then(|element| {
@@ -1125,26 +1205,40 @@ impl Daemon {
                 files,
                 summary,
                 origin,
+                created,
             },
         );
         id
     }
 
     async fn commit(&self, changeset_id: &str) -> Result<CommitDone, Failure> {
-        self.settle_variant_run(changeset_id);
+        let shown = self.settle_variant_run(changeset_id);
         let changeset = locked(&self.changesets)
             .remove(changeset_id)
             .ok_or_else(|| unknown_changeset(changeset_id))?;
-        let files: Vec<String> = changeset.files.keys().cloned().collect();
+        let files: Vec<String> = changeset
+            .files
+            .keys()
+            .cloned()
+            .chain(changeset.created.iter().map(|asset| asset.path.clone()))
+            .collect();
         let changes: Vec<FileChange> = changeset
             .files
             .iter()
             .filter(|(_, version)| version.base != version.content)
-            .map(|(path, version)| FileChange {
-                path: path.clone(),
-                expected_hash: content_hash(version.base.as_bytes()),
-                content: version.content.clone(),
+            .map(|(path, version)| {
+                FileChange::edit(
+                    path.clone(),
+                    content_hash(version.base.as_bytes()),
+                    version.content.clone(),
+                )
             })
+            .chain(
+                changeset
+                    .created
+                    .iter()
+                    .map(|asset| FileChange::create(asset.path.clone(), asset.content.clone())),
+            )
             .collect();
         if changes.is_empty() {
             return Err(Failure::new(
@@ -1160,7 +1254,8 @@ impl Daemon {
             let origin = changeset.origin;
             tokio::task::spawn_blocking(move || journal.commit(&changes, origin, &summary)).await
         };
-        for file in &files {
+        let cleared: BTreeSet<&String> = files.iter().chain(&shown).collect();
+        for file in cleared {
             self.show(file, None).await?;
         }
         let journal_id =
@@ -1346,11 +1441,12 @@ mod tests {
             variant("Fourth", &[snippet(FILE, SOURCE, "p-2", "p-4")]),
         ];
 
-        let (valid, dropped) = validate_variants(proposed, FILE, SOURCE).expect("one survives");
+        let (valid, dropped) = validate_variants(proposed, FILE, SOURCE, "src/assets/icons", &[])
+            .expect("one survives");
 
         let kept: Vec<String> = valid
             .iter()
-            .map(|(variant, _)| String::from(variant.label.clone()))
+            .map(|(variant, _, _)| String::from(variant.label.clone()))
             .collect();
         assert_eq!(kept, ["Sea"]);
         let reasons: Vec<(Option<&str>, &str)> = dropped
@@ -1376,7 +1472,8 @@ mod tests {
             "Lost",
             &[snippet(FILE, SOURCE, "bg-nowhere", "bg-sky")],
         )];
-        let failure = validate_variants(lost, FILE, SOURCE).expect_err("none survive");
+        let failure = validate_variants(lost, FILE, SOURCE, "src/assets/icons", &[])
+            .expect_err("none survive");
         assert_eq!(failure.code, ErrorCode::ProviderInvalidOutput);
 
         let saved = SOURCE.replace("p-2", "p-4");
@@ -1384,7 +1481,8 @@ mod tests {
             "Sea",
             &[snippet(FILE, SOURCE, "bg-brand", "bg-sea")],
         )];
-        let failure = validate_variants(stale, FILE, &saved).expect_err("stale");
+        let failure =
+            validate_variants(stale, FILE, &saved, "src/assets/icons", &[]).expect_err("stale");
         assert_eq!(failure.code, ErrorCode::StaleBase);
     }
 

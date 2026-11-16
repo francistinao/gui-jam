@@ -49,9 +49,23 @@ impl ProjectRoot {
         let resolved = match joined.canonicalize() {
             Ok(existing) => existing,
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                let parent = joined.parent().ok_or_else(outside)?;
-                let name = joined.file_name().ok_or_else(outside)?;
-                parent.canonicalize().map_err(|_| outside())?.join(name)
+                let mut existing = joined.as_path();
+                let mut missing = Vec::new();
+                loop {
+                    match existing.canonicalize() {
+                        Ok(found) => {
+                            break missing
+                                .iter()
+                                .rev()
+                                .fold(found, |path: PathBuf, name| path.join(name));
+                        }
+                        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                            missing.push(existing.file_name().ok_or_else(outside)?.to_owned());
+                            existing = existing.parent().ok_or_else(outside)?;
+                        }
+                        Err(_) => return Err(outside()),
+                    }
+                }
             }
             Err(_) => return Err(outside()),
         };
@@ -201,5 +215,15 @@ mod tests {
         assert!(is_denied(Path::new("config/.env.local")));
         assert!(!is_denied(Path::new("src/components/Distance.tsx")));
         assert!(!is_denied(Path::new("node_modules")));
+    }
+
+    #[test]
+    fn resolves_new_files_in_folders_that_do_not_exist_yet() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let root = ProjectRoot::new(dir.path()).expect("root");
+
+        let resolved = root.resolve("src/assets/icons/cup.svg").expect("inside");
+
+        assert_eq!(resolved, root.path().join("src/assets/icons/cup.svg"));
     }
 }

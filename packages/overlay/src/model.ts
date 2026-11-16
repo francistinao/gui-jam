@@ -294,3 +294,25 @@ export function unionRect(a: Rect, b: Rect): Rect {
 export function intersects(a: Rect, b: Rect): boolean {
   return overlap(a, b) > 0;
 }
+
+export function shiftedLine(
+  line: number,
+  changes: readonly { line: number; before: readonly string[]; after: readonly string[] }[],
+): number {
+  return changes
+    .filter((change) => change.line + change.before.length <= line)
+    .reduce((shifted, change) => shifted + change.after.length - change.before.length, line);
+}
+
+export function invertChanges<
+  T extends { line: number; before: readonly string[]; after: readonly string[] },
+>(changes: readonly T[]): { line: number; before: readonly string[]; after: readonly string[] }[] {
+  let offset = 0;
+  return [...changes]
+    .sort((a, b) => a.line - b.line)
+    .map((change) => {
+      const inverted = { line: change.line + offset, before: change.after, after: change.before };
+      offset += change.after.length - change.before.length;
+      return inverted;
+    });
+}

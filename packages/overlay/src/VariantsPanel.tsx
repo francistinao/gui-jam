@@ -73,6 +73,14 @@ export function VariantsPanel({ generation, busy, controller }: VariantsPanelPro
         <dd>{variant.style}</dd>
         <dt className="text-grey-500">File</dt>
         <dd className="truncate font-mono">{variant.file.split('/').pop()}</dd>
+        {variant.created.length > 0 ? (
+          <>
+            <dt className="text-grey-500">Adds</dt>
+            <dd className="truncate font-mono">
+              {variant.created.map((path) => path.split('/').pop()).join(', ')}
+            </dd>
+          </>
+        ) : null}
       </dl>
       <p className="typography-body-small text-grey-600">
         <span className="font-[600] text-grey-800">{variant.label}.</span> {variant.rationale}

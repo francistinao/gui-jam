@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { existsSync } from 'node:fs';
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { dirname, join, relative, resolve } from 'node:path';
@@ -43,6 +44,7 @@ const WIDGET_URL = '/@guijam/widget.js';
 const WIDGET_FILE = fileURLToPath(new URL('./widget.js', import.meta.url));
 const UPDATE_TIMEOUT_MS = 3000;
 const JSX_MODULE = /\.[jt]sx$/;
+const ASSET_FILE = /\.(?:svg|webp|png|jpe?g|gif|avif|ico)$/i;
 const SCRIPT_MODULE = /\.[cm]?[jt]sx?$/;
 const CLIENT_IMPORT = `import '${CLIENT_ID}';\n`;
 const CSS_ID = /\.css(?:\?.*)?$/;
@@ -203,6 +205,12 @@ export function guijam(options: GuijamOptions = {}): Plugin<GuijamApi> {
     else overlays.set(id, content);
     const modules = [...(client.moduleGraph.getModulesByFile(id) ?? [])];
 
+    if (ASSET_FILE.test(id) || (content === undefined && !existsSync(id))) {
+      for (const mod of modules) client.moduleGraph.invalidateModule(mod);
+      await syncCandidates(id, content);
+      return { updateId, status: 'ok', latencyMs: 0, errors: [] };
+    }
+
     if (content !== undefined && modules.length > 0) {
       try {
         await assertCompiles(client, modules);
@@ -260,6 +268,19 @@ export function guijam(options: GuijamOptions = {}): Plugin<GuijamApi> {
       server.environments.client.hot.on('gj:update-result', (data) => {
         if (isUpdateResult(data)) tracker.settle(data);
       });
+      server.middlewares.use((request, response, next) => {
+        const [pathname = '', search = ''] = (request.url ?? '').split('?', 2);
+        if (!ASSET_FILE.test(pathname) || /(?:^|&)import\b/.test(search)) return next();
+        const local = decodeURIComponent(pathname).replace(/^\/+/, '');
+        const file = [resolve(root, local), resolve(root, 'public', local)]
+          .map(normalizePath)
+          .find((candidate) => overlays.has(candidate));
+        const content = file === undefined ? undefined : overlays.get(file);
+        if (content === undefined) return next();
+        response.setHeader('Content-Type', 'image/svg+xml');
+        response.setHeader('Cache-Control', 'no-store');
+        response.end(content);
+      });
       server.middlewares.use(WIDGET_URL, (_request, response, next) => {
         readFile(WIDGET_FILE).then((body) => {
           response.setHeader('Content-Type', 'text/javascript');
@@ -279,11 +300,28 @@ export function guijam(options: GuijamOptions = {}): Plugin<GuijamApi> {
       connectDaemon(server);
     },
 
-    resolveId(source) {
-      return source === CLIENT_ID ? CLIENT_ENTRY : null;
+    resolveId(source, importer) {
+      if (source === CLIENT_ID) return CLIENT_ENTRY;
+      const [path = '', query] = source.split('?', 2);
+      if (overlays.has(normalizePath(path)) && !existsSync(path)) return source;
+      const base = path.startsWith('/')
+        ? root
+        : importer && dirname(importer.split('?', 1)[0] ?? '');
+      if (!base || !(path.startsWith('/') || path.startsWith('./') || path.startsWith('../'))) {
+        return null;
+      }
+      const id = normalizePath(resolve(base, path.startsWith('/') ? `.${path}` : path));
+      if (!overlays.has(id) || existsSync(id)) return null;
+      return query === undefined ? id : `${id}?${query}`;
     },
 
     load(id) {
+      const file = id.split('?', 1)[0] ?? id;
+      if (ASSET_FILE.test(file) && overlays.has(file)) {
+        const inside = relative(root, file);
+        const url = inside.startsWith('..') ? `/@fs${file}` : `/${normalizePath(inside)}`;
+        return `export default ${JSON.stringify(url)};`;
+      }
       return overlays.get(id) ?? null;
     },
 

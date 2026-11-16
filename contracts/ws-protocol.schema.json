@@ -897,7 +897,16 @@
     "VariantPreview": {
       "description": "One variant held as a changeset; variant.select shows it, changeset.commit writes it.",
       "type": "object",
-      "required": ["changesetId", "label", "system", "style", "rationale", "file", "changes"],
+      "required": [
+        "changesetId",
+        "label",
+        "system",
+        "style",
+        "rationale",
+        "file",
+        "changes",
+        "created"
+      ],
       "additionalProperties": false,
       "properties": {
         "changesetId": {
@@ -923,6 +932,13 @@
           "items": {
             "$ref": "#/$defs/CodeChange"
           }
+        },
+        "created": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Files this variant adds, such as generated icons."
         }
       }
     },

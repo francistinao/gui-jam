@@ -13,11 +13,37 @@ use crate::policy::{PolicyError, ProjectRoot};
 
 const MS_PER_DAY: u64 = 86_400_000;
 
+const ABSENT: &str = "absent";
+
 #[derive(Debug, Clone)]
 pub struct FileChange {
     pub path: String,
-    pub expected_hash: ContentHash,
-    pub content: String,
+    pub expected_hash: Option<ContentHash>,
+    pub content: Option<Vec<u8>>,
+}
+
+impl FileChange {
+    #[must_use]
+    pub fn edit(
+        path: impl Into<String>,
+        expected_hash: ContentHash,
+        content: impl Into<Vec<u8>>,
+    ) -> Self {
+        Self {
+            path: path.into(),
+            expected_hash: Some(expected_hash),
+            content: Some(content.into()),
+        }
+    }
+
+    #[must_use]
+    pub fn create(path: impl Into<String>, content: impl Into<Vec<u8>>) -> Self {
+        Self {
+            path: path.into(),
+            expected_hash: None,
+            content: Some(content.into()),
+        }
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -75,8 +101,20 @@ struct FileRecord {
 
 struct Planned {
     target: PathBuf,
-    previous: String,
-    content: String,
+    previous: Option<Vec<u8>>,
+    content: Option<Vec<u8>>,
+}
+
+fn hash_text(hash: Option<&ContentHash>) -> String {
+    hash.map_or_else(|| ABSENT.to_owned(), |hash| hash.as_str().to_owned())
+}
+
+fn read_if_present(path: &Path) -> io::Result<Option<Vec<u8>>> {
+    match fs::read(path) {
+        Ok(bytes) => Ok(Some(bytes)),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error),
+    }
 }
 
 pub struct Journal {
@@ -127,8 +165,8 @@ impl Journal {
             .map(|file| {
                 Ok(FileChange {
                     path: file.path.clone(),
-                    expected_hash: parse_hash(&file.post_hash)?,
-                    content: self.read_blob(&file.pre_hash)?,
+                    expected_hash: parse_optional_hash(&file.post_hash)?,
+                    content: self.read_optional_blob(&file.pre_hash)?,
                 })
             })
             .collect::<Result<Vec<_>, CommitError>>()?;
@@ -157,10 +195,15 @@ impl Journal {
         for file in files {
             let target = self.project.resolve(&file.path)?;
             remove_quietly(&temp_path(&target, id));
-            let current = content_hash(&fs::read(&target)?);
-            if current.as_str() == file.post_hash {
+            let current = hash_text(
+                read_if_present(&target)?
+                    .as_deref()
+                    .map(content_hash)
+                    .as_ref(),
+            );
+            if current == file.post_hash {
                 at_post.push((file, target));
-            } else if current.as_str() == file.pre_hash {
+            } else if current == file.pre_hash {
                 at_pre += 1;
             } else {
                 untouched.push(file.path.clone());
@@ -183,9 +226,11 @@ impl Journal {
             return Ok(Recovery::NotApplied(id.to_owned()));
         }
         for (file, target) in &at_post {
-            let previous = self.read_blob(&file.pre_hash)?;
-            let temp = write_temp(target, previous.as_bytes(), id)?;
-            fs::rename(temp, target)?;
+            restore(
+                target,
+                self.read_optional_blob(&file.pre_hash)?.as_deref(),
+                id,
+            )?;
         }
         sync_parents(at_post.iter().map(|(_, target)| target.as_path()))?;
         self.append(&Record::Abort {
@@ -213,18 +258,20 @@ impl Journal {
         let mut files = Vec::with_capacity(sorted.len());
         for change in sorted {
             let target = self.project.resolve(&change.path)?;
-            let previous = fs::read_to_string(&target)?;
-            let pre_hash = content_hash(previous.as_bytes());
+            let previous = read_if_present(&target)?;
+            let pre_hash = previous.as_deref().map(content_hash);
             if pre_hash != change.expected_hash {
                 return Err(CommitError::Conflict {
                     path: change.path.clone(),
                 });
             }
-            self.store_blob(&pre_hash, previous.as_bytes())?;
+            if let (Some(bytes), Some(hash)) = (&previous, &pre_hash) {
+                self.store_blob(hash, bytes)?;
+            }
             files.push(FileRecord {
                 path: change.path.clone(),
-                pre_hash: pre_hash.as_str().to_owned(),
-                post_hash: content_hash(change.content.as_bytes()).as_str().to_owned(),
+                pre_hash: hash_text(pre_hash.as_ref()),
+                post_hash: hash_text(change.content.as_deref().map(content_hash).as_ref()),
             });
             planned.push(Planned {
                 target,
@@ -267,8 +314,11 @@ impl Journal {
         fs::rename(temp, &path)
     }
 
-    fn read_blob(&self, hash: &str) -> Result<String, CommitError> {
-        Ok(fs::read_to_string(self.blobs.join(hash))?)
+    fn read_optional_blob(&self, hash: &str) -> Result<Option<Vec<u8>>, CommitError> {
+        if hash == ABSENT {
+            return Ok(None);
+        }
+        Ok(Some(fs::read(self.blobs.join(hash))?))
     }
 
     fn append(&self, record: &Record) -> io::Result<()> {
@@ -318,13 +368,38 @@ impl Journal {
     }
 }
 
+fn restore(target: &Path, content: Option<&[u8]>, id: &str) -> io::Result<()> {
+    match content {
+        Some(bytes) => {
+            if let Some(parent) = target.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            let temp = write_temp(target, bytes, id)?;
+            fs::rename(temp, target)
+        }
+        None => match fs::remove_file(target) {
+            Err(error) if error.kind() != io::ErrorKind::NotFound => Err(error),
+            _ => Ok(()),
+        },
+    }
+}
+
 fn write_all_or_none(id: &str, planned: &[Planned]) -> io::Result<()> {
     let mut temps = Vec::with_capacity(planned.len());
     for plan in planned {
-        match write_temp(&plan.target, plan.content.as_bytes(), id) {
-            Ok(temp) => temps.push(temp),
+        let Some(content) = &plan.content else {
+            temps.push(None);
+            continue;
+        };
+        let written = plan
+            .target
+            .parent()
+            .map_or(Ok(()), fs::create_dir_all)
+            .and_then(|()| write_temp(&plan.target, content, id));
+        match written {
+            Ok(temp) => temps.push(Some(temp)),
             Err(error) => {
-                for temp in &temps {
+                for temp in temps.iter().flatten() {
                     remove_quietly(temp);
                 }
                 return Err(error);
@@ -332,14 +407,16 @@ fn write_all_or_none(id: &str, planned: &[Planned]) -> io::Result<()> {
         }
     }
     for (index, (plan, temp)) in planned.iter().zip(&temps).enumerate() {
-        if let Err(error) = fs::rename(temp, &plan.target) {
-            for temp in &temps[index..] {
+        let applied = match temp {
+            Some(temp) => fs::rename(temp, &plan.target),
+            None => restore(&plan.target, None, id),
+        };
+        if let Err(error) = applied {
+            for temp in temps[index..].iter().flatten() {
                 remove_quietly(temp);
             }
             for restored in &planned[..index] {
-                if let Ok(back) = write_temp(&restored.target, restored.previous.as_bytes(), id) {
-                    let _ = fs::rename(back, &restored.target);
-                }
+                let _ = restore(&restored.target, restored.previous.as_deref(), id);
             }
             return Err(error);
         }
@@ -414,6 +491,13 @@ fn committed_files<'r>(records: &'r [Record], id: &str) -> Option<&'r [FileRecor
     })
 }
 
+fn parse_optional_hash(value: &str) -> Result<Option<ContentHash>, CommitError> {
+    if value == ABSENT {
+        return Ok(None);
+    }
+    parse_hash(value).map(Some)
+}
+
 fn parse_hash(value: &str) -> Result<ContentHash, CommitError> {
     ContentHash::try_from(value).map_err(|_| CommitError::Corrupt(format!("bad hash {value}")))
 }
@@ -478,11 +562,7 @@ mod tests {
     }
 
     fn change(path: &str, from: &str, to: &str) -> FileChange {
-        FileChange {
-            path: path.to_owned(),
-            expected_hash: content_hash(from.as_bytes()),
-            content: to.to_owned(),
-        }
+        FileChange::edit(path, content_hash(from.as_bytes()), to)
     }
 
     fn read(dir: &tempfile::TempDir, path: &str) -> String {
@@ -682,5 +762,64 @@ mod tests {
         assert_eq!(year_month(20_454), (2026, 1));
         assert_eq!(year_month(11_016), (2000, 2));
         assert_eq!(year_month(11_017), (2000, 3));
+    }
+
+    #[test]
+    fn creates_new_files_in_new_folders_and_undo_removes_them() {
+        let (dir, journal) = project(&[("src/App.tsx", "app\n")]);
+        let icon = b"<svg/>".to_vec();
+        let changes = [
+            change("src/App.tsx", "app\n", "app with icon\n"),
+            FileChange::create("src/assets/icons/cup.svg", icon.clone()),
+        ];
+
+        let id = journal.commit(&changes, "ai", "icon").expect("committed");
+
+        assert_eq!(
+            fs::read(dir.path().join("src/assets/icons/cup.svg")).expect("created"),
+            icon
+        );
+        journal.undo(&id).expect("undone");
+        assert!(!dir.path().join("src/assets/icons/cup.svg").exists());
+        assert_eq!(read(&dir, "src/App.tsx"), "app\n");
+    }
+
+    #[test]
+    fn refuses_to_create_a_file_that_appeared_meanwhile() {
+        let (dir, journal) = project(&[("src/cup.svg", "mine")]);
+
+        let error = journal
+            .commit(
+                &[FileChange::create("src/cup.svg", b"<svg/>".to_vec())],
+                "ai",
+                "icon",
+            )
+            .expect_err("conflict");
+
+        assert!(matches!(error, CommitError::Conflict { .. }));
+        assert_eq!(read(&dir, "src/cup.svg"), "mine");
+    }
+
+    #[test]
+    fn keeps_binary_content_byte_for_byte() {
+        let (dir, journal) = project(&[]);
+        let webp = vec![
+            0x52, 0x49, 0x46, 0x46, 0x00, 0xff, 0xfe, 0x57, 0x45, 0x42, 0x50,
+        ];
+
+        let id = journal
+            .commit(
+                &[FileChange::create("public/cup.webp", webp.clone())],
+                "ai",
+                "raster",
+            )
+            .expect("committed");
+
+        assert_eq!(
+            fs::read(dir.path().join("public/cup.webp")).expect("written"),
+            webp
+        );
+        journal.undo(&id).expect("undone");
+        assert!(!dir.path().join("public/cup.webp").exists());
     }
 }

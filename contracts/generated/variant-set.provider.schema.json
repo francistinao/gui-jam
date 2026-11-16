@@ -339,6 +339,45 @@
           "items": {
             "$ref": "#/$defs/EditOp"
           }
+        },
+        "assets": {
+          "type": "array",
+          "maxItems": 4,
+          "description": "Icons or illustrations this variant adds as files. GUIJam saves each one in the project assets folder as <name>.<format>, rendering webp from the svg.",
+          "items": {
+            "type": "object",
+            "required": [
+              "name",
+              "format",
+              "svg"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "name": {
+                "type": "string",
+                "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+                "maxLength": 40
+              },
+              "format": {
+                "type": "string",
+                "enum": [
+                  "svg",
+                  "webp"
+                ]
+              },
+              "svg": {
+                "type": "string",
+                "maxLength": 20000,
+                "description": "Self-contained SVG markup with a viewBox; no scripts or external references."
+              },
+              "width": {
+                "type": "integer",
+                "minimum": 16,
+                "maximum": 1024,
+                "description": "For webp, the width in pixels to render at."
+              }
+            }
+          }
         }
       }
     }

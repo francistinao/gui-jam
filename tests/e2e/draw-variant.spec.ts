@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -22,6 +22,7 @@ import {
 const FAKE_CLI_DIR = fileURLToPath(new URL('../fake-cli/', import.meta.url));
 const ORDER_BUTTON = fixturePath('src/components/OrderButton.tsx');
 const APP = fixturePath('src/App.tsx');
+const CUP_ICON = fixturePath('src/assets/icons/cup-icon.svg');
 const ORDER_BUTTON_REF = { file: 'src/components/OrderButton.tsx', line: 3, column: 5 };
 const BRAND_RGB = 'rgb(190, 18, 60)';
 const SOLID_RGB = 'rgb(37, 99, 235)';
@@ -30,6 +31,7 @@ const OUTLINE_RGB = 'rgb(255, 255, 255)';
 
 let fixture: FixtureServer;
 let original: string;
+let originalApp: string;
 let cliLog: string;
 const savedEnv = { PATH: process.env.PATH };
 
@@ -100,11 +102,14 @@ test.beforeAll(async () => {
   process.env.PATH = `${FAKE_CLI_DIR}:${savedEnv.PATH ?? ''}`;
   fixture = await startFixtureServer();
   original = await readFile(ORDER_BUTTON, 'utf8');
+  originalApp = await readFile(APP, 'utf8');
   await waitForDaemon(widgetRequests(fixture.api), ORDER_BUTTON_REF);
 });
 
 test.afterEach(async () => {
   if ((await readFile(ORDER_BUTTON, 'utf8')) !== original) await writeFile(ORDER_BUTTON, original);
+  if ((await readFile(APP, 'utf8')) !== originalApp) await writeFile(APP, originalApp);
+  await rm(fixturePath('src/assets'), { recursive: true, force: true });
 });
 
 test.afterAll(async () => {
@@ -394,9 +399,31 @@ test('a sketch in empty space sends images of it and places the result where it 
     .fill('a card like this with a cup icon');
   await prompt.getByRole('button', { name: 'Generate' }).click();
 
-  await expect(page.getByRole('main').getByText('Sketched card', { exact: true })).toBeVisible();
+  const card = page.getByRole('main').getByText('Sketched card', { exact: true });
+  await expect(card).toBeVisible();
+  const icon = page.getByRole('main').getByRole('img', { name: 'Cup icon' });
+  await expect
+    .poll(() => icon.evaluate((image: HTMLImageElement) => image.naturalWidth))
+    .toBeGreaterThan(0);
   const run = (await cliRuns()).at(-1);
   expect(run?.images).toEqual(['image/jpeg', 'image/png']);
   expect(run?.args).toEqual(expect.arrayContaining(['--model', 'sonnet']));
   expect(await fileSnapshot(APP)).toEqual(before);
+  const variants = prompt.getByRole('region', { name: 'Variants' });
+  await expect(variants).toContainText('cup-icon.svg');
+
+  await variants.getByRole('button', { name: 'Use V1' }).click();
+
+  const toast = page.getByRole('status').filter({ hasText: 'Applied to App.tsx.' });
+  await expect(toast).toBeVisible();
+  expect(await readFile(CUP_ICON, 'utf8')).toContain('viewBox="0 0 24 24"');
+  expect(await readFile(APP, 'utf8')).toContain(
+    "import cupIcon from './assets/icons/cup-icon.svg';",
+  );
+
+  await toast.getByRole('button', { name: 'Undo' }).click();
+
+  await expect(page.getByRole('status').filter({ hasText: 'Change undone.' })).toBeVisible();
+  expect(await readFile(APP, 'utf8')).toBe(before.content);
+  await expect(readFile(CUP_ICON, 'utf8')).rejects.toThrow();
 });

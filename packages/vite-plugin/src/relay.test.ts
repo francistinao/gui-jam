@@ -76,6 +76,7 @@ describe('terminalLine', () => {
               style: 'Soft',
               rationale: 'r',
               file: 'src/A.tsx',
+              created: [],
               changes: [],
             },
           ],

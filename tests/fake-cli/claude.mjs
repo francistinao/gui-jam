@@ -73,13 +73,40 @@ if (/slow/i.test(request)) {
       images.length > 0
         ? {
             variants: [
-              variant(
-                'Sketched card',
-                'Card',
-                'A card built from the sketch.',
-                '<OrderButton />',
-                '<OrderButton />\n            <span className="rounded-card bg-white px-4 py-2 shadow">Sketched card</span>',
-              ),
+              {
+                ...variant(
+                  'Sketched card',
+                  'Card',
+                  'A card with a cup icon, built from the sketch.',
+                  '<OrderButton />',
+                  '<OrderButton />\n            <span className="flex items-center gap-2 rounded-card bg-white px-4 py-2 shadow"><img src={cupIcon} alt="Cup icon" className="size-6" />Sketched card</span>',
+                ),
+                ops: [
+                  {
+                    kind: 'replace_snippet',
+                    file,
+                    base_hash: baseHash,
+                    find: "import { Counter } from './components/Counter';",
+                    replace:
+                      "import cupIcon from './assets/icons/cup-icon.svg';\nimport { Counter } from './components/Counter';",
+                  },
+                  {
+                    kind: 'replace_snippet',
+                    file,
+                    base_hash: baseHash,
+                    find: '<OrderButton />',
+                    replace:
+                      '<OrderButton />\n            <span className="flex items-center gap-2 rounded-card bg-white px-4 py-2 shadow"><img src={cupIcon} alt="Cup icon" className="size-6" />Sketched card</span>',
+                  },
+                ],
+                assets: [
+                  {
+                    name: 'cup-icon',
+                    format: 'svg',
+                    svg: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 9h12v5a5 5 0 0 1-5 5H9a5 5 0 0 1-5-5z" fill="#3b2418"/></svg>',
+                  },
+                ],
+              },
             ],
           }
         : headerImage

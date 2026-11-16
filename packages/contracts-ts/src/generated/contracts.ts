@@ -137,6 +137,76 @@ export interface Variant {
   rationale: string;
   missing: string[];
   ops: [EditOp, ...EditOp[]];
+  assets?:
+    | []
+    | [
+        {
+          name: string;
+          format: 'svg' | 'webp';
+          svg: string;
+          width?: number;
+        }
+      ]
+    | [
+        {
+          name: string;
+          format: 'svg' | 'webp';
+          svg: string;
+          width?: number;
+        },
+        {
+          name: string;
+          format: 'svg' | 'webp';
+          svg: string;
+          width?: number;
+        }
+      ]
+    | [
+        {
+          name: string;
+          format: 'svg' | 'webp';
+          svg: string;
+          width?: number;
+        },
+        {
+          name: string;
+          format: 'svg' | 'webp';
+          svg: string;
+          width?: number;
+        },
+        {
+          name: string;
+          format: 'svg' | 'webp';
+          svg: string;
+          width?: number;
+        }
+      ]
+    | [
+        {
+          name: string;
+          format: 'svg' | 'webp';
+          svg: string;
+          width?: number;
+        },
+        {
+          name: string;
+          format: 'svg' | 'webp';
+          svg: string;
+          width?: number;
+        },
+        {
+          name: string;
+          format: 'svg' | 'webp';
+          svg: string;
+          width?: number;
+        },
+        {
+          name: string;
+          format: 'svg' | 'webp';
+          svg: string;
+          width?: number;
+        }
+      ];
 }
 export interface UpdateResult {
   updateId: string;
@@ -417,6 +487,7 @@ export interface VariantPreview {
   rationale: string;
   file: string;
   changes: CodeChange[];
+  created: string[];
 }
 export interface GenerateCancelMessage {
   type: 'generate.cancel';

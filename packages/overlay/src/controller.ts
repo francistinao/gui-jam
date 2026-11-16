@@ -18,9 +18,11 @@ import {
   type HexColor,
   hexOfComputedColor,
   intersects,
+  invertChanges,
   type Point,
   type Rect,
   samplePoints,
+  shiftedLine,
   type Tool,
   unionRect,
 } from './model';
@@ -206,6 +208,7 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
   let editSequence = 0;
   let runId: string | null = null;
   let selectSequence = 0;
+  const committed = new Map<string, CodeChange[]>();
   const styled = new Set<HTMLElement>();
 
   host.onEvent((message) => {
@@ -519,11 +522,16 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
         notify(failure(reply), UNDO_WINDOW_MS);
         return;
       }
-      const element = elementsAt(selection.src)[0];
+      committed.set(reply.payload.journalId, variant.changes);
+      const line = shiftedLine(selection.line, variant.changes);
+      const src = `${selection.file}:${line}:${selection.column}`;
+      const moved: Selection = { ...selection, line, src };
+      const element = elementsAt(src)[0];
       store.set({
         busy: false,
         sketch: null,
         mode: 'finetune',
+        selection: moved,
         generation: IDLE_GENERATION,
         style: null,
         current: element ? readCurrent(element) : null,
@@ -532,7 +540,7 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
         { kind: 'info', message: appliedTo(selection), undoJournalId: reply.payload.journalId },
         UNDO_WINDOW_MS,
       );
-      await inspect(selection);
+      await inspect(moved);
     },
 
     hover(element: Element | null): void {
@@ -593,7 +601,17 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
       }
       notify({ kind: 'info', message: 'Change undone.' });
       const { selection } = store.get();
-      if (selection) await inspect(selection);
+      if (!selection) return;
+      const changes = committed.get(journalId);
+      committed.delete(journalId);
+      const line = changes ? shiftedLine(selection.line, invertChanges(changes)) : selection.line;
+      const moved: Selection = {
+        ...selection,
+        line,
+        src: `${selection.file}:${line}:${selection.column}`,
+      };
+      store.set({ selection: moved });
+      await inspect(moved);
     },
 
     async close(): Promise<void> {
