@@ -1,5 +1,6 @@
 import type { GuijamMessage } from '@guijam/contracts-ts';
 import type { Tool, Widget, WidgetHost, WidgetModule } from '@guijam/overlay/host';
+import { createElement, type IconNode, MousePointer, Pencil } from 'lucide';
 import { LOGO_DATA_URL } from './logo.js';
 
 type HotContext = NonNullable<ImportMeta['hot']>;
@@ -8,35 +9,55 @@ const WIDGET_URL = '/@guijam/widget.js';
 const REQUEST_TIMEOUT_MS = 20_000;
 const GENERATION_TIMEOUT_MS = 155_000;
 
-const TOOLS: readonly { tool: Tool; label: string; icon: string }[] = [
-  {
-    tool: 'select',
-    label: 'Select',
-    icon: '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M5 3l14 7-6.2 1.8L10.9 18z" fill="currentColor"/></svg>',
-  },
-  {
-    tool: 'draw',
-    label: 'Draw',
-    icon: '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M4 20l1.2-4.6L15.6 5a2 2 0 0 1 2.8 0l.6.6a2 2 0 0 1 0 2.8L8.6 18.8z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>',
-  },
+export interface ToolSpec {
+  tool: Tool;
+  label: string;
+  icon: IconNode;
+}
+
+export const TOOLS: readonly ToolSpec[] = [
+  { tool: 'select', label: 'Select object', icon: MousePointer },
+  { tool: 'draw', label: 'Draw', icon: Pencil },
 ];
+
+export const EXIT_HINT = 'Press Esc to exit';
+
+export function tooltipFor(spec: ToolSpec, active: Tool | null): string {
+  return active === spec.tool ? EXIT_HINT : spec.label;
+}
 
 const TOOLBAR_CSS = `
 :host { all: initial; }
 .toolbar {
-  position: fixed; right: 20px; bottom: 20px; display: flex; align-items: center; gap: 4px;
+  position: fixed; right: 20px; bottom: 20px; z-index: 2147483647;
+  display: flex; align-items: center; gap: 4px;
   padding: 6px; border-radius: 12px; background: #1e1e1e;
   box-shadow: 0 2px 5px #00000026, 0 10px 24px #0000002e, 0 0 0.5px #00000014;
   font: 12px/1 Inter, system-ui, sans-serif;
 }
 .logo { width: 32px; height: 32px; border-radius: 8px; background: #fafafa; padding: 3px; box-sizing: border-box; }
+.slot { position: relative; display: grid; }
 .tool {
   width: 32px; height: 32px; display: grid; place-items: center; border: 0; border-radius: 8px;
-  background: transparent; color: #fff; cursor: pointer;
+  background: transparent; color: #fff; cursor: pointer; padding: 0;
 }
 .tool:hover { background: #383838; }
 .tool[aria-pressed="true"] { background: #0d99ff; }
 .tool:focus-visible { outline: 2px solid #0d99ff; outline-offset: 2px; }
+.tool svg { width: 18px; height: 18px; }
+.tool .key {
+  display: none; padding: 1px 4px; border-radius: 4px; border: 1px solid #ffffffb3;
+  font: 600 10px/1.2 Inter, system-ui, sans-serif; letter-spacing: 0.02em;
+}
+.tool[aria-pressed="true"] .icon { display: none; }
+.tool[aria-pressed="true"] .key { display: block; }
+.tip {
+  position: absolute; bottom: calc(100% + 10px); left: 50%; transform: translateX(-50%);
+  white-space: nowrap; padding: 5px 8px; border-radius: 6px; background: #1e1e1e; color: #fff;
+  font: 500 11px/1.2 Inter, system-ui, sans-serif; box-shadow: 0 2px 8px #00000040;
+  visibility: hidden; opacity: 0; transition: opacity 120ms ease; pointer-events: none;
+}
+.slot:hover .tip, .tool:focus-visible + .tip { visibility: visible; opacity: 1; }
 `;
 
 function isWidgetModule(value: unknown): value is WidgetModule {
@@ -101,16 +122,32 @@ export function bootToolbar(hot: HotContext): void {
   logo.className = 'logo';
   logo.src = LOGO_DATA_URL;
   logo.alt = 'GUIJam';
-  const buttons = TOOLS.map(({ tool, label, icon }) => {
+  const buttons = TOOLS.map((spec) => {
+    const slot = document.createElement('div');
+    slot.className = 'slot';
     const button = document.createElement('button');
     button.type = 'button';
     button.className = 'tool';
-    button.setAttribute('aria-label', label);
+    button.setAttribute('aria-label', spec.label);
     button.setAttribute('aria-pressed', 'false');
-    button.innerHTML = icon;
-    return { tool, button };
+    const icon = document.createElement('span');
+    icon.className = 'icon';
+    icon.append(createElement(spec.icon, { 'aria-hidden': 'true' }));
+    const key = document.createElement('span');
+    key.className = 'key';
+    key.setAttribute('aria-hidden', 'true');
+    key.textContent = 'Esc';
+    button.append(icon, key);
+    const tip = document.createElement('div');
+    tip.className = 'tip';
+    tip.id = `guijam-tip-${spec.tool}`;
+    tip.setAttribute('role', 'tooltip');
+    tip.textContent = tooltipFor(spec, null);
+    button.setAttribute('aria-describedby', tip.id);
+    slot.append(button, tip);
+    return { spec, tool: spec.tool, button, tip, slot };
   });
-  toolbar.append(logo, ...buttons.map(({ button }) => button));
+  toolbar.append(logo, ...buttons.map(({ slot }) => slot));
   shadowRoot.append(toolbar);
 
   const request = createRequester(hot);
@@ -127,8 +164,12 @@ export function bootToolbar(hot: HotContext): void {
 
   const show = (tool: Tool | null) => {
     active = tool;
-    for (const { tool: own, button } of buttons) {
-      button.setAttribute('aria-pressed', String(own === tool));
+    for (const { spec, button, tip } of buttons) {
+      const pressed = spec.tool === tool;
+      button.setAttribute('aria-pressed', String(pressed));
+      if (pressed) button.setAttribute('aria-keyshortcuts', 'Escape');
+      else button.removeAttribute('aria-keyshortcuts');
+      tip.textContent = tooltipFor(spec, tool);
     }
   };
 
@@ -157,7 +198,12 @@ export function bootToolbar(hot: HotContext): void {
   }
 
   document.addEventListener('keydown', (event) => {
-    if (event.altKey && event.shiftKey && event.code === 'KeyM')
-      hostElement.hidden = !hostElement.hidden;
+    if (!(event.altKey && event.shiftKey && event.code === 'KeyM')) return;
+    hostElement.hidden = !hostElement.hidden;
+    if (!hostElement.hidden || active === null || !widget) return;
+    void widget.then((loaded) => {
+      loaded.setTool(null);
+      show(null);
+    });
   });
 }

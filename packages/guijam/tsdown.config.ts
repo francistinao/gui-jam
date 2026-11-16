@@ -7,7 +7,7 @@ export default defineConfig({
   fixedExtension: false,
   copy: [{ from: '../vite-plugin/dist/widget.js' }],
   deps: {
-    onlyBundle: [],
+    onlyBundle: ['lucide'],
     onlyImport: ['vite', 'magic-string', 'oxc-parser', '@clack/prompts'],
   },
 });

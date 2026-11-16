@@ -1,4 +1,5 @@
 import type { ElementStyle, StyleGroup, StyleToken } from '@guijam/contracts-ts';
+import { Minus } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import type { Controller, Draft, WidgetState } from './controller';
 import { Button } from './figui/button';
@@ -204,7 +205,7 @@ function FillEditor({
           aria-label="Remove fill"
           onClick={() => controller.edit({ fill: { kind: 'none' } })}
         >
-          −
+          <Minus aria-hidden="true" />
         </Button>
       </div>
       {style.theme.colors.length > 0 ? (

@@ -1,3 +1,4 @@
+import { Circle, CircleCheck, LoaderCircle } from 'lucide-react';
 import { AnswerPanel } from './AnswerPanel';
 import type { Controller, ProgressStep, WidgetState } from './controller';
 import { Button } from './figui/button';
@@ -14,24 +15,18 @@ interface PanelProps {
 
 function StepIcon({ state }: { state: ProgressStep['state'] }) {
   if (state === 'done') {
+    return <CircleCheck aria-hidden="true" className="size-4 flex-none text-green-600" />;
+  }
+  if (state === 'active') {
     return (
-      <svg viewBox="0 0 16 16" className="size-4 flex-none text-green-600" aria-hidden="true">
-        <circle cx="8" cy="8" r="7" fill="currentColor" />
-        <path d="M4.8 8.2l2.1 2.1 4.3-4.6" fill="none" stroke="white" strokeWidth="1.6" />
-      </svg>
+      <LoaderCircle
+        aria-hidden="true"
+        data-spinner=""
+        className="size-4 flex-none animate-spin text-blue-500"
+      />
     );
   }
-  return (
-    <span
-      aria-hidden="true"
-      className={cn(
-        'size-4 flex-none rounded-full border-2',
-        state === 'active'
-          ? 'animate-spin border-blue-500 border-t-transparent'
-          : 'border-grey-300',
-      )}
-    />
-  );
+  return <Circle aria-hidden="true" className="size-4 flex-none text-grey-300" />;
 }
 
 function Progress({ steps }: { steps: readonly ProgressStep[] }) {

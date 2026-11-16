@@ -1,4 +1,5 @@
 import type { CodeChange } from '@guijam/contracts-ts';
+import { X } from 'lucide-react';
 import { type ReactNode, useCallback, useState } from 'react';
 import type { Controller, Selection } from './controller';
 import { Button } from './figui/button';
@@ -86,7 +87,7 @@ export function PopoverHeader({
           aria-label="Close"
           onClick={() => void controller.close()}
         >
-          ×
+          <X aria-hidden="true" />
         </Button>
       </div>
     </header>

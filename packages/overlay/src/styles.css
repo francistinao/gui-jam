@@ -7,6 +7,7 @@
 .guijam-layer {
   position: fixed;
   inset: 0;
+  z-index: 2147483646;
   pointer-events: none;
   font-family: var(--text-body-medium-font-family);
   color: var(--color-black-800);

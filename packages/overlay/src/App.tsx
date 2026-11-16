@@ -1,3 +1,4 @@
+import { X } from 'lucide-react';
 import type { Controller, WidgetState } from './controller';
 import { FinetunePanel } from './FinetunePanel';
 import { Button } from './figui/button';
@@ -41,7 +42,7 @@ function Notice({ store, controller }: { store: Store<WidgetState>; controller: 
         </Button>
       ) : null}
       <Button variant="ghost" size="icon" aria-label="Dismiss" onClick={controller.dismissNotice}>
-        ×
+        <X aria-hidden="true" />
       </Button>
     </div>
   );
