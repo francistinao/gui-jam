@@ -1,0 +1,367 @@
+//! Finds the JSX element a `data-gj-src` position points at and reads how its
+//! `className` is written, so edits touch only the literal that holds the classes.
+
+use std::ops::Range;
+
+use oxc_allocator::Allocator;
+use oxc_ast::ast::{
+    Expression, JSXAttributeItem, JSXAttributeName, JSXAttributeValue, JSXOpeningElement,
+    StringLiteral,
+};
+use oxc_ast_visit::{Visit, walk};
+use oxc_parser::Parser;
+use oxc_span::{GetSpan, SourceType, Span};
+
+use crate::srcloc::LineIndex;
+
+const CLASS_HELPERS: [&str; 5] = ["cn", "clsx", "classnames", "classNames", "cx"];
+
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum JsxError {
+    #[error("{0} is not a JavaScript or TypeScript file")]
+    UnsupportedFile(String),
+    #[error("the file does not parse: {0}")]
+    Syntax(String),
+    #[error("no JSX element starts at {line}:{column}")]
+    ElementNotFound { line: u64, column: u64 },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClassLiteral {
+    pub value: String,
+    /// Byte range of the text between the quotes.
+    pub range: Range<usize>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ClassSource {
+    /// No `className`; one can be inserted at [`JsxElement::insert_at`].
+    None,
+    Static(ClassLiteral),
+    /// `cn('…', cond && '…')`: the first string argument is editable. Strings in the
+    /// other arguments apply only under a condition and are never rewritten.
+    Call {
+        literal: ClassLiteral,
+        conditional: Vec<String>,
+    },
+    /// Computed at runtime, or overridable by spread props: only an AI edit can change it.
+    Dynamic,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JsxElement {
+    pub tag: String,
+    /// Byte offset right after the tag name, where a new attribute can be inserted.
+    pub insert_at: usize,
+    pub class: ClassSource,
+}
+
+fn source_type(path: &str) -> Result<SourceType, JsxError> {
+    SourceType::from_path(path).map_err(|_| JsxError::UnsupportedFile(path.to_owned()))
+}
+
+/// Fails with the first parser error when `source` is not valid for its extension.
+pub fn check_syntax(path: &str, source: &str) -> Result<(), JsxError> {
+    let allocator = Allocator::default();
+    let parsed = Parser::new(&allocator, source, source_type(path)?).parse();
+    first_error(&parsed.diagnostics, parsed.fatal_error)
+}
+
+pub fn find_element(
+    path: &str,
+    source: &str,
+    line: u64,
+    column: u64,
+) -> Result<JsxElement, JsxError> {
+    let not_found = JsxError::ElementNotFound { line, column };
+    let offset = LineIndex::new(source)
+        .offset(line, column)
+        .ok_or_else(|| not_found.clone())?;
+    let allocator = Allocator::default();
+    let parsed = Parser::new(&allocator, source, source_type(path)?).parse();
+    first_error(&parsed.diagnostics, parsed.fatal_error)?;
+
+    let mut finder = ElementFinder {
+        source,
+        offset,
+        found: None,
+    };
+    finder.visit_program(&parsed.program);
+    finder.found.ok_or(not_found)
+}
+
+fn first_error(diagnostics: &oxc_diagnostics::Diagnostics, fatal: bool) -> Result<(), JsxError> {
+    if let Some(error) = diagnostics.errors().next() {
+        return Err(JsxError::Syntax(error.to_string()));
+    }
+    if fatal {
+        return Err(JsxError::Syntax("unrecoverable parse error".to_owned()));
+    }
+    Ok(())
+}
+
+struct ElementFinder<'s> {
+    source: &'s str,
+    offset: usize,
+    found: Option<JsxElement>,
+}
+
+impl<'a> Visit<'a> for ElementFinder<'_> {
+    fn visit_jsx_opening_element(&mut self, it: &JSXOpeningElement<'a>) {
+        if self.found.is_none() && span_range(it.span).start == self.offset {
+            self.found = Some(describe(self.source, it));
+        }
+        walk::walk_jsx_opening_element(self, it);
+    }
+}
+
+fn span_range(span: Span) -> Range<usize> {
+    span.start as usize..span.end as usize
+}
+
+fn describe(source: &str, element: &JSXOpeningElement<'_>) -> JsxElement {
+    let mut class = ClassSource::None;
+    let mut class_index = None;
+    let mut last_spread = None;
+    for (index, item) in element.attributes.iter().enumerate() {
+        match item {
+            JSXAttributeItem::Attribute(attribute) if is_class_name(&attribute.name) => {
+                class = read_class(source, attribute.value.as_ref());
+                class_index = Some(index);
+            }
+            JSXAttributeItem::SpreadAttribute(_) => last_spread = Some(index),
+            JSXAttributeItem::Attribute(_) => {}
+        }
+    }
+    let overridable = match (class_index, last_spread) {
+        (Some(class_at), Some(spread_at)) => spread_at > class_at,
+        (None, Some(_)) => true,
+        _ => false,
+    };
+    JsxElement {
+        tag: element.name.to_string(),
+        insert_at: span_range(element.name.span()).end,
+        class: if overridable {
+            ClassSource::Dynamic
+        } else {
+            class
+        },
+    }
+}
+
+fn is_class_name(name: &JSXAttributeName<'_>) -> bool {
+    matches!(name, JSXAttributeName::Identifier(identifier) if identifier.name == "className")
+}
+
+fn read_class(source: &str, value: Option<&JSXAttributeValue<'_>>) -> ClassSource {
+    match value {
+        // JSX attribute strings have no backslash escapes, so the raw text is the value.
+        Some(JSXAttributeValue::StringLiteral(literal)) => {
+            ClassSource::Static(between_delimiters(source, literal.span))
+        }
+        Some(JSXAttributeValue::ExpressionContainer(container)) => container
+            .expression
+            .as_expression()
+            .map_or(ClassSource::Dynamic, |expression| {
+                read_class_expression(source, expression)
+            }),
+        _ => ClassSource::Dynamic,
+    }
+}
+
+fn read_class_expression(source: &str, expression: &Expression<'_>) -> ClassSource {
+    match expression {
+        Expression::StringLiteral(literal) => {
+            plain_js_string(source, literal).map_or(ClassSource::Dynamic, ClassSource::Static)
+        }
+        Expression::TemplateLiteral(template) if template.expressions.is_empty() => {
+            let literal = between_delimiters(source, template.span);
+            if literal.value.contains('\\') {
+                ClassSource::Dynamic
+            } else {
+                ClassSource::Static(literal)
+            }
+        }
+        Expression::ParenthesizedExpression(inner) => {
+            read_class_expression(source, &inner.expression)
+        }
+        Expression::CallExpression(call) if is_class_helper(&call.callee) => {
+            let mut arguments = call.arguments.iter();
+            let literal = arguments
+                .next()
+                .and_then(|first| match first.as_expression() {
+                    Some(Expression::StringLiteral(literal)) => plain_js_string(source, literal),
+                    _ => None,
+                });
+            let Some(literal) = literal else {
+                return ClassSource::Dynamic;
+            };
+            let mut strings = StringCollector::default();
+            for argument in arguments {
+                if let Some(expression) = argument.as_expression() {
+                    strings.visit_expression(expression);
+                }
+            }
+            ClassSource::Call {
+                literal,
+                conditional: strings.values,
+            }
+        }
+        _ => ClassSource::Dynamic,
+    }
+}
+
+fn is_class_helper(callee: &Expression<'_>) -> bool {
+    matches!(callee, Expression::Identifier(identifier) if CLASS_HELPERS.contains(&identifier.name.as_str()))
+}
+
+fn between_delimiters(source: &str, span: Span) -> ClassLiteral {
+    let range = span_range(span);
+    let inner = range.start + 1..range.end - 1;
+    ClassLiteral {
+        value: source[inner.clone()].to_owned(),
+        range: inner,
+    }
+}
+
+// Escapes would make the raw text differ from the value, so such literals are not edited.
+fn plain_js_string(source: &str, literal: &StringLiteral<'_>) -> Option<ClassLiteral> {
+    let inner = between_delimiters(source, literal.span);
+    (!inner.value.contains('\\')).then_some(inner)
+}
+
+#[derive(Default)]
+struct StringCollector {
+    values: Vec<String>,
+}
+
+impl<'a> Visit<'a> for StringCollector {
+    fn visit_string_literal(&mut self, it: &StringLiteral<'a>) {
+        if let Some(value) = it.value.as_str() {
+            self.values.push(value.to_owned());
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ClassLiteral, ClassSource, JsxError, check_syntax, find_element};
+
+    const FILE: &str = "src/A.tsx";
+
+    fn class_of(source: &str, line: u64, column: u64) -> ClassSource {
+        find_element(FILE, source, line, column)
+            .expect("element found")
+            .class
+    }
+
+    fn literal(source: &str, value: &str) -> ClassLiteral {
+        let start = source.find(value).expect("value present");
+        ClassLiteral {
+            value: value.to_owned(),
+            range: start..start + value.len(),
+        }
+    }
+
+    #[test]
+    fn reads_a_plain_class_name_string() {
+        let source = r#"const a = <button className="rounded-lg bg-brand">Go</button>;"#;
+
+        assert_eq!(
+            class_of(source, 1, 11),
+            ClassSource::Static(literal(source, "rounded-lg bg-brand"))
+        );
+    }
+
+    #[test]
+    fn reads_braced_strings_and_plain_template_literals() {
+        let braced = "const a = <i className={'p-2 bg-red-500'} />;";
+        let template = "const a = <i className={`p-2 bg-red-500`} />;";
+
+        assert_eq!(
+            class_of(braced, 1, 11),
+            ClassSource::Static(literal(braced, "p-2 bg-red-500"))
+        );
+        assert_eq!(
+            class_of(template, 1, 11),
+            ClassSource::Static(literal(template, "p-2 bg-red-500"))
+        );
+    }
+
+    #[test]
+    fn treats_the_first_cn_argument_as_editable_and_the_rest_as_conditional() {
+        let source =
+            "const a = <b className={cn('px-4 border', on && 'font-semibold', x ? 'a' : 'b')} />;";
+
+        assert_eq!(
+            class_of(source, 1, 11),
+            ClassSource::Call {
+                literal: literal(source, "px-4 border"),
+                conditional: vec!["font-semibold".to_owned(), "a".to_owned(), "b".to_owned()],
+            }
+        );
+    }
+
+    #[test]
+    fn treats_computed_class_names_as_dynamic() {
+        for source in [
+            "const a = <b className={styles.button} />;",
+            "const a = <b className={`p-2 ${size}`} />;",
+            "const a = <b className={cn(base, 'p-2')} />;",
+            r#"const a = <b className={"p-2\n"} />;"#,
+        ] {
+            assert_eq!(class_of(source, 1, 11), ClassSource::Dynamic, "{source}");
+        }
+    }
+
+    #[test]
+    fn treats_a_class_that_spread_props_can_override_as_dynamic() {
+        let after = r#"const a = <b className="p-2" {...rest} />;"#;
+        let only_spread = "const a = <b {...rest} />;";
+        let before = r#"const a = <b {...rest} className="p-2" />;"#;
+
+        assert_eq!(class_of(after, 1, 11), ClassSource::Dynamic);
+        assert_eq!(class_of(only_spread, 1, 11), ClassSource::Dynamic);
+        assert_eq!(
+            class_of(before, 1, 11),
+            ClassSource::Static(literal(before, "p-2"))
+        );
+    }
+
+    #[test]
+    fn reports_where_a_class_name_can_be_inserted() {
+        let source = r#"const a = <section id="x">hi</section>;"#;
+
+        let element = find_element(FILE, source, 1, 11).expect("element found");
+
+        assert_eq!(element.tag, "section");
+        assert_eq!(element.class, ClassSource::None);
+        assert_eq!(&source[element.insert_at..element.insert_at + 4], " id=");
+    }
+
+    #[test]
+    fn finds_an_element_after_korean_text_on_the_same_line() {
+        let source = "const p = <p>오늘의 추천 <span className=\"font-semibold\">x</span></p>;";
+
+        let element = find_element(FILE, source, 1, 21).expect("element found");
+
+        assert_eq!(element.tag, "span");
+    }
+
+    #[test]
+    fn reports_a_missing_element_and_a_syntax_error() {
+        assert_eq!(
+            find_element(FILE, "const a = <b />;", 1, 2),
+            Err(JsxError::ElementNotFound { line: 1, column: 2 })
+        );
+        assert!(matches!(
+            find_element(FILE, "const a = <b>;", 1, 11),
+            Err(JsxError::Syntax(_))
+        ));
+        assert!(check_syntax(FILE, "const a = <b />;").is_ok());
+        assert!(matches!(
+            check_syntax("styles.css", "a {}"),
+            Err(JsxError::UnsupportedFile(_))
+        ));
+    }
+}

@@ -10,6 +10,8 @@ const ROOT_SCHEMAS = [
   'edit-op.schema.json',
   'variant-set.schema.json',
   'update-result.schema.json',
+  'element-style.schema.json',
+  'finetune.schema.json',
 ];
 
 const OUTPUTS = {
@@ -41,8 +43,9 @@ function bundle(byFile) {
     if (node === null || typeof node !== 'object') return node;
     const out = {};
     for (const [key, value] of Object.entries(node)) {
-      if (key === '$ref' && titleByFile.has(value)) {
-        out[key] = `#/$defs/${titleByFile.get(value)}`;
+      const [refFile, refPointer] = key === '$ref' ? String(value).split('#', 2) : [];
+      if (refFile && titleByFile.has(refFile)) {
+        out[key] = refPointer ? `#${refPointer}` : `#/$defs/${titleByFile.get(refFile)}`;
       } else {
         out[key] = rewriteRefs(value);
       }

@@ -1,0 +1,81 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "finetune.schema.json",
+  "title": "FinetuneProps",
+  "description": "The fine-tune panel's current tweaks for one element. Each set property replaces that style group's base-state tokens; omitted properties leave the source alone.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "fill": { "$ref": "#/$defs/FillValue" },
+    "radius": { "$ref": "#/$defs/RadiusValue" }
+  },
+  "$defs": {
+    "FillValue": {
+      "oneOf": [
+        {
+          "title": "FillToken",
+          "type": "object",
+          "required": ["kind", "name"],
+          "additionalProperties": false,
+          "properties": {
+            "kind": { "type": "string", "const": "token" },
+            "name": { "type": "string", "minLength": 1 }
+          }
+        },
+        {
+          "title": "FillHex",
+          "type": "object",
+          "required": ["kind", "hex", "opacity"],
+          "additionalProperties": false,
+          "properties": {
+            "kind": { "type": "string", "const": "hex" },
+            "hex": { "type": "string", "pattern": "^#[0-9A-Fa-f]{6}$" },
+            "opacity": { "type": "integer", "minimum": 0, "maximum": 100 }
+          }
+        },
+        {
+          "title": "FillNone",
+          "type": "object",
+          "required": ["kind"],
+          "additionalProperties": false,
+          "properties": {
+            "kind": { "type": "string", "const": "none" }
+          }
+        }
+      ]
+    },
+    "RadiusValue": {
+      "oneOf": [
+        {
+          "title": "RadiusToken",
+          "type": "object",
+          "required": ["kind", "name"],
+          "additionalProperties": false,
+          "properties": {
+            "kind": { "type": "string", "const": "token" },
+            "name": { "type": "string", "minLength": 1 }
+          }
+        },
+        {
+          "title": "RadiusPx",
+          "type": "object",
+          "required": ["kind", "px"],
+          "additionalProperties": false,
+          "properties": {
+            "kind": { "type": "string", "const": "px" },
+            "px": { "type": "integer", "minimum": 0, "maximum": 999 }
+          }
+        },
+        {
+          "title": "RadiusFull",
+          "type": "object",
+          "required": ["kind"],
+          "additionalProperties": false,
+          "properties": {
+            "kind": { "type": "string", "const": "full" }
+          }
+        }
+      ]
+    }
+  }
+}

@@ -1,3 +1,13 @@
+pub mod codemod;
+pub mod journal;
+pub mod jsx;
+pub mod patch;
+pub mod policy;
+pub mod srcloc;
+pub mod style;
+pub mod tailwind;
+pub mod theme;
+
 pub mod contracts {
     #![allow(clippy::all, clippy::pedantic)]
     include!(concat!(env!("OUT_DIR"), "/contracts.rs"));

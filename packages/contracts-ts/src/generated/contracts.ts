@@ -14,6 +14,9 @@ export type ProjectPath = string;
  */
 export type ContentHash = string;
 export type JsxValue = JsxStringValue | JsxExpressionValue;
+export type StyleGroup = 'fill' | 'radius' | 'stroke' | 'text' | 'effects' | 'opacity';
+export type FillValue = FillToken | FillHex | FillNone;
+export type RadiusValue = RadiusToken | RadiusPx | RadiusFull;
 
 /**
  * find must occur exactly once in the file.
@@ -119,4 +122,71 @@ export interface UpdateError {
   line?: number;
   stack?: string;
   attributed: boolean;
+}
+/**
+ * What the fine-tune panel knows about one JSX element, read from its source. classSource says how className is written: none (no className, one can be added), static (a literal), call (cn()/clsx(); the first literal is editable) or dynamic (not editable; use Ask AI).
+ */
+export interface ElementStyle {
+  file: string;
+  line: number;
+  column: number;
+  tag: string;
+  baseHash: ContentHash;
+  classSource: 'none' | 'static' | 'call' | 'dynamic';
+  tokens: StyleToken[];
+  theme: ThemeTokens;
+}
+/**
+ * One class token that belongs to a style group. editable is false for variant-prefixed tokens (hover:, md:) and for tokens that only apply under a condition.
+ */
+export interface StyleToken {
+  token: string;
+  group: StyleGroup;
+  property: string;
+  variants: string[];
+  themeToken?: string;
+  value?: string;
+  editable: boolean;
+}
+export interface ThemeTokens {
+  colors: ThemeColor[];
+  radii: ThemeRadius[];
+}
+export interface ThemeColor {
+  name: string;
+  value: string;
+}
+export interface ThemeRadius {
+  name: string;
+  px: number;
+}
+/**
+ * The fine-tune panel's current tweaks for one element. Each set property replaces that style group's base-state tokens; omitted properties leave the source alone.
+ */
+export interface FinetuneProps {
+  fill?: FillValue;
+  radius?: RadiusValue;
+}
+export interface FillToken {
+  kind: 'token';
+  name: string;
+}
+export interface FillHex {
+  kind: 'hex';
+  hex: string;
+  opacity: number;
+}
+export interface FillNone {
+  kind: 'none';
+}
+export interface RadiusToken {
+  kind: 'token';
+  name: string;
+}
+export interface RadiusPx {
+  kind: 'px';
+  px: number;
+}
+export interface RadiusFull {
+  kind: 'full';
 }
