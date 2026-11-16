@@ -12,7 +12,7 @@ const WIDGET_REQUEST_TYPES = [
   'generate.discard',
 ] as const satisfies readonly GuijamMessage['type'][];
 
-const GENERATION_REPLY_MS = 90_000;
+const GENERATION_REPLY_MS = 150_000;
 
 export function replyWindowMs(type: GuijamMessage['type']): number | undefined {
   return type === 'generate.request' ? GENERATION_REPLY_MS : undefined;

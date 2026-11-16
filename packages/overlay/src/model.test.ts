@@ -14,6 +14,7 @@ import {
   placePopover,
   RADIUS_RANGE,
   radiusOfToken,
+  splitPaths,
 } from './model';
 
 const token = (raw: string, group: StyleToken['group'], editable = true): StyleToken => ({
@@ -219,5 +220,20 @@ describe('droppedNote', () => {
     expect(droppedNote([{ reason: 'It is the same as another variant.' }, { reason: 'x' }])).toBe(
       '2 variants were dropped: It is the same as another variant.',
     );
+  });
+});
+
+describe('splitPaths', () => {
+  it('pulls project paths with optional line and column out of an answer', () => {
+    expect(
+      splitPaths('It is src/assets/logo.png, imported in src/App.tsx:12:7 as `logo`.'),
+    ).toEqual([
+      { at: 0, text: 'It is ' },
+      { at: 6, path: 'src/assets/logo.png' },
+      { at: 25, text: ', imported in ' },
+      { at: 39, path: 'src/App.tsx:12:7' },
+      { at: 55, text: ' as `logo`.' },
+    ]);
+    expect(splitPaths('No files here.')).toEqual([{ at: 0, text: 'No files here.' }]);
   });
 });

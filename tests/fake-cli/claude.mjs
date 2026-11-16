@@ -33,6 +33,15 @@ if (/slow/i.test(text)) {
 } else if (/crash/i.test(text)) {
   process.stderr.write('fake claude: crashed\n');
   process.exit(1);
+} else if (/^Request: .*\?$/m.test(text)) {
+  const [, at] = /^Element: <\w+> at (.+:\d+):\d+$/m.exec(text);
+  print({
+    type: 'result',
+    subtype: 'success',
+    is_error: false,
+    total_cost_usd: 0,
+    structured_output: { answer: `It is rendered at ${at}.`, variants: [] },
+  });
 } else {
   if (/pause/i.test(text)) await new Promise((resolve) => setTimeout(resolve, 1500));
   const [, file] = /^Element: <\w+> at (.+):\d+:\d+$/m.exec(text);

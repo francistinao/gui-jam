@@ -6,7 +6,7 @@ type HotContext = NonNullable<ImportMeta['hot']>;
 
 const WIDGET_URL = '/@guijam/widget.js';
 const REQUEST_TIMEOUT_MS = 20_000;
-const GENERATION_TIMEOUT_MS = 95_000;
+const GENERATION_TIMEOUT_MS = 155_000;
 
 const TOOLS: readonly { tool: Tool; label: string; icon: string }[] = [
   {

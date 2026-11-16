@@ -60,6 +60,7 @@ export interface Generation {
   dropped: GenerateDone['dropped'];
   route: Route | null;
   elapsedMs: number;
+  answer: string | null;
   error: Notice | null;
 }
 
@@ -73,6 +74,7 @@ const IDLE_GENERATION: Generation = {
   dropped: [],
   route: null,
   elapsedMs: 0,
+  answer: null,
   error: null,
 };
 
@@ -295,6 +297,53 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
     }
   }
 
+  async function run(forceAi: boolean): Promise<void> {
+    const { selection, generation } = store.get();
+    const prompt = generation.prompt.trim();
+    if (!selection || !prompt || generation.status !== 'idle') return;
+    const id = crypto.randomUUID();
+    runId = id;
+    store.set({ generation: { ...IDLE_GENERATION, prompt, status: 'running', runId: id } });
+    const reply = await host.request({
+      type: 'generate.request',
+      payload: {
+        runId: id,
+        file: selection.file,
+        line: selection.line,
+        column: selection.column,
+        prompt,
+        ...(forceAi ? { forceAi } : {}),
+      },
+    });
+    if (runId !== id) {
+      if (reply.type === 'generate.done') {
+        void host.request({ type: 'generate.discard', payload: { runId: id } });
+      }
+      return;
+    }
+    runId = null;
+    const latest = store.get().generation;
+    if (reply.type !== 'generate.done') {
+      store.set({
+        generation: { ...IDLE_GENERATION, prompt: latest.prompt, error: failure(reply) },
+      });
+      return;
+    }
+    const { variants, dropped, route, elapsedMs, answer } = reply.payload;
+    store.set({
+      generation: {
+        ...latest,
+        status: 'ready',
+        variants: [...variants],
+        active: 0,
+        dropped,
+        route,
+        elapsedMs,
+        answer: answer ?? null,
+      },
+    });
+  }
+
   async function open(element: Element, mode: PanelMode): Promise<void> {
     const src = element.getAttribute(SRC_ATTRIBUTE);
     const parsed = src === null ? null : parseSrc(src);
@@ -337,49 +386,16 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
       store.set({ generation: { ...store.get().generation, prompt } });
     },
 
-    async generate(): Promise<void> {
-      const { selection, generation } = store.get();
-      const prompt = generation.prompt.trim();
-      if (!selection || !prompt || generation.status !== 'idle') return;
-      const id = crypto.randomUUID();
-      runId = id;
-      store.set({ generation: { ...IDLE_GENERATION, prompt, status: 'running', runId: id } });
-      const reply = await host.request({
-        type: 'generate.request',
-        payload: {
-          runId: id,
-          file: selection.file,
-          line: selection.line,
-          column: selection.column,
-          prompt,
-        },
-      });
-      if (runId !== id) {
-        if (reply.type === 'generate.done') {
-          void host.request({ type: 'generate.discard', payload: { runId: id } });
-        }
-        return;
-      }
-      runId = null;
-      const latest = store.get().generation;
-      if (reply.type !== 'generate.done') {
-        store.set({
-          generation: { ...IDLE_GENERATION, prompt: latest.prompt, error: failure(reply) },
-        });
-        return;
-      }
-      const { variants, dropped, route, elapsedMs } = reply.payload;
-      store.set({
-        generation: {
-          ...latest,
-          status: 'ready',
-          variants: [...variants],
-          active: 0,
-          dropped,
-          route,
-          elapsedMs,
-        },
-      });
+    generate: () => run(false),
+
+    async askForVariations(): Promise<void> {
+      await settleGeneration();
+      await run(true);
+    },
+
+    async askAnother(): Promise<void> {
+      await settleGeneration();
+      store.set({ generation: IDLE_GENERATION });
     },
 
     async cancelGeneration(): Promise<void> {

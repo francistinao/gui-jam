@@ -1,3 +1,4 @@
+import { AnswerPanel } from './AnswerPanel';
 import type { Controller, ProgressStep, WidgetState } from './controller';
 import { Button } from './figui/button';
 import { cn } from './figui/cn';
@@ -62,7 +63,15 @@ export function PromptPanel({ store, controller }: PanelProps) {
 
   if (!selection || !anchor) return null;
   const { prompt, status, steps, error } = generation;
-  const badge = status === 'ready' ? 'Variants' : status === 'running' ? 'Generating' : 'Ask AI';
+  const answered =
+    status === 'ready' && generation.answer !== null && generation.variants.length === 0;
+  const badge = answered
+    ? 'Answer'
+    : status === 'ready'
+      ? 'Variants'
+      : status === 'running'
+        ? 'Generating'
+        : 'Ask AI';
 
   return (
     <Popover label={`Ask AI ${selection.file}`} anchor={anchor}>
@@ -75,7 +84,9 @@ export function PromptPanel({ store, controller }: PanelProps) {
           {`Used ${selection.instances}× on this page — changes apply to every instance.`}
         </p>
       ) : null}
-      {status === 'ready' ? (
+      {answered ? (
+        <AnswerPanel generation={generation} controller={controller} />
+      ) : status === 'ready' ? (
         <VariantsPanel generation={generation} busy={busy} controller={controller} />
       ) : (
         <form

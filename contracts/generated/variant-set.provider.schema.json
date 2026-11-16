@@ -1,15 +1,20 @@
 {
   "title": "VariantSet",
-  "description": "Provider output for a widget generation request. missing lists design properties the model could not read and did not invent.",
+  "description": "Provider output for a widget request: three variants of the change, or, when the request is a question, an answer and no variants. missing lists design properties the model could not read and did not invent.",
   "type": "object",
   "required": [
     "variants"
   ],
   "additionalProperties": false,
   "properties": {
+    "answer": {
+      "type": "string",
+      "maxLength": 4000,
+      "description": "The answer when the request is a question; leave it out when proposing variants."
+    },
     "variants": {
       "type": "array",
-      "minItems": 1,
+      "minItems": 0,
       "maxItems": 3,
       "items": {
         "$ref": "#/$defs/Variant"

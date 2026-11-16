@@ -2,16 +2,23 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "variant-set.schema.json",
   "title": "VariantSet",
-  "description": "Provider output for a widget generation request. missing lists design properties the model could not read and did not invent.",
+  "description": "Provider output for a widget request: three variants of the change, or, when the request is a question, an answer and no variants. missing lists design properties the model could not read and did not invent.",
   "type": "object",
   "required": ["variants"],
   "additionalProperties": false,
   "properties": {
+    "answer": {
+      "type": "string",
+      "maxLength": 4000,
+      "description": "The answer when the request is a question; leave it out when proposing variants."
+    },
     "variants": {
       "type": "array",
-      "minItems": 1,
+      "minItems": 0,
       "maxItems": 3,
-      "items": { "$ref": "#/$defs/Variant" }
+      "items": {
+        "$ref": "#/$defs/Variant"
+      }
     }
   },
   "$defs": {
@@ -20,16 +27,34 @@
       "required": ["label", "system", "style", "rationale", "missing", "ops"],
       "additionalProperties": false,
       "properties": {
-        "label": { "type": "string", "maxLength": 40 },
-        "system": { "type": "string" },
-        "style": { "type": "string", "maxLength": 40 },
-        "rationale": { "type": "string", "maxLength": 600 },
-        "missing": { "type": "array", "items": { "type": "string" } },
+        "label": {
+          "type": "string",
+          "maxLength": 40
+        },
+        "system": {
+          "type": "string"
+        },
+        "style": {
+          "type": "string",
+          "maxLength": 40
+        },
+        "rationale": {
+          "type": "string",
+          "maxLength": 600
+        },
+        "missing": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
         "ops": {
           "type": "array",
           "minItems": 1,
           "maxItems": 40,
-          "items": { "$ref": "edit-op.schema.json" }
+          "items": {
+            "$ref": "edit-op.schema.json"
+          }
         }
       }
     }

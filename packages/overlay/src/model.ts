@@ -208,3 +208,20 @@ export function droppedNote(dropped: GenerateDone['dropped']): string | null {
   const count = dropped.length === 1 ? '1 variant was' : `${dropped.length} variants were`;
   return `${count} dropped: ${first.reason}`;
 }
+
+export type AnswerPart = { at: number; text: string } | { at: number; path: string };
+
+const PROJECT_PATH =
+  /(?:[\w@.-]+\/)+[\w.-]+\.(?:tsx|ts|jsx|js|mjs|css|scss|html|json|svg|png|jpe?g|gif|webp|avif|ico)(?::\d+(?::\d+)?)?/g;
+
+export function splitPaths(answer: string): AnswerPart[] {
+  const parts: AnswerPart[] = [];
+  let last = 0;
+  for (const match of answer.matchAll(PROJECT_PATH)) {
+    if (match.index > last) parts.push({ at: last, text: answer.slice(last, match.index) });
+    parts.push({ at: match.index, path: match[0] });
+    last = match.index + match[0].length;
+  }
+  if (last < answer.length) parts.push({ at: last, text: answer.slice(last) });
+  return parts;
+}

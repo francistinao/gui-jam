@@ -127,7 +127,8 @@ export interface RewriteFileOp {
   content: string;
 }
 export interface VariantSet {
-  variants: [Variant] | [Variant, Variant] | [Variant, Variant, Variant];
+  answer?: string;
+  variants: [] | [Variant] | [Variant, Variant] | [Variant, Variant, Variant];
 }
 export interface Variant {
   label: string;
@@ -355,6 +356,7 @@ export interface GenerateRequest {
   line: number;
   column: number;
   prompt: string;
+  forceAi?: boolean;
 }
 export interface GenerateDoneMessage {
   type: 'generate.done';
@@ -367,6 +369,7 @@ export interface GenerateDone {
   summary: string;
   elapsedMs: number;
   variants:
+    | []
     | [VariantPreview]
     | [VariantPreview, VariantPreview]
     | [VariantPreview, VariantPreview, VariantPreview];
@@ -374,7 +377,8 @@ export interface GenerateDone {
     label?: string;
     reason: string;
   }[];
-  update: UpdateResult;
+  update?: UpdateResult;
+  answer?: string;
 }
 export interface Route {
   tier: 'R0' | 'R1' | 'R2';

@@ -8,10 +8,11 @@ use std::time::{Duration, Instant};
 use gjd_core::codemod::{CodemodError, finetune_op};
 use gjd_core::content_hash;
 use gjd_core::contracts::{
-    CodeChange, CommitDone, EditOp, ErrorCode, ErrorPayload, FinetunePreview, FinetunePreviewed,
-    GenerateDone, GenerateDoneDroppedItem, GenerateRequest, GuijamMessage, HelloOk, OverlayClear,
-    OverlaySet, Route, RouteTier, RunRef, SourceRef, UndoDone, UpdateResult, UpdateResultStatus,
-    UpdateResultUpdateId, Variant, VariantPreview, VariantSelect, VariantSelected,
+    CodeChange, CommitDone, EditOp, ElementStyle, ErrorCode, ErrorPayload, FinetunePreview,
+    FinetunePreviewed, GenerateDone, GenerateDoneDroppedItem, GenerateRequest, GuijamMessage,
+    HelloOk, OverlayClear, OverlaySet, Route, RouteTier, RunRef, SourceRef, UndoDone, UpdateResult,
+    UpdateResultStatus, UpdateResultUpdateId, Variant, VariantPreview, VariantSelect,
+    VariantSelected, VariantSet,
 };
 use gjd_core::journal::{CommitError, FileChange, Journal};
 use gjd_core::jsx::JsxError;
@@ -27,7 +28,9 @@ use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
 use crate::diff::code_changes;
-use crate::generate::{self, Progress, Step};
+use crate::generate::{self, Progress, Step, TierConfig};
+use crate::r0;
+use crate::route::{self, Tier};
 
 const UPDATE_TIMEOUT: Duration = Duration::from_secs(5);
 const AUTH_CACHE: Duration = Duration::from_mins(5);
@@ -342,6 +345,21 @@ struct Run {
 struct VariantRun {
     file: String,
     changesets: Vec<String>,
+}
+
+struct Job<'a> {
+    request: &'a GenerateRequest,
+    prompt: &'a str,
+    source: &'a str,
+    style: &'a ElementStyle,
+    started: Instant,
+    cancel: &'a CancellationToken,
+}
+
+impl Job<'_> {
+    fn elapsed_ms(&self) -> u64 {
+        u64::try_from(self.started.elapsed().as_millis()).unwrap_or(u64::MAX)
+    }
 }
 
 struct Held {
@@ -742,78 +760,179 @@ impl Daemon {
         cancel: &CancellationToken,
     ) -> Result<GenerateDone, Failure> {
         let started = Instant::now();
-        let prompt = request.prompt.trim();
+        let prompt = request.prompt.trim().to_owned();
         if prompt.is_empty() {
             return Err(Failure::invalid_request("describe the change first"));
         }
-        let file = request.file.as_str();
-        let source = self.read_project_file(file).await?;
+        let source = self.read_project_file(&request.file).await?;
         let theme = self.theme().await;
-        let style = inspect(file, &source, request.line, request.column, &theme)?;
+        let style = inspect(&request.file, &source, request.line, request.column, &theme)?;
+        let exact = r0::parse_property_edits(&prompt, &style)
+            .and_then(|props| finetune_op(&style, &props, &theme).ok());
+        let force_ai = request.force_ai.unwrap_or(false);
+        let decision = route::classify(&prompt, exact.is_some(), force_ai);
+        let job = Job {
+            request: &request,
+            prompt: &prompt,
+            source: &source,
+            style: &style,
+            started,
+            cancel,
+        };
+        match (decision.tier, exact) {
+            (Tier::R0, Some(op)) => self.exact_edit(&job, &op).await,
+            (Tier::R2, _) => {
+                self.generate_with(&job, &generate::R2, decision.notice)
+                    .await
+            }
+            _ => {
+                self.generate_with(&job, &generate::R1, decision.notice)
+                    .await
+            }
+        }
+    }
+
+    async fn exact_edit(&self, job: &Job<'_>, op: &EditOp) -> Result<GenerateDone, Failure> {
+        let file = job.request.file.as_str();
+        let sources = BTreeMap::from([(file.to_owned(), job.source.to_owned())]);
+        let content = patch::apply(&sources, std::slice::from_ref(op))?
+            .remove(file)
+            .unwrap_or_else(|| job.source.to_owned());
+        if content == job.source {
+            return Err(Failure::new(
+                ErrorCode::InvalidRequest,
+                "The element already looks like that.",
+            ));
+        }
+        let change = summarize(file, job.request.line, op);
+        let label = change
+            .split_once(" — ")
+            .map_or(change.as_str(), |(_, change)| change)
+            .to_owned();
+        let held = Held {
+            label,
+            system: "Your project".to_owned(),
+            style: "Exact".to_owned(),
+            rationale: "Made without a model call.".to_owned(),
+        };
+        let (variants, first) =
+            self.hold_variants(job.request, job.source, vec![(held, content)], "R0");
+        let update = self
+            .preview_run(&job.request.run_id, file, &first, job.cancel)
+            .await?;
+        Ok(GenerateDone {
+            run_id: job.request.run_id.clone(),
+            route: Route {
+                tier: RouteTier::R0,
+                provider: None,
+                model: None,
+                notice: Some(route::EXACT_NOTICE.to_owned()),
+            },
+            summary: format!(
+                "{} → exact edit for <{}> {file}:{} (R0)",
+                quoted(job.prompt, 60),
+                job.style.tag,
+                job.request.line,
+            ),
+            elapsed_ms: job.elapsed_ms(),
+            answer: None,
+            variants,
+            dropped: Vec::new(),
+            update: Some(update),
+        })
+    }
+
+    async fn generate_with(
+        &self,
+        job: &Job<'_>,
+        tier: &TierConfig,
+        notice: Option<&str>,
+    ) -> Result<GenerateDone, Failure> {
+        let file = job.request.file.as_str();
         let (provider, discovery) = self.provider().await?;
         let provider_name = provider.id().display_name();
         let mut progress = Progress::new(
-            &request.run_id,
-            &style,
+            &job.request.run_id,
+            job.style,
             &self.stylesheet_names(),
             provider_name,
-            generate::MODEL,
+            tier.model,
         );
         progress.start(Step::Ask);
         self.report(&progress);
-
         let generation = GenerationRequest {
-            model: Some(generate::MODEL.to_owned()),
+            model: Some(tier.model.to_owned()),
             system_prompt: generate::SYSTEM_PROMPT.to_owned(),
-            user_prompt: generate::user_prompt(&style, &source, prompt),
+            user_prompt: generate::user_prompt(job.style, job.source, job.prompt, tier),
             images: Vec::new(),
             tools: ToolPolicy::None,
-            timeout: generate::TIMEOUT,
+            timeout: tier.timeout,
             cwd: self.project.path().to_path_buf(),
         };
-        let proposed = self.ask(&*provider, &discovery, generation, cancel).await?;
+        let reply = self
+            .ask(&*provider, &discovery, generation, job.cancel)
+            .await?;
+        let route_label = format!("{} · {provider_name} {}", tier.label, tier.model);
+        let route = Route {
+            tier: tier.tier,
+            provider: Some(provider_name.to_owned()),
+            model: Some(tier.model.to_owned()),
+            notice: notice.map(str::to_owned),
+        };
+        let at = format!("<{}> {file}:{}", job.style.tag, job.request.line);
+        if reply.variants.is_empty() {
+            let answer = reply
+                .answer
+                .map(String::from)
+                .ok_or_else(|| invalid_output("it proposed no variant"))?;
+            return Ok(GenerateDone {
+                run_id: job.request.run_id.clone(),
+                route,
+                summary: format!(
+                    "{} → answered for {at} ({route_label})",
+                    quoted(job.prompt, 60)
+                ),
+                elapsed_ms: job.elapsed_ms(),
+                answer: Some(answer),
+                variants: Vec::new(),
+                dropped: Vec::new(),
+                update: None,
+            });
+        }
+
+        let proposed = reply.variants;
         let checked = variants_phrase(proposed.len().min(generate::VARIANTS));
         progress.relabel(Step::Check, format!("Checking {checked}"));
         progress.start(Step::Check);
         self.report(&progress);
         let current = self.read_project_file(file).await?;
         let (valid, dropped) = validate_variants(proposed, file, &current)?;
-        if cancel.is_cancelled() {
+        if job.cancel.is_cancelled() {
             return Err(ProviderError::Cancelled.into());
         }
-
-        let route_label = format!("R1 · {provider_name} {}", generate::MODEL);
         let held = valid
             .into_iter()
             .map(|(variant, content)| (Held::from(variant), content))
             .collect();
-        let (variants, first) = self.hold_variants(&request, &current, held, &route_label);
+        let (variants, first) = self.hold_variants(job.request, &current, held, &route_label);
         progress.start(Step::Preview);
         self.report(&progress);
         let update = self
-            .preview_run(&request.run_id, file, &first, cancel)
+            .preview_run(&job.request.run_id, file, &first, job.cancel)
             .await?;
-
-        let summary = format!(
-            "{} → {} for <{}> {file}:{} ({route_label})",
-            quoted(prompt, 60),
-            variants_phrase(variants.len()),
-            style.tag,
-            request.line,
-        );
         Ok(GenerateDone {
-            run_id: request.run_id,
-            route: Route {
-                tier: RouteTier::R1,
-                provider: Some(provider_name.to_owned()),
-                model: Some(generate::MODEL.to_owned()),
-                notice: None,
-            },
-            summary,
-            elapsed_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+            run_id: job.request.run_id.clone(),
+            route,
+            summary: format!(
+                "{} → {} for {at} ({route_label})",
+                quoted(job.prompt, 60),
+                variants_phrase(variants.len()),
+            ),
+            elapsed_ms: job.elapsed_ms(),
+            answer: None,
             variants,
             dropped,
-            update,
+            update: Some(update),
         })
     }
 
@@ -823,9 +942,9 @@ impl Daemon {
         discovery: &Discovery,
         request: GenerationRequest,
         cancel: &CancellationToken,
-    ) -> Result<Vec<Variant>, Failure> {
+    ) -> Result<VariantSet, Failure> {
         match provider.generate(discovery, request, cancel.clone()).await {
-            Ok(output) => Ok(output.variant_set.variants),
+            Ok(output) => Ok(output.variant_set),
             Err(error @ ProviderError::NotAuthenticated { .. }) => {
                 *self.provider.lock().await = None;
                 Err(error.into())

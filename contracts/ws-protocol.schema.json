@@ -726,6 +726,10 @@
         "prompt": {
           "type": "string",
           "maxLength": 4000
+        },
+        "forceAi": {
+          "type": "boolean",
+          "description": "Ask the provider even when the prompt is an exact edit GUIJam can make itself."
         }
       }
     },
@@ -812,9 +816,9 @@
       }
     },
     "GenerateDone": {
-      "description": "The variants that survived validation, the first one previewed in the running app, none written yet.",
+      "description": "The variants that survived validation, the first one previewed in the running app and none written yet; or, for a question, the answer.",
       "type": "object",
-      "required": ["runId", "route", "summary", "elapsedMs", "variants", "dropped", "update"],
+      "required": ["runId", "route", "summary", "elapsedMs", "variants", "dropped"],
       "additionalProperties": false,
       "properties": {
         "runId": {
@@ -833,7 +837,7 @@
         },
         "variants": {
           "type": "array",
-          "minItems": 1,
+          "minItems": 0,
           "maxItems": 3,
           "items": {
             "$ref": "#/$defs/VariantPreview"
@@ -858,6 +862,9 @@
         },
         "update": {
           "$ref": "update-result.schema.json"
+        },
+        "answer": {
+          "type": "string"
         }
       }
     },

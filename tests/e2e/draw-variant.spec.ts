@@ -264,3 +264,74 @@ test('a second request on the same element cancels the first run', async () => {
   const discarded = await send('generate.discard', { runId: 'e2e-second' });
   expect(discarded.type).toBe('generate.discarded');
 });
+
+test('an exact edit needs no model, and Ask AI for variations asks for three', async ({ page }) => {
+  const button = page.getByRole('button', { name: 'Order now' });
+  const before = await fileSnapshot(ORDER_BUTTON);
+  const runsBefore = (await cliRuns()).length;
+
+  const prompt = await askAbout(page, button, 'make it blue and pill-shaped');
+
+  const variants = prompt.getByRole('region', { name: 'Variants' });
+  const tiles = variants.getByRole('group', { name: 'Pick a variant' }).getByRole('button');
+  await expect(tiles).toHaveText(['V1Exact']);
+  await expect(variants.getByRole('note')).toHaveText('Exact edit — no AI needed.');
+  await expect(variants).toContainText('→ bg-blue-600 rounded-full');
+  await expect(button).toHaveClass(/\bbg-blue-600\b/);
+  await expect(button).toHaveClass(/\brounded-full\b/);
+  expect(await cliRuns()).toHaveLength(runsBefore);
+  expect(await fileSnapshot(ORDER_BUTTON)).toEqual(before);
+
+  await variants.getByRole('button', { name: 'Ask AI for variations' }).click();
+
+  await expect(tiles).toHaveText(['V1Solid', 'V2Deep', 'V3Outline']);
+  const runs = await cliRuns();
+  expect(runs).toHaveLength(runsBefore + 1);
+  expect(runs.at(-1)?.request).toBe('make it blue and pill-shaped');
+  expect(runs.at(-1)?.args).toEqual(expect.arrayContaining(['--model', 'haiku']));
+});
+
+test('a question gets an answer whose file references open in the editor', async ({ page }) => {
+  const button = page.getByRole('button', { name: 'Order now' });
+  const before = await fileSnapshot(ORDER_BUTTON);
+
+  const prompt = await askAbout(page, button, 'where is this button defined?');
+
+  const answer = prompt.getByRole('region', { name: 'Answer' });
+  await expect(answer).toContainText('It is rendered at src/components/OrderButton.tsx:3.');
+  const opened: string[] = [];
+  await page.route('**/__open-in-editor?**', async (route) => {
+    opened.push(new URL(route.request().url()).searchParams.get('file') ?? '');
+    await route.fulfill({ status: 200, body: '' });
+  });
+  await answer.getByRole('button', { name: 'src/components/OrderButton.tsx:3' }).click();
+  await expect.poll(() => opened).toEqual(['src/components/OrderButton.tsx:3']);
+  await expect(button).toHaveCSS('background-color', BRAND_RGB);
+  expect(await fileSnapshot(ORDER_BUTTON)).toEqual(before);
+
+  await answer.getByRole('button', { name: 'Ask another' }).click();
+  await expect(prompt.getByRole('textbox', { name: 'Describe the change' })).toHaveValue('');
+});
+
+test('an open-ended request uses the standard tier, and a multi-file one says so', async ({
+  page,
+}) => {
+  const button = page.getByRole('button', { name: 'Order now' });
+
+  const prompt = await askAbout(page, button, 'make this feel premium and trustworthy');
+
+  await expect(
+    prompt.getByRole('group', { name: 'Pick a variant' }).getByRole('button'),
+  ).toHaveCount(3);
+  expect((await cliRuns()).at(-1)?.args).toEqual(expect.arrayContaining(['--model', 'sonnet']));
+
+  await prompt.getByRole('button', { name: 'Edit prompt' }).click();
+  await prompt
+    .getByRole('textbox', { name: 'Describe the change' })
+    .fill('refactor this into a shared component');
+  await prompt.getByRole('button', { name: 'Generate' }).click();
+
+  await expect(prompt.getByRole('note').first()).toContainText(
+    'Multi-file changes work best from your CLI session',
+  );
+});

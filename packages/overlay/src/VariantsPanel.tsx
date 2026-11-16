@@ -51,6 +51,16 @@ export function VariantsPanel({ generation, busy, controller }: VariantsPanelPro
           {route.notice}
         </p>
       ) : null}
+      {route?.tier === 'R0' ? (
+        <Button
+          variant="link"
+          className="self-start"
+          disabled={busy}
+          onClick={() => void controller.askForVariations()}
+        >
+          Ask AI for variations
+        </Button>
+      ) : null}
       {note ? (
         <p role="note" className="typography-body-small rounded-md bg-grey-100 p-2 text-grey-700">
           {note}

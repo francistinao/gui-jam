@@ -3,20 +3,47 @@ use std::time::Duration;
 
 use gjd_core::contracts::{
     EditOp, ElementStyle, ElementStyleClassSource, GenerateProgress, GenerateProgressStepsItem,
-    GenerateProgressStepsItemState,
+    GenerateProgressStepsItemState, RouteTier,
 };
 
-pub const MODEL: &str = "haiku";
-pub const TIMEOUT: Duration = Duration::from_secs(60);
 pub const MAX_OPS: usize = 40;
 pub const VARIANTS: usize = 3;
-const CONTEXT_LINES: usize = 40;
+const IMPORT_SCAN_LINES: usize = 80;
+
+#[derive(Clone, Copy, Debug)]
+pub struct TierConfig {
+    pub tier: RouteTier,
+    pub label: &'static str,
+    pub model: &'static str,
+    pub timeout: Duration,
+    pub context_lines: usize,
+}
+
+pub const R1: TierConfig = TierConfig {
+    tier: RouteTier::R1,
+    label: "R1",
+    model: "haiku",
+    timeout: Duration::from_secs(60),
+    context_lines: 40,
+};
+
+pub const R2: TierConfig = TierConfig {
+    tier: RouteTier::R2,
+    label: "R2",
+    model: "sonnet",
+    timeout: Duration::from_secs(120),
+    context_lines: 120,
+};
 
 pub const SYSTEM_PROMPT: &str = "\
 You change one element of a React app styled with Tailwind CSS v4, for GUIJam, a visual \
 editing tool. Return exactly 3 variants: three different takes on the request, each with \
 a distinct one-word `style` (for example Solid, Soft, Outline). Set `system` to \
 \"Your project\".
+
+If the request is a question rather than a change, answer it in `answer` in at most a few \
+sentences, name the files and lines involved (for example src/App.tsx:12), and return an \
+empty `variants` list.
 
 Rules:
 - Edit only the file you are shown, and copy its base_hash exactly into every op.
@@ -107,11 +134,11 @@ impl Progress {
 }
 
 #[must_use]
-pub fn user_prompt(style: &ElementStyle, source: &str, request: &str) -> String {
+pub fn user_prompt(style: &ElementStyle, source: &str, request: &str, tier: &TierConfig) -> String {
     let line = usize::try_from(style.line.get()).unwrap_or(usize::MAX);
     let lines: Vec<&str> = source.split('\n').collect();
-    let first = line.saturating_sub(CONTEXT_LINES).max(1);
-    let last = line.saturating_add(CONTEXT_LINES).min(lines.len());
+    let first = line.saturating_sub(tier.context_lines).max(1);
+    let last = line.saturating_add(tier.context_lines).min(lines.len());
 
     let mut prompt = format!(
         "Request: {request}\n\nElement: <{tag}> at {file}:{line}:{column}\nbase_hash: {hash}\n",
@@ -146,6 +173,25 @@ pub fn user_prompt(style: &ElementStyle, source: &str, request: &str) -> String 
     if !radii.is_empty() {
         let _ = writeln!(prompt, "Theme radii: {}", radii.join(", "));
     }
+    let imports_end = lines
+        .iter()
+        .take(IMPORT_SCAN_LINES.min(first - 1))
+        .rposition(|text| {
+            let text = text.trim_start();
+            text.starts_with("import ") || text.contains(" from '") || text.contains(" from \"")
+        });
+    if let Some(end) = imports_end {
+        let _ = writeln!(
+            prompt,
+            "\n<imports file=\"{}\" lines=\"1-{}\">",
+            style.file,
+            end + 1
+        );
+        for (number, text) in lines.iter().enumerate().take(end + 1) {
+            let _ = writeln!(prompt, "{:>4} | {text}", number + 1);
+        }
+        prompt.push_str("</imports>\n");
+    }
     let _ = writeln!(
         prompt,
         "\n<source file=\"{}\" lines=\"{first}-{last}\">",
@@ -178,7 +224,7 @@ mod tests {
     use gjd_core::contracts::{ElementStyle, GenerateProgressStepsItemState as State};
     use gjd_core::theme::Theme;
 
-    use super::{Progress, Step, user_prompt};
+    use super::{Progress, R1, R2, Step, user_prompt};
 
     fn states(progress: &Progress) -> Vec<(String, State)> {
         progress
@@ -246,7 +292,7 @@ mod tests {
         let theme = Theme::from_css(["@theme { --color-brand: #be123c; --radius-card: 14px; }"]);
         let style = inspect("src/OrderButton.tsx", BUTTON, 3, 5, &theme);
 
-        let prompt = user_prompt(&style, BUTTON, "  make it blue ");
+        let prompt = user_prompt(&style, BUTTON, "  make it blue ", &R1);
 
         assert!(prompt.starts_with("Request: make it blue\n"));
         assert!(prompt.contains("Element: <button> at src/OrderButton.tsx:3:5\n"));
@@ -274,10 +320,29 @@ mod tests {
         source.push_str("export const A = () => <div className=\"p-2\" />;\n");
         let style = inspect("src/A.tsx", &source, 101, 24, &Theme::default());
 
-        let prompt = user_prompt(&style, &source, "x");
+        let prompt = user_prompt(&style, &source, "x", &R1);
 
         assert!(prompt.contains("lines=\"61-102\""));
         assert!(prompt.contains("  61 | // line 61\n"));
         assert!(!prompt.contains("// line 60\n"));
+    }
+
+    #[test]
+    fn carries_the_imports_when_the_window_starts_below_them() {
+        let mut source =
+            String::from("import logo from './assets/logo.png';\nimport { cn } from './cn';\n");
+        for n in 3..=60 {
+            let _ = writeln!(source, "// line {n}");
+        }
+        source.push_str("export const A = () => <img src={logo} className=\"p-2\" />;\n");
+        let style = inspect("src/A.tsx", &source, 61, 24, &Theme::default());
+
+        let narrow = user_prompt(&style, &source, "what is the path of this image?", &R1);
+        let wide = user_prompt(&style, &source, "x", &R2);
+
+        assert!(narrow.contains("<imports file=\"src/A.tsx\" lines=\"1-2\">\n   1 | import logo from './assets/logo.png';\n"));
+        assert!(narrow.contains("lines=\"21-62\""));
+        assert!(!wide.contains("<imports"));
+        assert!(wide.contains("lines=\"1-62\""));
     }
 }
