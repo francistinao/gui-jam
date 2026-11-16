@@ -162,6 +162,28 @@ pub fn section(
 }
 
 #[must_use]
+pub fn inspiration_section(first: usize, count: usize) -> String {
+    if count == 0 {
+        return String::new();
+    }
+    let last = first + count - 1;
+    let (range, which) = if count == 1 {
+        (first.to_string(), format!("Image {first} is"))
+    } else {
+        (
+            format!("{first}-{last}"),
+            format!("Images {first} to {last} are"),
+        )
+    };
+    format!(
+        "\n<inspiration images=\"{range}\">\n{which} inspiration the developer attached. Take visual \
+direction from them: palette, type scale, spacing, corner radius, mood and composition. Adapt what you \
+take to the project's theme tokens and components. Don't copy their text, logos, brand marks or photos.\n\
+</inspiration>\n"
+    )
+}
+
+#[must_use]
 pub fn sketch_section(sketch: &Sketch, container: &str) -> String {
     let [x, y, width, height] = sketch.box_;
     let mut out = format!(
@@ -198,6 +220,18 @@ mod tests {
         ]
         .map(str::to_owned)
         .to_vec()
+    }
+
+    #[test]
+    fn inspiration_names_the_image_numbers_after_the_sketch() {
+        assert_eq!(super::inspiration_section(3, 0), "");
+        let one = super::inspiration_section(1, 1);
+        assert!(one.contains("<inspiration images=\"1\">"), "{one}");
+        assert!(one.contains("Image 1 is inspiration"), "{one}");
+        let two = super::inspiration_section(3, 2);
+        assert!(two.contains("<inspiration images=\"3-4\">"), "{two}");
+        assert!(two.contains("Images 3 to 4 are inspiration"), "{two}");
+        assert!(two.contains("Don't copy their text, logos"), "{two}");
     }
 
     #[test]

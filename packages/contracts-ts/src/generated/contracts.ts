@@ -429,6 +429,7 @@ export interface GenerateRequest {
   forceAi?: boolean;
   page?: PageOutline;
   sketch?: Sketch;
+  attachments?: Attachments;
 }
 export interface PageOutline {
   items: PageItem[];
@@ -449,6 +450,17 @@ export interface Sketch {
 }
 export interface SketchImage {
   mediaType: 'image/png' | 'image/jpeg';
+  base64: string;
+}
+export interface Attachments {
+  images:
+    | [InspirationImage]
+    | [InspirationImage, InspirationImage]
+    | [InspirationImage, InspirationImage, InspirationImage]
+    | [InspirationImage, InspirationImage, InspirationImage, InspirationImage];
+}
+export interface InspirationImage {
+  mediaType: 'image/png' | 'image/jpeg' | 'image/webp';
   base64: string;
 }
 export interface GenerateDoneMessage {

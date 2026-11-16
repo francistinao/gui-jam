@@ -10,6 +10,14 @@ import type {
   Sketch,
   VariantPreview,
 } from '@guijam/contracts-ts';
+import {
+  type Attachment,
+  checkSource,
+  MAX_ATTACHMENTS,
+  overflowNote,
+  prepareImage,
+  roomFor,
+} from './attachments';
 import type { WidgetHost } from './host';
 import {
   classifyGesture,
@@ -111,6 +119,8 @@ export interface Job {
   sketch: SketchState | null;
   generation: Generation;
   previewed: boolean;
+  attachments: Attachment[];
+  attachError: string | null;
 }
 
 export interface WidgetState {
@@ -444,6 +454,13 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
         prompt,
         page: collectPageOutline(document, host.hostElement),
         ...(drawn ? { sketch: drawn } : {}),
+        ...(job.attachments.length > 0
+          ? {
+              attachments: {
+                images: job.attachments.map(({ mediaType, base64 }) => ({ mediaType, base64 })),
+              },
+            }
+          : {}),
         ...(forceAi ? { forceAi } : {}),
       },
     });
@@ -571,6 +588,8 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
       sketch,
       generation: IDLE_GENERATION,
       previewed: false,
+      attachments: [],
+      attachError: null,
     };
     store.set({ jobs: [...jobs, job] });
     await focusJob(job.id);
@@ -695,6 +714,43 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
         ...entry,
         previewed: false,
         generation: { ...IDLE_GENERATION, prompt: job.generation.prompt },
+      }));
+    },
+
+    async attach(files: readonly File[]): Promise<void> {
+      const job = focused();
+      if (!job || job.generation.status === 'running' || files.length === 0) return;
+      const room = roomFor(job.attachments.length, files.length);
+      const problems: string[] = [];
+      const added: Attachment[] = [];
+      for (const file of files.slice(0, room)) {
+        const check = checkSource(file.name, file.type, file.size);
+        if (!check.ok) {
+          problems.push(check.reason);
+          continue;
+        }
+        try {
+          added.push(await prepareImage(file));
+        } catch (error) {
+          problems.push(error instanceof Error ? error.message : String(error));
+        }
+      }
+      const overflow = overflowNote(files.length - room);
+      if (overflow) problems.push(overflow);
+      updateJob(job.id, (entry) => ({
+        ...entry,
+        attachments: [...entry.attachments, ...added].slice(0, MAX_ATTACHMENTS),
+        attachError: problems.length > 0 ? problems.join(' ') : null,
+      }));
+    },
+
+    removeAttachment(id: string): void {
+      const job = focused();
+      if (!job || job.generation.status === 'running') return;
+      updateJob(job.id, (entry) => ({
+        ...entry,
+        attachments: entry.attachments.filter((attachment) => attachment.id !== id),
+        attachError: null,
       }));
     },
 

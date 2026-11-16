@@ -1,6 +1,7 @@
-import { Circle, CircleCheck, LoaderCircle } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { Circle, CircleCheck, ImagePlus, LoaderCircle, X } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
 import { AnswerPanel } from './AnswerPanel';
+import { ACCEPTED_TYPES, type Attachment, imageFiles, MAX_ATTACHMENTS } from './attachments';
 import type { Controller, ProgressStep, WidgetState } from './controller';
 import { Button } from './figui/button';
 import { cn } from './figui/cn';
@@ -84,6 +85,40 @@ function Progress({
   );
 }
 
+function Thumbnails({
+  attachments,
+  disabled,
+  controller,
+}: {
+  attachments: readonly Attachment[];
+  disabled: boolean;
+  controller: Controller;
+}) {
+  if (attachments.length === 0) return null;
+  return (
+    <ul aria-label="Attached images" className="m-0 flex list-none flex-wrap gap-1.5 p-0">
+      {attachments.map((attachment, index) => (
+        <li key={attachment.id} className="relative">
+          <img
+            src={`data:${attachment.mediaType};base64,${attachment.base64}`}
+            alt={`Attachment ${index + 1}: ${attachment.name}`}
+            className="size-11 rounded-md object-cover ring-1 ring-black-100"
+          />
+          <button
+            type="button"
+            aria-label={`Remove image ${index + 1}`}
+            disabled={disabled}
+            onClick={() => controller.removeAttachment(attachment.id)}
+            className="absolute -top-1.5 -right-1.5 grid size-4 cursor-pointer place-items-center rounded-full border-0 bg-grey-900 p-0 text-white-1000 disabled:hidden"
+          >
+            <X aria-hidden="true" className="size-3" />
+          </button>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
 export function PromptPanel({ store, controller }: PanelProps) {
   const selection = useStore(store, (state) => state.selection);
   const anchor = useStore(store, (state) => state.anchor);
@@ -91,6 +126,8 @@ export function PromptPanel({ store, controller }: PanelProps) {
   const job = useStore(store, (state) => state.jobs.find((entry) => entry.id === state.focus));
   const busy = useStore(store, (state) => state.busy);
   const now = useNow(job?.generation.status === 'running');
+  const picker = useRef<HTMLInputElement>(null);
+  const [dragging, setDragging] = useState(false);
 
   if (!selection || !anchor || !job) return null;
   const { generation } = job;
@@ -131,10 +168,25 @@ export function PromptPanel({ store, controller }: PanelProps) {
         <VariantsPanel generation={generation} busy={busy} controller={controller} />
       ) : (
         <form
-          className="flex flex-col gap-2"
+          className={cn(
+            'flex flex-col gap-2 rounded-md',
+            dragging && 'outline-2 outline-offset-2 outline-blue-500 outline-dashed',
+          )}
           onSubmit={(event) => {
             event.preventDefault();
             void controller.generate();
+          }}
+          onDragOver={(event) => {
+            if (status === 'running' || !event.dataTransfer.types.includes('Files')) return;
+            event.preventDefault();
+            setDragging(true);
+          }}
+          onDragLeave={() => setDragging(false)}
+          onDrop={(event) => {
+            if (status === 'running' || event.dataTransfer.files.length === 0) return;
+            event.preventDefault();
+            setDragging(false);
+            void controller.attach([...event.dataTransfer.files]);
           }}
         >
           <textarea
@@ -145,11 +197,40 @@ export function PromptPanel({ store, controller }: PanelProps) {
             disabled={status === 'running'}
             className={cn(INPUT_BASE_CLASS, 'h-auto resize-none py-1.5')}
             onChange={(event) => controller.setPrompt(event.target.value)}
+            onPaste={(event) => {
+              const images = imageFiles(event.clipboardData.files);
+              if (images.length === 0) return;
+              event.preventDefault();
+              void controller.attach(images);
+            }}
             onKeyDown={(event) => {
               if (event.key === 'Enter' && !event.shiftKey) {
                 event.preventDefault();
                 event.currentTarget.form?.requestSubmit();
               }
+            }}
+          />
+          <Thumbnails
+            attachments={job.attachments}
+            disabled={status === 'running'}
+            controller={controller}
+          />
+          {job.attachError ? (
+            <p role="alert" className="typography-body-small m-0 text-red-700">
+              {job.attachError}
+            </p>
+          ) : null}
+          <input
+            ref={picker}
+            type="file"
+            accept={ACCEPTED_TYPES.join(',')}
+            multiple
+            hidden
+            aria-label="Choose images"
+            onChange={(event) => {
+              const files = [...(event.target.files ?? [])];
+              event.target.value = '';
+              void controller.attach(files);
             }}
           />
           {status === 'running' && steps.length > 0 ? (
@@ -173,7 +254,7 @@ export function PromptPanel({ store, controller }: PanelProps) {
                 >
                   {stillWorking(now - (generation.startedAt ?? now), generation.timeoutMs, {
                     sketch: sketched,
-                    images: 0,
+                    images: job.attachments.length,
                     links: 0,
                   })}
                 </span>
@@ -188,17 +269,30 @@ export function PromptPanel({ store, controller }: PanelProps) {
               </>
             ) : (
               <>
-                {sketched ? (
+                <span className="mr-auto flex items-center gap-1">
+                  {sketched ? (
+                    <Button
+                      key="clear"
+                      type="button"
+                      variant="secondary"
+                      onClick={() => void controller.discardJob()}
+                    >
+                      Clear sketch
+                    </Button>
+                  ) : null}
                   <Button
-                    key="clear"
+                    key="attach"
                     type="button"
-                    variant="secondary"
-                    className="mr-auto"
-                    onClick={() => void controller.discardJob()}
+                    variant="ghost"
+                    size="icon"
+                    aria-label="Add image"
+                    title={`Add inspiration images (up to ${MAX_ATTACHMENTS}). You can also paste or drop them.`}
+                    disabled={job.attachments.length >= MAX_ATTACHMENTS}
+                    onClick={() => picker.current?.click()}
                   >
-                    Clear sketch
+                    <ImagePlus aria-hidden="true" />
                   </Button>
-                ) : null}
+                </span>
                 <Button key="generate" type="submit" disabled={prompt.trim() === ''}>
                   {error ? 'Retry' : 'Generate'}
                 </Button>

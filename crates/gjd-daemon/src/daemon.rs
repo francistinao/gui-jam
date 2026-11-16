@@ -364,16 +364,45 @@ fn validate_variants(
     Ok((valid, dropped))
 }
 
-fn sketch_images(request: &GenerateRequest) -> Vec<ImageInput> {
+fn sketch_count(request: &GenerateRequest) -> usize {
     request
+        .sketch
+        .as_ref()
+        .map_or(0, |sketch| sketch.images.len())
+}
+
+fn inspiration_count(request: &GenerateRequest) -> usize {
+    request
+        .attachments
+        .as_ref()
+        .map_or(0, |attachments| attachments.images.len())
+}
+
+fn visuals(request: &GenerateRequest) -> generate::Visuals {
+    generate::Visuals {
+        sketch: request.sketch.is_some(),
+        inspiration: inspiration_count(request),
+    }
+}
+
+fn request_images(request: &GenerateRequest) -> Vec<ImageInput> {
+    let sketch = request
         .sketch
         .iter()
         .flat_map(|sketch| &sketch.images)
         .map(|image| ImageInput {
             media_type: image.media_type.to_string(),
             base64: image.base64.to_string(),
-        })
-        .collect()
+        });
+    let inspiration = request
+        .attachments
+        .iter()
+        .flat_map(|attachments| &attachments.images)
+        .map(|image| ImageInput {
+            media_type: image.media_type.to_string(),
+            base64: image.base64.to_string(),
+        });
+    sketch.chain(inspiration).collect()
 }
 
 fn variants_phrase(count: usize) -> String {
@@ -924,8 +953,7 @@ impl Daemon {
         let exact = r0::parse_property_edits(&prompt, &style)
             .and_then(|props| finetune_op(&style, &props, &theme).ok());
         let force_ai = request.force_ai.unwrap_or(false);
-        let decision =
-            route::classify(&prompt, exact.is_some(), force_ai, request.sketch.is_some());
+        let decision = route::classify(&prompt, exact.is_some(), force_ai, visuals(&request).any());
         let job = Job {
             request: &request,
             prompt: &prompt,
@@ -1026,9 +1054,9 @@ impl Daemon {
                 "{}{references}",
                 generate::user_prompt(job.style, job.source, job.prompt, tier)
             ),
-            images: sketch_images(job.request),
+            images: request_images(job.request),
             tools: ToolPolicy::None,
-            timeout: tier.timeout,
+            timeout: generate::budget(tier, request_images(job.request).len()),
             cwd: self.project.path().to_path_buf(),
             events: None,
         };
@@ -1150,8 +1178,12 @@ impl Daemon {
             job.prompt,
             &mentioned,
         );
+        let inspiration = references::inspiration_section(
+            sketch_count(job.request) + 1,
+            inspiration_count(job.request),
+        );
         let folder = assets::prompt_note(&job.request.file, &assets::assets_dir(&files));
-        format!("{sketch}{found}{folder}")
+        format!("{sketch}{inspiration}{found}{folder}")
     }
 
     async fn prepare(&self, job: &Job<'_>, tier: &TierConfig) -> Result<Prepared, Failure> {
@@ -1159,10 +1191,8 @@ impl Daemon {
             &job.request.run_id,
             job.style,
             &self.stylesheet_names(),
-            job.request.sketch.is_some(),
-            "your AI tool",
-            "checking",
-            tier.timeout,
+            visuals(job.request),
+            generate::budget(tier, request_images(job.request).len()),
         );
         progress.start(Step::Read);
         progress.detail("Finding your AI tool…".to_owned());
@@ -1170,10 +1200,12 @@ impl Daemon {
         let (provider, discovery) = self.provider().await?;
         let provider_id = provider.id();
         let provider_name = provider_id.display_name();
-        if job.request.sketch.is_some() && !provider.capabilities().image_input {
+        if !request_images(job.request).is_empty() && !provider.capabilities().image_input {
             return Err(Failure::new(
                 ErrorCode::InvalidRequest,
-                format!("{provider_name} can't read images, so sketches need an AI tool that can."),
+                format!(
+                    "{provider_name} can't read images, so sketches and attached images need an AI tool that can."
+                ),
             )
             .with_action("Choose another with npx guijam provider use <id>."));
         }

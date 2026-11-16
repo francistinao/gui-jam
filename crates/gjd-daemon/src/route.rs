@@ -184,7 +184,7 @@ fn is_question(prompt: &str, words: &[String]) -> bool {
 }
 
 #[must_use]
-pub fn classify(prompt: &str, exact: bool, force_ai: bool, sketch: bool) -> Decision {
+pub fn classify(prompt: &str, exact: bool, force_ai: bool, visual: bool) -> Decision {
     let words = words(prompt);
     let question = is_question(prompt, &words);
     let lowered = prompt.to_lowercase();
@@ -193,7 +193,7 @@ pub fn classify(prompt: &str, exact: bool, force_ai: bool, sketch: bool) -> Deci
         question,
         notice,
     };
-    if sketch {
+    if visual {
         return decision(Tier::R2, None);
     }
     if exact && !force_ai && !question {

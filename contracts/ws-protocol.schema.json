@@ -736,6 +736,9 @@
         },
         "sketch": {
           "$ref": "#/$defs/Sketch"
+        },
+        "attachments": {
+          "$ref": "#/$defs/Attachments"
         }
       }
     },
@@ -826,6 +829,38 @@
             "maxLength": 300
           },
           "description": "The data-gj-src of annotated elements the sketch overlaps, at most 20."
+        }
+      }
+    },
+    "Attachments": {
+      "description": "What the developer attached to the prompt for inspiration.",
+      "type": "object",
+      "required": ["images"],
+      "additionalProperties": false,
+      "properties": {
+        "images": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 4,
+          "items": {
+            "$ref": "#/$defs/InspirationImage"
+          }
+        }
+      }
+    },
+    "InspirationImage": {
+      "description": "An image the developer attached, re-encoded in the browser to at most 1568 px on its longest side.",
+      "type": "object",
+      "required": ["mediaType", "base64"],
+      "additionalProperties": false,
+      "properties": {
+        "mediaType": {
+          "type": "string",
+          "enum": ["image/png", "image/jpeg", "image/webp"]
+        },
+        "base64": {
+          "type": "string",
+          "maxLength": 4000000
         }
       }
     },
