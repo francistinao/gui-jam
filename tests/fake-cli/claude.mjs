@@ -51,6 +51,11 @@ if (/slow/i.test(request)) {
   });
 } else {
   if (/pause/i.test(request)) await new Promise((resolve) => setTimeout(resolve, 1500));
+  if (/linger/i.test(request)) await new Promise((resolve) => setTimeout(resolve, 4000));
+  const icon = /\b(star|leaf)\b/i.exec(request)?.[1]?.toLowerCase() ?? 'cup';
+  const iconName = `${icon[0].toUpperCase()}${icon.slice(1)} icon`;
+  const cardText = icon === 'cup' ? 'Sketched card' : `Sketched ${icon} card`;
+  const sketchedCard = `<OrderButton />\n            <span className="flex items-center gap-2 rounded-card bg-white px-4 py-2 shadow"><img src={${icon}Icon} alt="${iconName}" className="size-6" />${cardText}</span>`;
   const [, file] = /^Element: <\w+> at (.+):\d+:\d+$/m.exec(text);
   const [, baseHash] = /^base_hash: ([0-9a-f]{64})$/m.exec(text);
   const headerImage = /image/i.test(request)
@@ -75,11 +80,11 @@ if (/slow/i.test(request)) {
             variants: [
               {
                 ...variant(
-                  'Sketched card',
+                  cardText,
                   'Card',
-                  'A card with a cup icon, built from the sketch.',
+                  `A card with a ${icon} icon, built from the sketch.`,
                   '<OrderButton />',
-                  '<OrderButton />\n            <span className="flex items-center gap-2 rounded-card bg-white px-4 py-2 shadow"><img src={cupIcon} alt="Cup icon" className="size-6" />Sketched card</span>',
+                  sketchedCard,
                 ),
                 ops: [
                   {
@@ -87,21 +92,19 @@ if (/slow/i.test(request)) {
                     file,
                     base_hash: baseHash,
                     find: "import { Counter } from './components/Counter';",
-                    replace:
-                      "import cupIcon from './assets/icons/cup-icon.svg';\nimport { Counter } from './components/Counter';",
+                    replace: `import ${icon}Icon from './assets/icons/${icon}-icon.svg';\nimport { Counter } from './components/Counter';`,
                   },
                   {
                     kind: 'replace_snippet',
                     file,
                     base_hash: baseHash,
                     find: '<OrderButton />',
-                    replace:
-                      '<OrderButton />\n            <span className="flex items-center gap-2 rounded-card bg-white px-4 py-2 shadow"><img src={cupIcon} alt="Cup icon" className="size-6" />Sketched card</span>',
+                    replace: sketchedCard,
                   },
                 ],
                 assets: [
                   {
-                    name: 'cup-icon',
+                    name: `${icon}-icon`,
                     format: 'svg',
                     svg: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 9h12v5a5 5 0 0 1-5 5H9a5 5 0 0 1-5-5z" fill="#3b2418"/></svg>',
                   },

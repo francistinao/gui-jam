@@ -88,7 +88,7 @@ export function VariantsPanel({ generation, busy, controller }: VariantsPanelPro
       <CodeChanges changes={variant.changes} />
       <p className="typography-body-small text-grey-500">{meta}</p>
       <footer className="flex items-center justify-end gap-2">
-        <Button variant="secondary" disabled={busy} onClick={() => void controller.close()}>
+        <Button variant="secondary" disabled={busy} onClick={() => void controller.discardJob()}>
           Discard
         </Button>
         <Button variant="secondary" disabled={busy} onClick={() => void controller.editPrompt()}>

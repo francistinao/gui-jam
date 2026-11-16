@@ -4,6 +4,7 @@ import {
   errorReply,
   generationRunId,
   replyWindowMs,
+  requestRunId,
   terminalLine,
 } from './relay.js';
 
@@ -104,6 +105,15 @@ describe('terminalLine', () => {
     expect(
       terminalLine({ type: 'changeset.discarded', payload: { changesetId: 'c1' } }),
     ).toBeUndefined();
+  });
+});
+
+describe('requestRunId', () => {
+  it('names the run of the given request type only', () => {
+    const discard = { type: 'generate.discard', id: 'w2', payload: { runId: 'r2' } };
+
+    expect(requestRunId(discard, 'generate.discard')).toBe('r2');
+    expect(requestRunId(discard, 'generate.cancel')).toBeUndefined();
   });
 });
 

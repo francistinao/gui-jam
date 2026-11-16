@@ -79,12 +79,16 @@ export function terminalLine(reply: GuijamMessage): string | undefined {
   }
 }
 
-export function generationRunId(data: unknown): string | undefined {
+export function requestRunId(data: unknown, requestType: string): string | undefined {
   if (typeof data !== 'object' || data === null) return undefined;
   const { type, payload } = data as { type?: unknown; payload?: unknown };
-  if (type !== 'generate.request' || typeof payload !== 'object' || payload === null) {
+  if (type !== requestType || typeof payload !== 'object' || payload === null) {
     return undefined;
   }
   const { runId } = payload as { runId?: unknown };
   return typeof runId === 'string' ? runId : undefined;
+}
+
+export function generationRunId(data: unknown): string | undefined {
+  return requestRunId(data, 'generate.request');
 }

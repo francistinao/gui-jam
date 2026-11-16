@@ -47,7 +47,7 @@ The GUIJam toolbar appears at the bottom right of your page.
 | Tool | What to do |
 |---|---|
 | **Select** | Click any element. Tweak its fill and corner radius in a Figma-style panel, then **Apply**. |
-| **Draw** | Circle an element and describe the change. Pick one of three live variants and **Use** it. |
+| **Draw** | Circle an element and describe the change. Pick one of three live variants and **Use** it. Up to three drawings can generate at once, each behind a numbered badge. |
 | **Draw** (sketch) | Sketch a card, a section or an icon where you want it. GUIJam works out the component and where it goes. |
 | **Ask** | Ask a question about what you see, such as "what's the path of this image?" |
 

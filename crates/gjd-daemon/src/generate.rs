@@ -9,6 +9,7 @@ use gjd_providers::ProviderId;
 
 pub const MAX_OPS: usize = 40;
 pub const VARIANTS: usize = 3;
+pub const MAX_RUNS: usize = 3;
 const IMPORT_SCAN_LINES: usize = 80;
 
 #[derive(Clone, Copy, Debug)]

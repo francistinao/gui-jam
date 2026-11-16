@@ -19,6 +19,8 @@ import {
   hexOfComputedColor,
   intersects,
   invertChanges,
+  MAX_JOBS,
+  nextJobNumber,
   type Point,
   type Rect,
   samplePoints,
@@ -92,11 +94,22 @@ export interface SketchState {
   bounds: Rect;
 }
 
+export interface Job {
+  id: string;
+  number: number;
+  target: Selection;
+  anchor: Rect;
+  strokes: Point[][];
+  sketch: SketchState | null;
+  generation: Generation;
+  previewed: boolean;
+}
+
 export interface WidgetState {
   tool: Tool | null;
-  sketch: SketchState | null;
+  jobs: Job[];
+  focus: string | null;
   mode: PanelMode;
-  generation: Generation;
   hovered: Rect | null;
   selection: Selection | null;
   anchor: Rect | null;
@@ -110,9 +123,9 @@ export interface WidgetState {
 
 export const initialState: WidgetState = {
   tool: null,
-  sketch: null,
+  jobs: [],
+  focus: null,
   mode: 'finetune',
-  generation: IDLE_GENERATION,
   hovered: null,
   selection: null,
   anchor: null,
@@ -206,16 +219,51 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
   let previewing: Promise<void> | undefined;
   let noticeTimer: ReturnType<typeof setTimeout> | undefined;
   let editSequence = 0;
-  let runId: string | null = null;
   let selectSequence = 0;
+  let previousFocus: string | null = null;
+  const runs = new Map<string, string>();
   const committed = new Map<string, CodeChange[]>();
   const styled = new Set<HTMLElement>();
 
   host.onEvent((message) => {
-    if (message.type !== 'generate.progress' || message.payload.runId !== runId) return;
-    const { generation } = store.get();
-    store.set({ generation: { ...generation, steps: message.payload.steps } });
+    if (message.type !== 'generate.progress') return;
+    const jobId = runs.get(message.payload.runId);
+    if (!jobId) return;
+    const { steps } = message.payload;
+    updateJob(jobId, (job) => ({ ...job, generation: { ...job.generation, steps } }));
   });
+
+  function jobById(id: string | null): Job | undefined {
+    return id === null ? undefined : store.get().jobs.find((job) => job.id === id);
+  }
+
+  function focused(): Job | undefined {
+    return jobById(store.get().focus);
+  }
+
+  function updateJob(id: string, change: (job: Job) => Job): void {
+    store.set({ jobs: store.get().jobs.map((job) => (job.id === id ? change(job) : job)) });
+  }
+
+  function setGeneration(id: string, generation: Generation): void {
+    updateJob(id, (job) => ({ ...job, generation }));
+  }
+
+  function removeJob(id: string): void {
+    store.set({ jobs: store.get().jobs.filter((job) => job.id !== id) });
+    if (previousFocus === id) previousFocus = null;
+  }
+
+  function clearPanel(): void {
+    store.set({
+      focus: null,
+      selection: null,
+      anchor: null,
+      style: null,
+      current: null,
+      mode: 'finetune',
+    });
+  }
 
   function notify(notice: Notice | null, durationMs = NOTICE_MS): void {
     clearTimeout(noticeTimer);
@@ -327,69 +375,112 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
     });
   }
 
-  async function settleGeneration(): Promise<void> {
-    const { generation } = store.get();
-    if (runId) {
-      const cancelled = runId;
-      runId = null;
-      void host.request({ type: 'generate.cancel', payload: { runId: cancelled } });
-    }
-    store.set({ generation: { ...IDLE_GENERATION, prompt: generation.prompt } });
-    if (generation.status === 'ready' && generation.runId) {
-      await host.request({ type: 'generate.discard', payload: { runId: generation.runId } });
+  async function settle(job: Job): Promise<void> {
+    const { runId, status } = job.generation;
+    if (!runId) return;
+    if (status === 'running') {
+      runs.delete(runId);
+      await host.request({ type: 'generate.cancel', payload: { runId } });
+    } else if (status === 'ready') {
+      await host.request({ type: 'generate.discard', payload: { runId } });
     }
   }
 
-  async function run(forceAi: boolean): Promise<void> {
-    const { selection, generation } = store.get();
-    const prompt = generation.prompt.trim();
-    if (!selection || !prompt || generation.status !== 'idle') return;
-    const id = crypto.randomUUID();
-    runId = id;
-    store.set({ generation: { ...IDLE_GENERATION, prompt, status: 'running', runId: id } });
-    const { sketch } = store.get();
-    const drawn = sketch ? await sketchRequest(sketch) : null;
-    if (runId !== id) return;
+  async function run(jobId: string, forceAi: boolean): Promise<void> {
+    const job = jobById(jobId);
+    if (!job) return;
+    const prompt = job.generation.prompt.trim();
+    if (!prompt || job.generation.status !== 'idle') return;
+    const runId = crypto.randomUUID();
+    runs.set(runId, jobId);
+    store.set({
+      jobs: store.get().jobs.map((entry) =>
+        entry.id === jobId
+          ? {
+              ...entry,
+              previewed: false,
+              generation: { ...IDLE_GENERATION, prompt, status: 'running', runId },
+            }
+          : entry,
+      ),
+    });
+    const drawn = job.sketch ? await sketchRequest(job.sketch) : null;
+    if (!runs.has(runId)) return;
     const reply = await host.request({
       type: 'generate.request',
       payload: {
-        runId: id,
-        file: selection.file,
-        line: selection.line,
-        column: selection.column,
+        runId,
+        file: job.target.file,
+        line: job.target.line,
+        column: job.target.column,
         prompt,
         page: collectPageOutline(document, host.hostElement),
         ...(drawn ? { sketch: drawn } : {}),
         ...(forceAi ? { forceAi } : {}),
       },
     });
-    if (runId !== id) {
+    const owner = runs.get(runId);
+    runs.delete(runId);
+    const latest = jobById(owner ?? null);
+    if (!latest || latest.generation.runId !== runId) {
       if (reply.type === 'generate.done') {
-        void host.request({ type: 'generate.discard', payload: { runId: id } });
+        void host.request({ type: 'generate.discard', payload: { runId } });
       }
       return;
     }
-    runId = null;
-    const latest = store.get().generation;
     if (reply.type !== 'generate.done') {
-      store.set({
-        generation: { ...IDLE_GENERATION, prompt: latest.prompt, error: failure(reply) },
+      setGeneration(latest.id, {
+        ...IDLE_GENERATION,
+        prompt: latest.generation.prompt,
+        error: failure(reply),
       });
       return;
     }
-    const { variants, dropped, route, elapsedMs, answer } = reply.payload;
+    const { variants, dropped, route, elapsedMs, answer, update } = reply.payload;
+    const previewed = update !== undefined;
     store.set({
-      generation: {
-        ...latest,
-        status: 'ready',
-        variants: [...variants],
-        active: 0,
-        dropped,
-        route,
-        elapsedMs,
-        answer: answer ?? null,
-      },
+      jobs: store.get().jobs.map((entry) => {
+        if (entry.id !== latest.id) return previewed ? { ...entry, previewed: false } : entry;
+        return {
+          ...entry,
+          previewed,
+          generation: {
+            ...entry.generation,
+            status: 'ready',
+            variants: [...variants],
+            active: 0,
+            dropped,
+            route,
+            elapsedMs,
+            answer: answer ?? null,
+          },
+        };
+      }),
     });
+  }
+
+  async function showVariant(jobId: string, index: number): Promise<void> {
+    const job = jobById(jobId);
+    const variant = job?.generation.variants[index];
+    if (!job?.generation.runId || !variant) return;
+    selectSequence += 1;
+    const sequence = selectSequence;
+    store.set({
+      jobs: store
+        .get()
+        .jobs.map((entry) =>
+          entry.id === jobId
+            ? { ...entry, previewed: true, generation: { ...entry.generation, active: index } }
+            : { ...entry, previewed: false },
+        ),
+    });
+    const reply = await host.request({
+      type: 'variant.select',
+      payload: { runId: job.generation.runId, changesetId: variant.changesetId },
+    });
+    if (reply.type === 'variant.selected') return;
+    updateJob(jobId, (entry) => ({ ...entry, previewed: false }));
+    if (sequence === selectSequence) notify(failure(reply), UNDO_WINDOW_MS);
   }
 
   async function sketchRequest(sketch: SketchState): Promise<Sketch> {
@@ -406,23 +497,74 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
     };
   }
 
-  async function open(
-    element: Element,
-    mode: PanelMode,
-    sketch: SketchState | null = null,
-  ): Promise<void> {
+  function selectionOf(element: Element): Selection | null {
     const src = element.getAttribute(SRC_ATTRIBUTE);
     const parsed = src === null ? null : parseSrc(src);
-    if (!parsed) return;
+    return parsed ? { ...parsed, instances: elementsAt(parsed.src).length } : null;
+  }
+
+  async function focusJob(id: string): Promise<void> {
+    const job = jobById(id);
+    if (!job) return;
     if (hasUnsaved()) await revert('Unsaved tweaks were reverted.');
-    await settleGeneration();
-    const selection: Selection = { ...parsed, instances: elementsAt(parsed.src).length };
+    const { focus } = store.get();
+    if (focus !== id) previousFocus = focus;
     store.set({
-      selection,
-      mode,
+      focus: id,
+      mode: 'prompt',
+      selection: job.target,
+      anchor: job.anchor,
+      style: null,
+      current: null,
+      draft: {},
+      preview: null,
+    });
+    const { generation } = job;
+    if (generation.status === 'ready' && generation.variants.length > 0 && !job.previewed) {
+      void showVariant(id, generation.active);
+    }
+    await inspect(job.target);
+  }
+
+  async function addJob(
+    target: Selection,
+    anchor: Rect,
+    strokes: Point[][],
+    sketch: SketchState | null,
+  ): Promise<void> {
+    const { jobs } = store.get();
+    const job: Job = {
+      id: crypto.randomUUID(),
+      number: nextJobNumber(jobs.map((entry) => entry.number)),
+      target,
+      anchor,
+      strokes,
       sketch,
       generation: IDLE_GENERATION,
-      anchor: sketch ? sketch.bounds : rectOf(element),
+      previewed: false,
+    };
+    store.set({ jobs: [...jobs, job] });
+    await focusJob(job.id);
+  }
+
+  function atLimit(): boolean {
+    if (store.get().jobs.length < MAX_JOBS) return false;
+    notify({
+      kind: 'info',
+      message: `Up to ${MAX_JOBS} drawings at a time. Use or discard one first.`,
+    });
+    return true;
+  }
+
+  async function openFinetune(element: Element): Promise<void> {
+    const selection = selectionOf(element);
+    if (!selection) return;
+    if (hasUnsaved()) await revert('Unsaved tweaks were reverted.');
+    store.set({
+      focus: null,
+      selection,
+      mode: 'finetune',
+      anchor: rectOf(element),
       style: null,
       current: readCurrent(element),
       draft: {},
@@ -432,112 +574,161 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
   }
 
   return {
-    select: (element: Element) => open(element, 'finetune'),
+    select: (element: Element) => openFinetune(element),
 
-    async draw(points: Point[], bounds: Rect): Promise<'selected' | 'sketch' | 'none'> {
-      const { sketch, generation } = store.get();
-      if (sketch && generation.status === 'idle') {
-        const next = {
-          strokes: [...sketch.strokes, points],
-          bounds: unionRect(sketch.bounds, bounds),
+    focus: (id: string) => focusJob(id),
+
+    async draw(points: Point[], bounds: Rect): Promise<boolean> {
+      const job = focused();
+      if (job?.sketch && job.generation.status === 'idle') {
+        const sketch = {
+          strokes: [...job.sketch.strokes, points],
+          bounds: unionRect(job.sketch.bounds, bounds),
         };
-        store.set({ sketch: next, anchor: next.bounds });
-        return 'sketch';
+        updateJob(job.id, (entry) => ({
+          ...entry,
+          sketch,
+          strokes: sketch.strokes,
+          anchor: sketch.bounds,
+        }));
+        store.set({ anchor: sketch.bounds });
+        return true;
       }
+      if (atLimit()) return false;
       const around = annotatedAround(bounds, host.hostElement);
       const gesture = classifyGesture(points, around.map(rectOf));
-      const target = gesture.kind === 'select' ? around[gesture.index] : undefined;
-      if (target) {
-        await open(target, 'prompt');
-        return 'selected';
+      const element = gesture.kind === 'select' ? around[gesture.index] : undefined;
+      const circled = element ? selectionOf(element) : null;
+      if (element && circled) {
+        await addJob(circled, rectOf(element), [points], null);
+        return true;
       }
       const container = sketchContainer(bounds, host.hostElement);
-      if (!container) {
+      const target = container ? selectionOf(container) : null;
+      if (!target) {
         notify({ kind: 'info', message: 'Nothing editable on this page.' });
-        return 'none';
+        return false;
       }
-      await open(container, 'prompt', { strokes: [points], bounds });
-      return 'sketch';
+      await addJob(target, bounds, [points], { strokes: [points], bounds });
+      return true;
     },
 
     async askAI(): Promise<void> {
+      const { selection, anchor } = store.get();
       await revert(hasUnsaved() ? 'Unsaved tweaks were reverted.' : undefined);
-      store.set({ mode: 'prompt' });
+      if (!selection || !anchor || atLimit()) return;
+      await addJob(selection, anchor, [], null);
     },
 
     setPrompt(prompt: string): void {
-      store.set({ generation: { ...store.get().generation, prompt } });
+      const job = focused();
+      if (job) setGeneration(job.id, { ...job.generation, prompt });
     },
 
-    generate: () => run(false),
+    generate: async () => {
+      const job = focused();
+      if (job) await run(job.id, false);
+    },
 
     async askForVariations(): Promise<void> {
-      await settleGeneration();
-      await run(true);
+      const job = focused();
+      if (!job) return;
+      await settle(job);
+      setGeneration(job.id, { ...IDLE_GENERATION, prompt: job.generation.prompt });
+      await run(job.id, true);
     },
 
     async askAnother(): Promise<void> {
-      await settleGeneration();
-      store.set({ generation: IDLE_GENERATION });
+      const job = focused();
+      if (!job) return;
+      await settle(job);
+      setGeneration(job.id, IDLE_GENERATION);
     },
 
     async cancelGeneration(): Promise<void> {
-      if (!runId) return;
-      const cancelled = runId;
-      runId = null;
-      store.set({ generation: { ...IDLE_GENERATION, prompt: store.get().generation.prompt } });
-      await host.request({ type: 'generate.cancel', payload: { runId: cancelled } });
+      const job = focused();
+      if (job?.generation.status !== 'running') return;
+      setGeneration(job.id, { ...IDLE_GENERATION, prompt: job.generation.prompt });
+      await settle(job);
     },
 
     async selectVariant(index: number): Promise<void> {
-      const { generation } = store.get();
-      const variant = generation.variants[index];
-      if (generation.status !== 'ready' || !generation.runId || !variant) return;
-      if (index === generation.active) return;
-      selectSequence += 1;
-      const sequence = selectSequence;
-      store.set({ generation: { ...generation, active: index } });
-      const reply = await host.request({
-        type: 'variant.select',
-        payload: { runId: generation.runId, changesetId: variant.changesetId },
-      });
-      if (sequence === selectSequence && reply.type !== 'variant.selected') {
-        notify(failure(reply), UNDO_WINDOW_MS);
+      const job = focused();
+      if (job?.generation.status !== 'ready' || index === job.generation.active) return;
+      await showVariant(job.id, index);
+    },
+
+    async editPrompt(): Promise<void> {
+      const job = focused();
+      if (!job) return;
+      await settle(job);
+      updateJob(job.id, (entry) => ({
+        ...entry,
+        previewed: false,
+        generation: { ...IDLE_GENERATION, prompt: job.generation.prompt },
+      }));
+    },
+
+    async discardJob(): Promise<void> {
+      const job = focused();
+      if (!job) return;
+      const shown = job.generation.variants.length;
+      removeJob(job.id);
+      clearPanel();
+      await settle(job);
+      if (shown > 0) {
+        notify({
+          kind: 'info',
+          message: shown > 1 ? 'The variants were discarded.' : 'The variant was discarded.',
+        });
       }
     },
 
-    editPrompt: () => settleGeneration(),
-
     async commitVariant(): Promise<void> {
-      const { selection, generation } = store.get();
-      const variant = generation.variants[generation.active];
-      if (!selection || !variant) return;
+      const job = focused();
+      const variant = job?.generation.variants[job.generation.active];
+      if (!job || !variant) return;
       store.set({ busy: true });
       const reply = await host.request({
         type: 'changeset.commit',
         payload: { changesetId: variant.changesetId },
       });
       if (reply.type !== 'commit.done') {
-        store.set({ busy: false, generation: { ...IDLE_GENERATION, prompt: generation.prompt } });
+        store.set({ busy: false });
+        updateJob(job.id, (entry) => ({
+          ...entry,
+          previewed: false,
+          generation: { ...IDLE_GENERATION, prompt: job.generation.prompt },
+        }));
         notify(failure(reply), UNDO_WINDOW_MS);
         return;
       }
       committed.set(reply.payload.journalId, variant.changes);
-      const line = shiftedLine(selection.line, variant.changes);
-      const src = `${selection.file}:${line}:${selection.column}`;
-      const moved: Selection = { ...selection, line, src };
-      const element = elementsAt(src)[0];
+      const { target } = job;
+      const moveTarget = (selection: Selection): Selection => {
+        if (selection.file !== target.file) return selection;
+        const line = shiftedLine(selection.line, variant.changes);
+        return { ...selection, line, src: `${selection.file}:${line}:${selection.column}` };
+      };
+      removeJob(job.id);
+      store.set({
+        jobs: store
+          .get()
+          .jobs.map((entry) => ({ ...entry, previewed: false, target: moveTarget(entry.target) })),
+      });
+      const moved = moveTarget(target);
+      const element = elementsAt(moved.src)[0];
       store.set({
         busy: false,
-        sketch: null,
+        focus: null,
         mode: 'finetune',
         selection: moved,
-        generation: IDLE_GENERATION,
+        anchor: element ? rectOf(element) : store.get().anchor,
         style: null,
         current: element ? readCurrent(element) : null,
       });
       notify(
-        { kind: 'info', message: appliedTo(selection), undoJournalId: reply.payload.journalId },
+        { kind: 'info', message: appliedTo(target), undoJournalId: reply.payload.journalId },
         UNDO_WINDOW_MS,
       );
       await inspect(moved);
@@ -615,32 +806,37 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
     },
 
     async close(): Promise<void> {
-      const shown = store.get().generation.variants.length;
-      const notice = hasUnsaved()
-        ? 'Unsaved tweaks were reverted.'
-        : shown > 1
-          ? 'The variants were discarded.'
-          : shown === 1
-            ? 'The variant was discarded.'
-            : undefined;
-      await settleGeneration();
-      await revert(notice);
-      store.set({
-        selection: null,
-        sketch: null,
-        anchor: null,
-        style: null,
-        current: null,
-        mode: 'finetune',
-        generation: IDLE_GENERATION,
-      });
+      const job = focused();
+      if (!job) {
+        await revert(hasUnsaved() ? 'Unsaved tweaks were reverted.' : undefined);
+        clearPanel();
+        return;
+      }
+      const draft = job.generation.status === 'idle' && job.generation.variants.length === 0;
+      if (!draft) {
+        clearPanel();
+        return;
+      }
+      removeJob(job.id);
+      const back = jobById(previousFocus);
+      previousFocus = null;
+      if (back) await focusJob(back.id);
+      else clearPanel();
     },
 
     dismissNotice: () => notify(null),
 
     reanchor(): void {
-      const { selection, sketch } = store.get();
-      if (sketch) return;
+      const { jobs, selection } = store.get();
+      const moved = jobs.map((job) => {
+        const element = job.sketch ? undefined : elementsAt(job.target.src)[0];
+        if (!element) return job;
+        const anchor = rectOf(element);
+        const same = anchor.left === job.anchor.left && anchor.top === job.anchor.top;
+        return same ? job : { ...job, anchor };
+      });
+      if (moved.some((job, index) => job !== jobs[index])) store.set({ jobs: moved });
+      if (focused()?.sketch) return;
       const element = selection ? elementsAt(selection.src)[0] : undefined;
       if (element) store.set({ anchor: rectOf(element) });
     },

@@ -31,7 +31,7 @@ export function Popover({ label, anchor, children }: PopoverProps) {
       role="dialog"
       aria-label={label}
       data-interactive=""
-      className="fixed flex flex-col rounded-[13px] bg-white-1000 p-3 text-black-800 shadow-500 ring-1 ring-black-100"
+      className="fixed flex max-h-[calc(100vh-24px)] flex-col overflow-y-auto rounded-[13px] bg-white-1000 p-3 text-black-800 shadow-500 ring-1 ring-black-100"
       style={{ left: placement.left, top: placement.top, width: POPOVER_WIDTH }}
     >
       {children}
@@ -42,16 +42,33 @@ export function Popover({ label, anchor, children }: PopoverProps) {
 interface PopoverHeaderProps {
   tag: string | undefined;
   badge: string;
+  number?: number;
   selection: Selection;
   controller: Controller;
   children?: ReactNode;
 }
 
-export function PopoverHeader({ tag, badge, selection, controller, children }: PopoverHeaderProps) {
+export function PopoverHeader({
+  tag,
+  badge,
+  number,
+  selection,
+  controller,
+  children,
+}: PopoverHeaderProps) {
   return (
     <header className="flex items-start justify-between gap-2 pb-2">
       <div className="min-w-0">
         <div className="flex items-center gap-2">
+          {number === undefined ? null : (
+            <span
+              role="img"
+              aria-label={`Drawing ${number}`}
+              className="typography-body-small flex size-5 items-center justify-center rounded-full bg-blue-500 font-[600] text-white-1000"
+            >
+              {number}
+            </span>
+          )}
           <span className="typography-body-medium font-[600]">{tag ?? '…'}</span>
           <span className="typography-body-small rounded-sm bg-green-100 px-1 text-green-700">
             {badge}
@@ -85,7 +102,10 @@ export function CodeChanges({ changes }: { changes: readonly CodeChange[] }) {
     return <p className="typography-body-medium py-3 text-grey-500">No changes yet.</p>;
   }
   return (
-    <div className="flex flex-col gap-2 py-2">
+    <section
+      aria-label="Code changes"
+      className="my-2 flex max-h-40 flex-col gap-2 overflow-y-auto overscroll-contain"
+    >
       {changes.map((change) => (
         <pre
           key={`${change.file}:${change.line}`}
@@ -95,6 +115,6 @@ export function CodeChanges({ changes }: { changes: readonly CodeChange[] }) {
           <span className="block text-green-600">{numbered(change.line, '+', change.after)}</span>
         </pre>
       ))}
-    </div>
+    </section>
   );
 }

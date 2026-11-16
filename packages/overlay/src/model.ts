@@ -316,3 +316,33 @@ export function invertChanges<
       return inverted;
     });
 }
+
+export const MAX_JOBS = 3;
+
+export function nextJobNumber(taken: readonly number[]): number {
+  let number = 1;
+  while (taken.includes(number)) number += 1;
+  return number;
+}
+
+export type BadgeState = 'draft' | 'running' | 'ready' | 'answer' | 'error';
+
+export interface BadgeInput {
+  status: 'idle' | 'running' | 'ready';
+  variants: number;
+  answered: boolean;
+  failed: boolean;
+}
+
+export function jobBadge({ status, variants, answered, failed }: BadgeInput): {
+  state: BadgeState;
+  text: string;
+} {
+  if (status === 'running') return { state: 'running', text: 'Generating' };
+  if (status === 'ready' && answered) return { state: 'answer', text: 'Answer' };
+  if (status === 'ready') {
+    return { state: 'ready', text: variants === 1 ? '1 variant' : `${variants} variants` };
+  }
+  if (failed) return { state: 'error', text: 'Failed' };
+  return { state: 'draft', text: 'Draft' };
+}

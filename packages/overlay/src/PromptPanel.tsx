@@ -58,11 +58,12 @@ export function PromptPanel({ store, controller }: PanelProps) {
   const selection = useStore(store, (state) => state.selection);
   const anchor = useStore(store, (state) => state.anchor);
   const style = useStore(store, (state) => state.style);
-  const generation = useStore(store, (state) => state.generation);
+  const job = useStore(store, (state) => state.jobs.find((entry) => entry.id === state.focus));
   const busy = useStore(store, (state) => state.busy);
-  const sketched = useStore(store, (state) => state.sketch !== null);
 
-  if (!selection || !anchor) return null;
+  if (!selection || !anchor || !job) return null;
+  const { generation } = job;
+  const sketched = job.sketch !== null;
   const { prompt, status, steps, error } = generation;
   const answered =
     status === 'ready' && generation.answer !== null && generation.variants.length === 0;
@@ -78,7 +79,13 @@ export function PromptPanel({ store, controller }: PanelProps) {
 
   return (
     <Popover label={`Ask AI ${selection.file}`} anchor={anchor}>
-      <PopoverHeader tag={style?.tag} badge={badge} selection={selection} controller={controller} />
+      <PopoverHeader
+        tag={style?.tag}
+        badge={badge}
+        number={job.number}
+        selection={selection}
+        controller={controller}
+      />
       {selection.instances > 1 ? (
         <p
           role="note"
@@ -147,7 +154,7 @@ export function PromptPanel({ store, controller }: PanelProps) {
                     type="button"
                     variant="secondary"
                     className="mr-auto"
-                    onClick={() => void controller.close()}
+                    onClick={() => void controller.discardJob()}
                   >
                     Clear sketch
                   </Button>

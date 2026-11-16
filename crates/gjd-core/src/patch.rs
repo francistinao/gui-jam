@@ -75,6 +75,35 @@ pub fn apply(
     Ok(changed)
 }
 
+pub fn rebase(file: &str, current: &str, ops: &[EditOp]) -> Result<String, PatchError> {
+    let base_hash = content_hash(current.as_bytes());
+    let mut restamped = Vec::with_capacity(ops.len());
+    for (op, edit_op) in ops.iter().enumerate() {
+        let EditOp::ReplaceSnippet {
+            file: op_file,
+            find,
+            replace,
+            ..
+        } = edit_op
+        else {
+            return Err(PatchError::StaleBase {
+                op,
+                file: file.to_owned(),
+            });
+        };
+        restamped.push(EditOp::ReplaceSnippet {
+            file: op_file.clone(),
+            base_hash: base_hash.clone(),
+            find: find.clone(),
+            replace: replace.clone(),
+        });
+    }
+    let sources = BTreeMap::from([(file.to_owned(), current.to_owned())]);
+    Ok(apply(&sources, &restamped)?
+        .remove(file)
+        .unwrap_or_else(|| current.to_owned()))
+}
+
 fn resolve<'s>(
     op: usize,
     edit_op: &EditOp,
@@ -205,7 +234,7 @@ mod tests {
 
     use serde_json::json;
 
-    use super::{PatchError, apply};
+    use super::{PatchError, apply, rebase};
     use crate::content_hash;
     use crate::contracts::EditOp;
 
@@ -237,6 +266,42 @@ mod tests {
             "kind": "replace_snippet", "file": FILE, "base_hash": content_hash(content.as_bytes()).as_str(),
             "find": find, "replace": replace,
         }))
+    }
+
+    const CARD: &str = "export const B = () => (\n  <div>\n    <b />\n  </div>\n);\n";
+
+    #[test]
+    fn rebases_snippet_edits_onto_content_that_moved() {
+        let ops = [snippet(CARD, "<b />", "<b />\n    <i />")];
+        let current = format!("import x from './x';\n{CARD}");
+
+        let rebased = rebase(FILE, &current, &ops).expect("rebased");
+
+        assert_eq!(
+            rebased,
+            "import x from './x';\nexport const B = () => (\n  <div>\n    <b />\n    <i />\n  </div>\n);\n"
+        );
+    }
+
+    #[test]
+    fn rebase_fails_when_the_snippet_is_gone_or_repeated_or_not_a_snippet() {
+        let ops = [snippet(CARD, "<b />", "<i />")];
+        let gone = CARD.replace("<b />", "<u />");
+        let repeated = CARD.replace("<b />", "<b />\n    <b />");
+
+        assert!(matches!(
+            rebase(FILE, &gone, &ops),
+            Err(PatchError::SnippetNotUnique { count: 0, .. })
+        ));
+        assert!(matches!(
+            rebase(FILE, &repeated, &ops),
+            Err(PatchError::SnippetNotUnique { count: 2, .. })
+        ));
+        let tokens = [class_tokens(CARD, 2, 3, &["p-2"], &[])];
+        assert!(matches!(
+            rebase(FILE, CARD, &tokens),
+            Err(PatchError::StaleBase { op: 0, .. })
+        ));
     }
 
     #[test]

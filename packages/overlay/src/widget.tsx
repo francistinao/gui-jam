@@ -43,26 +43,30 @@ export function mount(host: WidgetHost): Widget {
   const drawLayer = createDrawLayer({
     parent: layer,
     onStroke: (points, bounds) => {
-      void controller.draw(points, bounds).then((drawn) => {
-        if (drawn === 'none') drawLayer.clear();
-        else if (drawn === 'selected') drawLayer.keepOnly([points]);
-        else drawLayer.keepOnly(store.get().sketch?.strokes ?? [points]);
-      });
+      void controller.draw(points, bounds).then(repaint);
     },
   });
-  let selected = false;
+  function repaint(): void {
+    drawLayer.keepOnly(store.get().jobs.flatMap((job) => job.strokes));
+  }
+  let painted = store.get().jobs;
   store.subscribe(() => {
-    const now = store.get().selection !== null;
-    if (selected && !now) drawLayer.clear();
-    selected = now;
+    const { jobs } = store.get();
+    if (jobs === painted) return;
+    painted = jobs;
+    repaint();
   });
 
   function setTool(tool: WidgetState['tool']): void {
     store.set({ tool });
     if (tool === 'select') selectLayer.enable();
     else selectLayer.disable();
-    if (tool === 'draw') drawLayer.enable();
-    else drawLayer.disable();
+    if (tool === 'draw') {
+      drawLayer.enable();
+      repaint();
+    } else {
+      drawLayer.disable();
+    }
   }
 
   document.addEventListener('keydown', (event) => {

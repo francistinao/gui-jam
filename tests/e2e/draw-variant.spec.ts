@@ -251,26 +251,52 @@ test('Ask AI from fine-tune, then Cancel, stops the CLI and leaves no preview', 
   await expect(page.getByRole('alert')).toHaveCount(0);
 });
 
-test('a second request on the same element cancels the first run', async () => {
+test('runs on the same file finish side by side, and a fourth run in flight is refused', async () => {
   const send = widgetRequests(fixture.api);
-  const first = send('generate.request', {
-    runId: 'e2e-first',
-    ...ORDER_BUTTON_REF,
-    prompt: 'Make it blue with a soft shadow, slowly',
-  });
-  await expect.poll(async () => (await cliRuns()).at(-1)?.request).toContain('slowly');
+  const slowIds = ['e2e-slow-1', 'e2e-slow-2', 'e2e-slow-3'];
+  const slow = slowIds.map((runId) =>
+    send('generate.request', {
+      runId,
+      ...ORDER_BUTTON_REF,
+      prompt: `Make it blue with a soft shadow, slowly ${runId}`,
+    }),
+  );
+  await expect
+    .poll(
+      async () =>
+        (await cliRuns()).filter((run) => run.request?.includes('slowly e2e-slow')).length,
+    )
+    .toBe(3);
 
-  const second = await send('generate.request', {
-    runId: 'e2e-second',
+  const fourth = await send('generate.request', {
+    runId: 'e2e-fourth',
     ...ORDER_BUTTON_REF,
     prompt: 'Make it blue with a soft shadow',
   });
 
-  const replaced = await first;
-  expect(replaced.type === 'error' && replaced.payload.code).toBe('CANCELLED');
+  expect(fourth.type === 'error' && fourth.payload.code).toBe('INVALID_REQUEST');
+  for (const runId of slowIds) await send('generate.cancel', { runId });
+  for (const reply of await Promise.all(slow)) {
+    expect(reply.type === 'error' && reply.payload.code).toBe('CANCELLED');
+  }
+
+  const [first, second] = await Promise.all([
+    send('generate.request', {
+      runId: 'e2e-first',
+      ...ORDER_BUTTON_REF,
+      prompt: 'Make it blue with a soft shadow, pause',
+    }),
+    send('generate.request', {
+      runId: 'e2e-second',
+      ...ORDER_BUTTON_REF,
+      prompt: 'Make it blue with a soft shadow',
+    }),
+  ]);
+  expect(first.type).toBe('generate.done');
   expect(second.type).toBe('generate.done');
-  const discarded = await send('generate.discard', { runId: 'e2e-second' });
-  expect(discarded.type).toBe('generate.discarded');
+  for (const runId of ['e2e-first', 'e2e-second']) {
+    expect((await send('generate.discard', { runId })).type).toBe('generate.discarded');
+  }
 });
 
 test('an exact edit needs no model, and Ask AI for variations asks for three', async ({ page }) => {

@@ -22,6 +22,7 @@ import {
   errorReply,
   generationRunId,
   replyWindowMs,
+  requestRunId,
   terminalLine,
 } from './relay.js';
 import { injectSourceLocations } from './transform-srcloc.js';
@@ -84,8 +85,13 @@ function toUpdateError(error: unknown, file: string): UpdateError {
   return result;
 }
 
+interface PageClient {
+  send(event: string, payload?: unknown): void;
+}
+
 export function guijam(options: GuijamOptions = {}): Plugin<GuijamApi> {
   const overlays = new Map<string, string>();
+  const settled = new Map<string, string>();
   const tailwindRootIds = new Set<string>();
   const tracker = createUpdateTracker(UPDATE_TIMEOUT_MS);
   let devServer: ViteDevServer | undefined;
@@ -93,7 +99,23 @@ export function guijam(options: GuijamOptions = {}): Plugin<GuijamApi> {
   let root = process.cwd();
   let candidatesDir = '';
   let scriptEntries = new Set<string>();
-  const runPages = new Map<string, { send(event: string, payload?: unknown): void }>();
+  const runPages = new Map<string, PageClient>();
+  const pageRuns = new Map<PageClient, Set<string>>();
+
+  function forgetPage(client: PageClient): void {
+    const runs = pageRuns.get(client);
+    pageRuns.delete(client);
+    if (!daemon || !runs) return;
+    for (const runId of runs) {
+      for (const type of ['generate.cancel', 'generate.discard'] as const) {
+        daemon.request({ type, payload: { runId } }).catch((error: unknown) => {
+          devServer?.config.logger.warn(
+            `[guijam] could not drop run ${runId} of a closed page: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        });
+      }
+    }
+  }
 
   function tailwindRootFiles(): string[] {
     return [...new Set([...tailwindRootIds].map((id) => id.split('?', 1)[0] ?? id))];
@@ -206,9 +228,13 @@ export function guijam(options: GuijamOptions = {}): Plugin<GuijamApi> {
 
     if (content === undefined) overlays.delete(id);
     else overlays.set(id, content);
+    settled.delete(id);
     const modules = [...(client.moduleGraph.getModulesByFile(id) ?? [])];
+    const onDisk = !ASSET_FILE.test(id) && existsSync(id) ? await readFile(id, 'utf8') : undefined;
+    const unchanged = content === undefined && previous !== undefined && previous === onDisk;
+    if (unchanged) settled.set(id, previous);
 
-    if (ASSET_FILE.test(id) || (content === undefined && !existsSync(id))) {
+    if (ASSET_FILE.test(id) || (content === undefined && onDisk === undefined) || unchanged) {
       for (const mod of modules) client.moduleGraph.invalidateModule(mod);
       await syncCandidates(id, content);
       return { updateId, status: 'ok', latencyMs: 0, errors: [] };
@@ -255,6 +281,16 @@ export function guijam(options: GuijamOptions = {}): Plugin<GuijamApi> {
       request: (message) => relay(message),
     },
 
+    async hotUpdate({ file, read }) {
+      if (this.environment.name !== 'client') return;
+      const id = normalizePath(file);
+      if (overlays.has(id)) return [];
+      const shown = settled.get(id);
+      if (shown === undefined) return;
+      settled.delete(id);
+      return (await read()) === shown ? [] : undefined;
+    },
+
     config() {
       return { server: { watch: { ignored: ['**/.guijam/**'] } } };
     },
@@ -291,9 +327,19 @@ export function guijam(options: GuijamOptions = {}): Plugin<GuijamApi> {
           response.end(body);
         }, next);
       });
+      server.environments.client.hot.on('vite:client:disconnect', (_data, client) => {
+        forgetPage(client);
+      });
       server.environments.client.hot.on('gj:request', async (data, client) => {
         const runId = generationRunId(data);
-        if (runId !== undefined) runPages.set(runId, client);
+        if (runId !== undefined) {
+          runPages.set(runId, client);
+          const runs = pageRuns.get(client) ?? new Set<string>();
+          runs.add(runId);
+          pageRuns.set(client, runs);
+        }
+        const discarded = requestRunId(data, 'generate.discard');
+        if (discarded !== undefined) pageRuns.get(client)?.delete(discarded);
         try {
           client.send('gj:response', await relay(data));
         } finally {
