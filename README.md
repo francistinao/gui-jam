@@ -2,7 +2,12 @@
 
 Point at the UI in your running Vite app, say or sketch what you want, see real variants live, keep one, polish it by hand, and the source is updated. GUIJam uses the LLM CLI you are already logged into (Claude Code, Codex CLI) and never handles provider credentials.
 
-Status: Phase 0. The repo has the contracts, the Vite overlay plugin (spike S-1) and the Claude Code headless adapter (spike S-3). The widget, daemon gateway, MCP server and `init` are next. See `docs/PRD.md` and `docs/adr/`.
+Status: Phase 1, first slice. In the fixture app you can:
+
+- **Select** an element and fine-tune its fill and radius in a Figma-style panel. The panel follows the element's own classes. Apply writes one line to source, and Undo restores it exactly.
+- **Draw** around an element (or press Ask AI), describe a change, and preview one variant from Claude Code live in the page. Then Use it or Discard it.
+
+Codex, multiple variants, the MCP server and `init` are next. See `docs/PRD.md` and `docs/adr/`.
 
 ## Requirements
 
@@ -40,11 +45,14 @@ cargo test -p gjd-providers --test live_claude_code -- --ignored --test-threads=
 ## Run the fixture app
 
 ```bash
+cargo build -p gjd-daemon
 pnpm build
-pnpm --filter small-react-tailwind4 dev
+GUIJAM_GJD_BIN=$PWD/target/debug/gjd pnpm --filter small-react-tailwind4 dev
 ```
 
-The page loads the GUIJam client (`/@id/virtual:guijam/client`). Overlays are driven through the plugin API (`setOverlay`, `clearOverlay`); see `tests/e2e/s1-overlays.spec.ts`.
+The GUIJam toolbar sits at the bottom right of the page; Alt+Shift+M hides it. The plugin starts the `gjd` daemon named by `GUIJAM_GJD_BIN` (or the plugin's `daemonBinary` option). Without one, the page still loads; choosing an element then shows that the daemon is unavailable. Ask AI runs the `claude` on your `PATH`, so it must be logged in.
+
+`gjd daemon status --project fixtures/small-react-tailwind4` and `gjd daemon stop --project …` inspect and stop the daemon. It also exits after 30 minutes without a dev server.
 
 ## CI and releases
 
@@ -69,10 +77,12 @@ One-time npm setup:
 | `contracts/` | JSON Schemas shared by every process, plus codegen |
 | `crates/gjd-core` | Contract types (generated) and content hashing |
 | `crates/gjd-providers` | Provider CLI adapters (Claude Code) |
-| `crates/gjd-daemon` | The `gjd` binary |
+| `crates/gjd-daemon` | The `gjd` binary: local gateway, previews, journaled commits, AI generation |
 | `packages/guijam` | The published npm package; `guijam/vite` bundles the Vite plugin |
-| `packages/vite-plugin` | Vite plugin: in-memory overlays, HMR result correlation |
+| `packages/vite-plugin` | Vite plugin: in-memory overlays, HMR result correlation, browser toolbar |
+| `packages/overlay` | The in-page widget: select, draw, fine-tune and Ask AI panels |
 | `packages/contracts-ts` | Generated TypeScript contract types |
 | `fixtures/` | Apps the tests run against |
 | `tests/e2e/` | Playwright suites |
+| `tests/fake-cli/` | A stand-in `claude` CLI, so e2e spends no tokens |
 | `docs/` | PRD, ADRs, original handoff bundle |
