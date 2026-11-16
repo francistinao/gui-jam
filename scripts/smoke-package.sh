@@ -16,6 +16,18 @@ if tar -xOzf "$tarball" package/package.json | grep -q '"workspace:'; then
   exit 1
 fi
 
+listing="$(tar -tzf "$tarball")"
+for shipped in package/README.md package/LICENSE package/assets/guijam-readme.jpg; do
+  if ! grep -qx "$shipped" <<< "$listing"; then
+    echo "the package does not ship $shipped" >&2
+    exit 1
+  fi
+done
+if tar -xOzf "$tarball" package/README.md | grep -qE '(\]\(|(src|href)=")(assets/|LICENSE)'; then
+  echo "the packed README still links to files by relative path" >&2
+  exit 1
+fi
+
 pin() { node -p "require('$repo/package.json').devDependencies['$1']"; }
 
 mkdir "$work/app"

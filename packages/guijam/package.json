@@ -12,13 +12,14 @@
     "./package.json": "./package.json"
   },
   "files": [
-    "dist"
+    "dist",
+    "assets"
   ],
   "engines": {
     "node": "^20.19.0 || >=22.12.0"
   },
   "scripts": {
-    "build": "tsdown",
+    "build": "tsdown && node ../../scripts/npm-readme.mjs",
     "typecheck": "tsc --noEmit"
   },
   "peerDependencies": {

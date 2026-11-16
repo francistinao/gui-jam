@@ -69,6 +69,9 @@ jobs:
           npm pkg set "version=$VERSION" repository.type=git "repository.url=$REPO_URL"
           npm pkg delete devDependencies scripts
 
+      - name: Point the npm README at this version's files
+        run: node scripts/npm-readme.mjs
+
       - name: Pack guijam
         working-directory: packages/guijam
         run: pnpm pack --pack-destination "$RUNNER_TEMP"
