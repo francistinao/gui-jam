@@ -358,6 +358,7 @@ export interface GenerateRequest {
   prompt: string;
   forceAi?: boolean;
   page?: PageOutline;
+  sketch?: Sketch;
 }
 export interface PageOutline {
   items: PageItem[];
@@ -370,6 +371,15 @@ export interface PageItem {
   src?: string;
   url?: string;
   box: [number, number, number, number];
+}
+export interface Sketch {
+  images: [SketchImage] | [SketchImage, SketchImage];
+  box: [number, number, number, number];
+  touching: string[];
+}
+export interface SketchImage {
+  mediaType: 'image/png' | 'image/jpeg';
+  base64: string;
 }
 export interface GenerateDoneMessage {
   type: 'generate.done';

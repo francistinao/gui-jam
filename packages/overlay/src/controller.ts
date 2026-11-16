@@ -7,19 +7,25 @@ import type {
   GuijamMessage,
   RadiusValue,
   Route,
+  Sketch,
   VariantPreview,
 } from '@guijam/contracts-ts';
 import type { WidgetHost } from './host';
 import {
-  chooseDrawTarget,
+  classifyGesture,
+  containerIndex,
   cssColor,
   type HexColor,
   hexOfComputedColor,
+  intersects,
+  type Point,
   type Rect,
   samplePoints,
   type Tool,
+  unionRect,
 } from './model';
 import { collectPageOutline } from './page-outline';
+import { captureSketch } from './sketch';
 import type { Store } from './store';
 
 const PREVIEW_DEBOUNCE_MS = 120;
@@ -79,8 +85,14 @@ const IDLE_GENERATION: Generation = {
   error: null,
 };
 
+export interface SketchState {
+  strokes: Point[][];
+  bounds: Rect;
+}
+
 export interface WidgetState {
   tool: Tool | null;
+  sketch: SketchState | null;
   mode: PanelMode;
   generation: Generation;
   hovered: Rect | null;
@@ -96,6 +108,7 @@ export interface WidgetState {
 
 export const initialState: WidgetState = {
   tool: null,
+  sketch: null,
   mode: 'finetune',
   generation: IDLE_GENERATION,
   hovered: null,
@@ -124,16 +137,42 @@ function elementsAt(src: string): HTMLElement[] {
   return [...document.querySelectorAll<HTMLElement>(`[${SRC_ATTRIBUTE}="${CSS.escape(src)}"]`)];
 }
 
-function elementUnder(stroke: Rect): Element | null {
+function annotatedAround(stroke: Rect, exclude: Element): Element[] {
   const found = new Set<Element>();
   for (const { x, y } of samplePoints(stroke)) {
     for (const element of document.elementsFromPoint(x, y)) {
-      if (element.hasAttribute(SRC_ATTRIBUTE)) found.add(element);
+      if (element.hasAttribute(SRC_ATTRIBUTE) && !exclude.contains(element)) found.add(element);
     }
   }
-  const candidates = [...found];
-  const index = chooseDrawTarget(stroke, candidates.map(rectOf));
-  return index === null ? null : (candidates[index] ?? null);
+  return [...found];
+}
+
+function areaOf(element: Element): number {
+  const { width, height } = rectOf(element);
+  return width * height;
+}
+
+function sketchContainer(bounds: Rect, exclude: Element): Element | null {
+  const around = annotatedAround(bounds, exclude);
+  const index = containerIndex(bounds, around.map(rectOf));
+  if (index !== null) return around[index] ?? null;
+  const largest = around.reduce<Element | null>(
+    (best, element) => (best && areaOf(best) >= areaOf(element) ? best : element),
+    null,
+  );
+  return largest ?? document.querySelector(`[${SRC_ATTRIBUTE}]`);
+}
+
+function touchedBy(bounds: Rect, exclude: Element): string[] {
+  const sources = [...document.querySelectorAll(`[${SRC_ATTRIBUTE}]`)]
+    .filter((element) => !exclude.contains(element))
+    .filter((element) => {
+      const rect = rectOf(element);
+      return intersects(rect, bounds) && containerIndex(bounds, [rect]) === null;
+    })
+    .map((element) => element.getAttribute(SRC_ATTRIBUTE) ?? '')
+    .filter((src) => src !== '');
+  return [...new Set(sources)].slice(0, 20);
 }
 
 function readCurrent(element: Element): WidgetState['current'] {
@@ -305,6 +344,9 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
     const id = crypto.randomUUID();
     runId = id;
     store.set({ generation: { ...IDLE_GENERATION, prompt, status: 'running', runId: id } });
+    const { sketch } = store.get();
+    const drawn = sketch ? await sketchRequest(sketch) : null;
+    if (runId !== id) return;
     const reply = await host.request({
       type: 'generate.request',
       payload: {
@@ -314,6 +356,7 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
         column: selection.column,
         prompt,
         page: collectPageOutline(document, host.hostElement),
+        ...(drawn ? { sketch: drawn } : {}),
         ...(forceAi ? { forceAi } : {}),
       },
     });
@@ -346,7 +389,25 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
     });
   }
 
-  async function open(element: Element, mode: PanelMode): Promise<void> {
+  async function sketchRequest(sketch: SketchState): Promise<Sketch> {
+    const { bounds } = sketch;
+    return {
+      images: await captureSketch(sketch.strokes, bounds, host.hostElement),
+      box: [
+        Math.round(bounds.left),
+        Math.round(bounds.top),
+        Math.round(bounds.width),
+        Math.round(bounds.height),
+      ],
+      touching: touchedBy(bounds, host.hostElement),
+    };
+  }
+
+  async function open(
+    element: Element,
+    mode: PanelMode,
+    sketch: SketchState | null = null,
+  ): Promise<void> {
     const src = element.getAttribute(SRC_ATTRIBUTE);
     const parsed = src === null ? null : parseSrc(src);
     if (!parsed) return;
@@ -356,8 +417,9 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
     store.set({
       selection,
       mode,
+      sketch,
       generation: IDLE_GENERATION,
-      anchor: rectOf(element),
+      anchor: sketch ? sketch.bounds : rectOf(element),
       style: null,
       current: readCurrent(element),
       draft: {},
@@ -369,14 +431,30 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
   return {
     select: (element: Element) => open(element, 'finetune'),
 
-    async draw(stroke: Rect): Promise<boolean> {
-      const element = elementUnder(stroke);
-      if (!element) {
-        notify({ kind: 'info', message: 'Nothing editable under that mark.' });
-        return false;
+    async draw(points: Point[], bounds: Rect): Promise<'selected' | 'sketch' | 'none'> {
+      const { sketch, generation } = store.get();
+      if (sketch && generation.status === 'idle') {
+        const next = {
+          strokes: [...sketch.strokes, points],
+          bounds: unionRect(sketch.bounds, bounds),
+        };
+        store.set({ sketch: next, anchor: next.bounds });
+        return 'sketch';
       }
-      await open(element, 'prompt');
-      return true;
+      const around = annotatedAround(bounds, host.hostElement);
+      const gesture = classifyGesture(points, around.map(rectOf));
+      const target = gesture.kind === 'select' ? around[gesture.index] : undefined;
+      if (target) {
+        await open(target, 'prompt');
+        return 'selected';
+      }
+      const container = sketchContainer(bounds, host.hostElement);
+      if (!container) {
+        notify({ kind: 'info', message: 'Nothing editable on this page.' });
+        return 'none';
+      }
+      await open(container, 'prompt', { strokes: [points], bounds });
+      return 'sketch';
     },
 
     async askAI(): Promise<void> {
@@ -444,6 +522,7 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
       const element = elementsAt(selection.src)[0];
       store.set({
         busy: false,
+        sketch: null,
         mode: 'finetune',
         generation: IDLE_GENERATION,
         style: null,
@@ -530,6 +609,7 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
       await revert(notice);
       store.set({
         selection: null,
+        sketch: null,
         anchor: null,
         style: null,
         current: null,
@@ -541,7 +621,8 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
     dismissNotice: () => notify(null),
 
     reanchor(): void {
-      const { selection } = store.get();
+      const { selection, sketch } = store.get();
+      if (sketch) return;
       const element = selection ? elementsAt(selection.src)[0] : undefined;
       if (element) store.set({ anchor: rectOf(element) });
     },

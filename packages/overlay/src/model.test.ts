@@ -4,6 +4,8 @@ import {
   boundsOf,
   chooseDrawTarget,
   clamp,
+  classifyGesture,
+  containerIndex,
   cssColor,
   droppedNote,
   fillOfToken,
@@ -15,6 +17,7 @@ import {
   RADIUS_RANGE,
   radiusOfToken,
   splitPaths,
+  unionRect,
 } from './model';
 
 const token = (raw: string, group: StyleToken['group'], editable = true): StyleToken => ({
@@ -235,5 +238,58 @@ describe('splitPaths', () => {
       { at: 55, text: ' as `logo`.' },
     ]);
     expect(splitPaths('No files here.')).toEqual([{ at: 0, text: 'No files here.' }]);
+  });
+});
+
+describe('classifyGesture', () => {
+  const button = { left: 100, top: 100, width: 120, height: 48 };
+  const section = { left: 0, top: 0, width: 1200, height: 600 };
+  const icon = { left: 600, top: 300, width: 16, height: 16 };
+  const loop = (left: number, top: number, width: number, height: number) => [
+    { x: left, y: top + 10 },
+    { x: left + width, y: top },
+    { x: left + width, y: top + height },
+    { x: left, y: top + height },
+    { x: left + 4, y: top + 14 },
+  ];
+
+  it('treats a loop around an element as selecting it', () => {
+    expect(classifyGesture(loop(80, 86, 160, 76), [section, button])).toEqual({
+      kind: 'select',
+      index: 1,
+    });
+  });
+
+  it('treats open strokes, loops around empty space and loose loops as a sketch', () => {
+    const line = [
+      { x: 400, y: 300 },
+      { x: 700, y: 310 },
+    ];
+    expect(classifyGesture(line, [section, button])).toEqual({ kind: 'sketch' });
+    expect(classifyGesture(loop(500, 250, 300, 120), [section, button])).toEqual({
+      kind: 'sketch',
+    });
+    expect(classifyGesture(loop(500, 250, 300, 120), [section, icon])).toEqual({ kind: 'sketch' });
+  });
+
+  it('selects what a tap lands on, and sketches a tap on nothing', () => {
+    expect(classifyGesture([{ x: 150, y: 120 }], [section, button])).toEqual({
+      kind: 'select',
+      index: 1,
+    });
+    expect(classifyGesture([{ x: 1500, y: 900 }], [section, button])).toEqual({ kind: 'sketch' });
+  });
+});
+
+describe('containerIndex', () => {
+  it('picks the smallest element that holds the whole sketch', () => {
+    const page = { left: 0, top: 0, width: 1280, height: 2000 };
+    const hero = { left: 48, top: 120, width: 1184, height: 300 };
+    const row = { left: 48, top: 276, width: 1184, height: 48 };
+    const sketch = { left: 500, top: 260, width: 300, height: 90 };
+
+    expect(containerIndex(sketch, [page, hero, row])).toBe(1);
+    expect(containerIndex({ left: -10, top: 0, width: 5, height: 5 }, [hero])).toBeNull();
+    expect(unionRect(sketch, row)).toEqual({ left: 48, top: 260, width: 1184, height: 90 });
   });
 });

@@ -21,9 +21,11 @@ for await (const chunk of process.stdin) input += chunk;
 const message = JSON.parse(input.trim().split('\n')[0]);
 const text = message.message.content.find((part) => part.type === 'text').text;
 const request = /^Request: (.*)$/m.exec(text)?.[1] ?? '';
+const images = message.message.content.filter((part) => part.type === 'image');
 log({
   args,
   request,
+  images: images.map((image) => image.source.media_type),
   assets: [...text.matchAll(/ · asset (\S+)/g)].map((match) => match[1]),
 });
 
@@ -67,38 +69,51 @@ if (/slow/i.test(request)) {
     subtype: 'success',
     is_error: false,
     total_cost_usd: 0,
-    structured_output: headerImage
-      ? {
-          variants: [
-            variant(
-              'Header image',
-              'Icon',
-              'Adds the header image before the label.',
-              'Order now',
-              `<img src="${headerImage.replace(/^public/, '')}" alt="" className="size-4" />Order now`,
-            ),
-          ],
-        }
-      : {
-          variants: [
-            variant(
-              'Blue button',
-              'Solid',
-              'Swapped the brand fill for blue.',
-              'bg-brand',
-              'bg-[#2563EB]',
-            ),
-            /invalid/i.test(request)
-              ? variant('Deep blue', 'Deep', 'A darker blue.', 'bg-nowhere', 'bg-[#1D4ED8]')
-              : variant('Deep blue', 'Deep', 'A darker blue.', 'bg-brand', 'bg-[#1D4ED8]'),
-            variant(
-              'Outline',
-              'Outline',
-              'A white button with a blue border.',
-              'bg-brand',
-              'border-2 border-[#2563EB] bg-white',
-            ),
-          ],
-        },
+    structured_output:
+      images.length > 0
+        ? {
+            variants: [
+              variant(
+                'Sketched card',
+                'Card',
+                'A card built from the sketch.',
+                '<OrderButton />',
+                '<OrderButton />\n            <span className="rounded-card bg-white px-4 py-2 shadow">Sketched card</span>',
+              ),
+            ],
+          }
+        : headerImage
+          ? {
+              variants: [
+                variant(
+                  'Header image',
+                  'Icon',
+                  'Adds the header image before the label.',
+                  'Order now',
+                  `<img src="${headerImage.replace(/^public/, '')}" alt="" className="size-4" />Order now`,
+                ),
+              ],
+            }
+          : {
+              variants: [
+                variant(
+                  'Blue button',
+                  'Solid',
+                  'Swapped the brand fill for blue.',
+                  'bg-brand',
+                  'bg-[#2563EB]',
+                ),
+                /invalid/i.test(request)
+                  ? variant('Deep blue', 'Deep', 'A darker blue.', 'bg-nowhere', 'bg-[#1D4ED8]')
+                  : variant('Deep blue', 'Deep', 'A darker blue.', 'bg-brand', 'bg-[#1D4ED8]'),
+                variant(
+                  'Outline',
+                  'Outline',
+                  'A white button with a blue border.',
+                  'bg-brand',
+                  'border-2 border-[#2563EB] bg-white',
+                ),
+              ],
+            },
   });
 }

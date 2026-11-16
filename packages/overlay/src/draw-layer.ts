@@ -1,11 +1,24 @@
 import { boundsOf, type Point, type Rect } from './model';
 
-const STROKE_COLOR = '#0d99ff';
-const STROKE_WIDTH = 3;
+export const STROKE_COLOR = '#0d99ff';
+export const STROKE_WIDTH = 3;
 
 interface DrawLayerOptions {
   parent: HTMLElement;
-  onStroke(bounds: Rect): void;
+  onStroke(points: Point[], bounds: Rect): void;
+}
+
+export function strokePath(context: CanvasRenderingContext2D, stroke: readonly Point[]): void {
+  const [first, ...rest] = stroke;
+  if (!first) return;
+  const path = new Path2D();
+  path.moveTo(first.x, first.y);
+  for (const point of rest) path.lineTo(point.x, point.y);
+  context.lineWidth = STROKE_WIDTH;
+  context.lineCap = 'round';
+  context.lineJoin = 'round';
+  context.strokeStyle = STROKE_COLOR;
+  context.stroke(path);
 }
 
 export function createDrawLayer({ parent, onStroke }: DrawLayerOptions) {
@@ -16,6 +29,7 @@ export function createDrawLayer({ parent, onStroke }: DrawLayerOptions) {
   parent.prepend(canvas);
   const context = canvas.getContext('2d');
 
+  let finished: Point[][] = [];
   let points: Point[] = [];
   let frame = 0;
 
@@ -24,22 +38,15 @@ export function createDrawLayer({ parent, onStroke }: DrawLayerOptions) {
     canvas.width = Math.round(window.innerWidth * ratio);
     canvas.height = Math.round(window.innerHeight * ratio);
     context?.setTransform(ratio, 0, 0, ratio, 0, 0);
+    schedule();
   }
 
   function paint(): void {
     frame = 0;
     if (!context) return;
     context.clearRect(0, 0, canvas.width, canvas.height);
-    const [first, ...rest] = points;
-    if (!first) return;
-    const path = new Path2D();
-    path.moveTo(first.x, first.y);
-    for (const point of rest) path.lineTo(point.x, point.y);
-    context.lineWidth = STROKE_WIDTH;
-    context.lineCap = 'round';
-    context.lineJoin = 'round';
-    context.strokeStyle = STROKE_COLOR;
-    context.stroke(path);
+    for (const stroke of finished) strokePath(context, stroke);
+    strokePath(context, points);
   }
 
   function schedule(): void {
@@ -64,15 +71,24 @@ export function createDrawLayer({ parent, onStroke }: DrawLayerOptions) {
   function onPointerUp(event: PointerEvent): void {
     if (!canvas.hasPointerCapture(event.pointerId)) return;
     canvas.releasePointerCapture(event.pointerId);
-    if (points.length > 0) onStroke(boundsOf(points));
+    const stroke = points;
+    points = [];
+    if (stroke.length === 0) return;
+    finished = [...finished, stroke];
+    schedule();
+    onStroke(stroke, boundsOf(stroke));
   }
 
   canvas.addEventListener('pointerdown', onPointerDown);
   canvas.addEventListener('pointermove', onPointerMove);
   canvas.addEventListener('pointerup', onPointerUp);
-  canvas.addEventListener('pointercancel', () => clear());
+  canvas.addEventListener('pointercancel', () => {
+    points = [];
+    schedule();
+  });
 
   function clear(): void {
+    finished = [];
     points = [];
     schedule();
   }
@@ -87,6 +103,10 @@ export function createDrawLayer({ parent, onStroke }: DrawLayerOptions) {
       canvas.hidden = true;
       window.removeEventListener('resize', resize);
       clear();
+    },
+    keepOnly(strokes: readonly Point[][]): void {
+      finished = [...strokes];
+      schedule();
     },
     clear,
   };

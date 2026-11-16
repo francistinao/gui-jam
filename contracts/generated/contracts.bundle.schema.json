@@ -1556,6 +1556,9 @@
         },
         "page": {
           "$ref": "#/$defs/PageOutline"
+        },
+        "sketch": {
+          "$ref": "#/$defs/Sketch"
         }
       }
     },
@@ -1626,6 +1629,64 @@
             "type": "integer"
           },
           "description": "x, y, width and height in CSS pixels of the viewport."
+        }
+      }
+    },
+    "Sketch": {
+      "description": "Strokes the developer drew where no single element was meant, with images of the page and of the sketch.",
+      "type": "object",
+      "required": [
+        "images",
+        "box",
+        "touching"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "images": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 2,
+          "items": {
+            "$ref": "#/$defs/SketchImage"
+          }
+        },
+        "box": {
+          "type": "array",
+          "minItems": 4,
+          "maxItems": 4,
+          "items": {
+            "type": "integer"
+          },
+          "description": "x, y, width and height of the sketch in CSS pixels of the viewport."
+        },
+        "touching": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 300
+          },
+          "description": "The data-gj-src of annotated elements the sketch overlaps, at most 20."
+        }
+      }
+    },
+    "SketchImage": {
+      "type": "object",
+      "required": [
+        "mediaType",
+        "base64"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "mediaType": {
+          "type": "string",
+          "enum": [
+            "image/png",
+            "image/jpeg"
+          ]
+        },
+        "base64": {
+          "type": "string",
+          "maxLength": 8000000
         }
       }
     },

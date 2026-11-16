@@ -225,3 +225,72 @@ export function splitPaths(answer: string): AnswerPart[] {
   if (last < answer.length) parts.push({ at: last, text: answer.slice(last) });
   return parts;
 }
+
+export type Gesture = { kind: 'select'; index: number } | { kind: 'sketch' };
+
+const TAP_SIZE = 6;
+const CLOSED_LOOP = 0.25;
+const LOOP_FILL = 0.25;
+const EDGE_SLACK = 2;
+
+function enclosedTarget(loop: Rect, candidates: readonly Rect[]): number | null {
+  const loopArea = Math.max(area(loop), 1);
+  let best: number | null = null;
+  candidates.forEach((rect, index) => {
+    const size = area(rect);
+    if (size === 0 || overlap(loop, rect) / size < DRAW_COVERAGE || size / loopArea < LOOP_FILL) {
+      return;
+    }
+    const current = best === null ? undefined : candidates[best];
+    if (!current || size > area(current)) best = index;
+  });
+  return best;
+}
+
+export function classifyGesture(points: readonly Point[], candidates: readonly Rect[]): Gesture {
+  const first = points[0];
+  const last = points.at(-1);
+  if (!first || !last) return { kind: 'sketch' };
+  const bounds = boundsOf(points);
+  if (bounds.width <= TAP_SIZE && bounds.height <= TAP_SIZE) {
+    const index = chooseDrawTarget(
+      { left: first.x, top: first.y, width: 0, height: 0 },
+      candidates,
+    );
+    return index === null ? { kind: 'sketch' } : { kind: 'select', index };
+  }
+  const gap = Math.hypot(last.x - first.x, last.y - first.y);
+  if (gap > Math.hypot(bounds.width, bounds.height) * CLOSED_LOOP) return { kind: 'sketch' };
+  const index = enclosedTarget(bounds, candidates);
+  return index === null ? { kind: 'sketch' } : { kind: 'select', index };
+}
+
+export function containerIndex(bounds: Rect, candidates: readonly Rect[]): number | null {
+  let best: number | null = null;
+  candidates.forEach((rect, index) => {
+    const contains =
+      rect.left <= bounds.left + EDGE_SLACK &&
+      rect.top <= bounds.top + EDGE_SLACK &&
+      rect.left + rect.width >= bounds.left + bounds.width - EDGE_SLACK &&
+      rect.top + rect.height >= bounds.top + bounds.height - EDGE_SLACK;
+    if (!contains || area(rect) === 0) return;
+    const current = best === null ? undefined : candidates[best];
+    if (!current || area(rect) < area(current)) best = index;
+  });
+  return best;
+}
+
+export function unionRect(a: Rect, b: Rect): Rect {
+  const left = Math.min(a.left, b.left);
+  const top = Math.min(a.top, b.top);
+  return {
+    left,
+    top,
+    width: Math.max(a.left + a.width, b.left + b.width) - left,
+    height: Math.max(a.top + a.height, b.top + b.height) - top,
+  };
+}
+
+export function intersects(a: Rect, b: Rect): boolean {
+  return overlap(a, b) > 0;
+}

@@ -21,8 +21,8 @@ use gjd_core::policy::{PolicyError, ProjectRoot};
 use gjd_core::style::inspect;
 use gjd_core::theme::Theme;
 use gjd_providers::{
-    AuthStatus, Discovery, GenerationRequest, ProviderAdapter, ProviderError, ProviderId,
-    ToolPolicy, adapter,
+    AuthStatus, Discovery, GenerationRequest, ImageInput, ProviderAdapter, ProviderError,
+    ProviderId, ToolPolicy, adapter,
 };
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
@@ -307,6 +307,18 @@ fn validate_variants(
         });
     }
     Ok((valid, dropped))
+}
+
+fn sketch_images(request: &GenerateRequest) -> Vec<ImageInput> {
+    request
+        .sketch
+        .iter()
+        .flat_map(|sketch| &sketch.images)
+        .map(|image| ImageInput {
+            media_type: image.media_type.to_string(),
+            base64: image.base64.to_string(),
+        })
+        .collect()
 }
 
 fn variants_phrase(count: usize) -> String {
@@ -774,7 +786,8 @@ impl Daemon {
         let exact = r0::parse_property_edits(&prompt, &style)
             .and_then(|props| finetune_op(&style, &props, &theme).ok());
         let force_ai = request.force_ai.unwrap_or(false);
-        let decision = route::classify(&prompt, exact.is_some(), force_ai);
+        let decision =
+            route::classify(&prompt, exact.is_some(), force_ai, request.sketch.is_some());
         let job = Job {
             request: &request,
             prompt: &prompt,
@@ -859,6 +872,7 @@ impl Daemon {
             &job.request.run_id,
             job.style,
             &self.stylesheet_names(),
+            job.request.sketch.is_some(),
             provider_name,
             tier.model,
         );
@@ -872,7 +886,7 @@ impl Daemon {
                 generate::user_prompt(job.style, job.source, job.prompt, tier),
                 self.references(job).await
             ),
-            images: Vec::new(),
+            images: sketch_images(job.request),
             tools: ToolPolicy::None,
             timeout: tier.timeout,
             cwd: self.project.path().to_path_buf(),
@@ -952,13 +966,25 @@ impl Daemon {
                 mentioned.push((path.to_owned(), content));
             }
         }
-        references::section(
+        let container = format!(
+            "{}:{}:{}",
+            job.request.file, job.request.line, job.request.column
+        );
+        let sketch = job
+            .request
+            .sketch
+            .as_ref()
+            .map_or_else(String::new, |sketch| {
+                references::sketch_section(sketch, &container)
+            });
+        let found = references::section(
             job.request.page.as_ref(),
             &files,
             &self.project.path().to_string_lossy(),
             job.prompt,
             &mentioned,
-        )
+        );
+        format!("{sketch}{found}")
     }
 
     async fn ask(

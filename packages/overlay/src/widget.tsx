@@ -42,9 +42,11 @@ export function mount(host: WidgetHost): Widget {
 
   const drawLayer = createDrawLayer({
     parent: layer,
-    onStroke: (stroke) => {
-      void controller.draw(stroke).then((found) => {
-        if (!found) drawLayer.clear();
+    onStroke: (points, bounds) => {
+      void controller.draw(points, bounds).then((drawn) => {
+        if (drawn === 'none') drawLayer.clear();
+        else if (drawn === 'selected') drawLayer.keepOnly([points]);
+        else drawLayer.keepOnly(store.get().sketch?.strokes ?? [points]);
       });
     },
   });

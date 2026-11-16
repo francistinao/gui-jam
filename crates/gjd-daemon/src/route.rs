@@ -184,7 +184,7 @@ fn is_question(prompt: &str, words: &[String]) -> bool {
 }
 
 #[must_use]
-pub fn classify(prompt: &str, exact: bool, force_ai: bool) -> Decision {
+pub fn classify(prompt: &str, exact: bool, force_ai: bool, sketch: bool) -> Decision {
     let words = words(prompt);
     let question = is_question(prompt, &words);
     let lowered = prompt.to_lowercase();
@@ -193,6 +193,9 @@ pub fn classify(prompt: &str, exact: bool, force_ai: bool) -> Decision {
         question,
         notice,
     };
+    if sketch {
+        return decision(Tier::R2, None);
+    }
     if exact && !force_ai && !question {
         return decision(Tier::R0, Some(EXACT_NOTICE));
     }
@@ -277,7 +280,7 @@ mod tests {
             ),
         ];
         for (prompt, exact, force_ai, tier, question) in cases {
-            let decision = classify(prompt, exact, force_ai);
+            let decision = classify(prompt, exact, force_ai, false);
             assert_eq!(
                 (decision.tier, decision.question),
                 (tier, question),
@@ -288,13 +291,22 @@ mod tests {
 
     #[test]
     fn explains_exact_and_multi_file_routes() {
-        assert_eq!(classify("blue", true, false).notice, Some(EXACT_NOTICE));
-        let decision = classify("refactor this into a shared Button", false, false);
+        assert_eq!(
+            classify("blue", true, false, false).notice,
+            Some(EXACT_NOTICE)
+        );
+        let decision = classify("refactor this into a shared Button", false, false, false);
         assert_eq!(
             (decision.tier, decision.notice),
             (Tier::R2, Some(MULTI_FILE_NOTICE))
         );
-        assert_eq!(classify("what is this?", true, false).tier, Tier::R1);
+        assert_eq!(classify("what is this?", true, false, false).tier, Tier::R1);
+    }
+
+    #[test]
+    fn sends_sketches_to_the_standard_tier_even_when_the_prompt_is_exact() {
+        let decision = classify("make it blue", true, false, true);
+        assert_eq!((decision.tier, decision.notice), (Tier::R2, None));
     }
 
     #[test]
@@ -303,7 +315,7 @@ mod tests {
             "make the card a little softer with rounded corners and a gentle shadow ".repeat(4);
         let started = Instant::now();
         for _ in 0..100 {
-            let _ = classify(&prompt, false, false);
+            let _ = classify(&prompt, false, false, false);
         }
         assert!(started.elapsed().as_micros() / 100 < 1_000);
     }

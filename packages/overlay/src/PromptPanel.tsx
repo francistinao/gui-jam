@@ -60,6 +60,7 @@ export function PromptPanel({ store, controller }: PanelProps) {
   const style = useStore(store, (state) => state.style);
   const generation = useStore(store, (state) => state.generation);
   const busy = useStore(store, (state) => state.busy);
+  const sketched = useStore(store, (state) => state.sketch !== null);
 
   if (!selection || !anchor) return null;
   const { prompt, status, steps, error } = generation;
@@ -71,7 +72,9 @@ export function PromptPanel({ store, controller }: PanelProps) {
       ? 'Variants'
       : status === 'running'
         ? 'Generating'
-        : 'Ask AI';
+        : sketched
+          ? 'Sketch'
+          : 'Ask AI';
 
   return (
     <Popover label={`Ask AI ${selection.file}`} anchor={anchor}>
@@ -98,7 +101,7 @@ export function PromptPanel({ store, controller }: PanelProps) {
         >
           <textarea
             aria-label="Describe the change"
-            placeholder="Make it pill-shaped and darker"
+            placeholder={sketched ? 'Describe what you sketched' : 'Make it pill-shaped and darker'}
             rows={3}
             value={prompt}
             disabled={status === 'running'}
@@ -127,14 +130,32 @@ export function PromptPanel({ store, controller }: PanelProps) {
                 <span role="status" className="typography-body-small mr-auto text-grey-500">
                   Generating…
                 </span>
-                <Button variant="secondary" onClick={() => void controller.cancelGeneration()}>
+                <Button
+                  key="cancel"
+                  type="button"
+                  variant="secondary"
+                  onClick={() => void controller.cancelGeneration()}
+                >
                   Cancel
                 </Button>
               </>
             ) : (
-              <Button type="submit" disabled={prompt.trim() === ''}>
-                {error ? 'Retry' : 'Generate'}
-              </Button>
+              <>
+                {sketched ? (
+                  <Button
+                    key="clear"
+                    type="button"
+                    variant="secondary"
+                    className="mr-auto"
+                    onClick={() => void controller.close()}
+                  >
+                    Clear sketch
+                  </Button>
+                ) : null}
+                <Button key="generate" type="submit" disabled={prompt.trim() === ''}>
+                  {error ? 'Retry' : 'Generate'}
+                </Button>
+              </>
             )}
           </footer>
         </form>

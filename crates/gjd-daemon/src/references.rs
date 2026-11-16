@@ -1,6 +1,6 @@
 use std::fmt::Write as _;
 
-use gjd_core::contracts::{PageItem, PageOutline};
+use gjd_core::contracts::{PageItem, PageOutline, Sketch};
 
 pub const MENTIONED_LINES: usize = 40;
 const MAX_ASSETS: usize = 150;
@@ -161,12 +161,31 @@ pub fn section(
     out
 }
 
+#[must_use]
+pub fn sketch_section(sketch: &Sketch, container: &str) -> String {
+    let [x, y, width, height] = sketch.box_;
+    let mut out = format!(
+        "\n<sketch box=\"{x},{y},{width},{height}\">\nImage 1 is the page as the developer sees it, with their strokes in blue. Image 2, when present, is the strokes alone.\nPlace what it shows inside the element at {container}, at the position of the sketch.\n"
+    );
+    let touching: Vec<&str> = sketch
+        .touching
+        .iter()
+        .take(20)
+        .map(|item| item.as_str())
+        .collect();
+    if !touching.is_empty() {
+        let _ = writeln!(out, "It overlaps: {}", touching.join(", "));
+    }
+    out.push_str("</sketch>\n");
+    out
+}
+
 #[cfg(test)]
 mod tests {
-    use gjd_core::contracts::PageOutline;
+    use gjd_core::contracts::{PageOutline, Sketch};
     use serde_json::json;
 
-    use super::{mentioned_sources, ranked_assets, resolve_url, section};
+    use super::{mentioned_sources, ranked_assets, resolve_url, section, sketch_section};
 
     fn files() -> Vec<String> {
         [
@@ -250,5 +269,21 @@ mod tests {
         assert!(text.contains("- nav (landmark) \"Menu Branches\" · box 900,20,300,30\n"));
         assert!(text.contains("<assets>\nsrc/assets/logo.png\n"));
         assert!(text.contains("<file path=\"src/components/Navbar.tsx\" lines=\"1-2\">\n   1 | export function Navbar() {}\n"));
+    }
+
+    #[test]
+    fn describes_the_sketch_and_where_it_goes() {
+        let sketch: Sketch = serde_json::from_value(json!({
+            "images": [{ "mediaType": "image/jpeg", "base64": "AA==" }],
+            "box": [500, 260, 300, 80],
+            "touching": ["src/App.tsx:36:11"],
+        }))
+        .expect("sketch");
+
+        let text = sketch_section(&sketch, "src/App.tsx:30:9");
+
+        assert!(text.starts_with("\n<sketch box=\"500,260,300,80\">\n"));
+        assert!(text.contains("inside the element at src/App.tsx:30:9"));
+        assert!(text.ends_with("It overlaps: src/App.tsx:36:11\n</sketch>\n"));
     }
 }

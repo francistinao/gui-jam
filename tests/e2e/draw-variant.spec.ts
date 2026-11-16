@@ -21,6 +21,7 @@ import {
 
 const FAKE_CLI_DIR = fileURLToPath(new URL('../fake-cli/', import.meta.url));
 const ORDER_BUTTON = fixturePath('src/components/OrderButton.tsx');
+const APP = fixturePath('src/App.tsx');
 const ORDER_BUTTON_REF = { file: 'src/components/OrderButton.tsx', line: 3, column: 5 };
 const BRAND_RGB = 'rgb(190, 18, 60)';
 const SOLID_RGB = 'rgb(37, 99, 235)';
@@ -36,6 +37,7 @@ interface CliRun {
   args?: string[];
   request?: string;
   assets?: string[];
+  images?: string[];
   interrupted?: boolean;
 }
 
@@ -352,4 +354,49 @@ test('a prompt can point at another part of the page, and the model gets that as
   expect(run?.assets).toContain('public/cup.svg');
   expect(run?.args).toEqual(expect.arrayContaining(['--model', 'sonnet']));
   expect(await fileSnapshot(ORDER_BUTTON)).toEqual(before);
+});
+
+async function stroke(page: Page, points: readonly (readonly [number, number])[]): Promise<void> {
+  const [first, ...rest] = points;
+  if (!first) return;
+  await page.mouse.move(first[0], first[1]);
+  await page.mouse.down();
+  for (const [x, y] of rest) await page.mouse.move(x, y, { steps: 6 });
+  await page.mouse.up();
+}
+
+test('a sketch in empty space sends images of it and places the result where it was drawn', async ({
+  page,
+}) => {
+  await chooseTool(page, 'Draw');
+  const before = await fileSnapshot(APP);
+  const anchor = await page.getByRole('button', { name: 'Order now' }).boundingBox();
+  if (!anchor) throw new Error('the button is not visible');
+  const left = anchor.x + 440;
+  const top = anchor.y - 12;
+
+  await stroke(page, [
+    [left, top],
+    [left + 260, top],
+    [left + 260, top + 72],
+    [left, top + 72],
+    [left + 2, top + 4],
+  ]);
+  const prompt = page.getByRole('dialog', { name: 'Ask AI src/App.tsx' });
+  await expect(prompt.getByText('Sketch', { exact: true })).toBeVisible();
+  await stroke(page, [
+    [left + 20, top + 20],
+    [left + 44, top + 36],
+    [left + 20, top + 52],
+  ]);
+  await prompt
+    .getByRole('textbox', { name: 'Describe the change' })
+    .fill('a card like this with a cup icon');
+  await prompt.getByRole('button', { name: 'Generate' }).click();
+
+  await expect(page.getByRole('main').getByText('Sketched card', { exact: true })).toBeVisible();
+  const run = (await cliRuns()).at(-1);
+  expect(run?.images).toEqual(['image/jpeg', 'image/png']);
+  expect(run?.args).toEqual(expect.arrayContaining(['--model', 'sonnet']));
+  expect(await fileSnapshot(APP)).toEqual(before);
 });
