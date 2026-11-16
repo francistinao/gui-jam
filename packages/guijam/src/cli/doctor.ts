@@ -1,6 +1,7 @@
 import { intro, log, outro } from '@clack/prompts';
 import { describeProject, detectProject, type Project } from './detect.js';
 import { gjdVersion, listProviders } from './gjd.js';
+import { PWA_HINT, projectRunsDevServiceWorker } from './pwa.js';
 import { isWired } from './wire.js';
 
 export interface DoctorOptions {
@@ -60,6 +61,7 @@ async function projectChecks(project: Project): Promise<Check[]> {
       ? { level: 'ok', message: 'The Vite config loads guijam()' }
       : { level: 'fail', message: 'The Vite config does not load guijam(). Run npx guijam init.' },
   );
+  if (await projectRunsDevServiceWorker(project)) checks.push({ level: 'warn', message: PWA_HINT });
   return checks;
 }
 

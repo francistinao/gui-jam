@@ -12,6 +12,7 @@ import {
   runAttached,
   useProvider,
 } from './gjd.js';
+import { PWA_HINT, projectRunsDevServiceWorker } from './pwa.js';
 import { wireProject } from './wire.js';
 
 export interface InitOptions {
@@ -272,7 +273,11 @@ async function ignoreStep(root: string): Promise<void> {
   log.success('Created .gitignore with .guijam/');
 }
 
-function nextSteps(project: Project, highlight: (text: string) => string): string {
+function nextSteps(
+  project: Project,
+  highlight: (text: string) => string,
+  serviceWorker: boolean,
+): string {
   const start =
     project.devScript === undefined
       ? 'Start your dev server'
@@ -283,6 +288,7 @@ function nextSteps(project: Project, highlight: (text: string) => string): strin
     '3. Select an element to fine-tune it, Draw around it for three',
     '   variants, or Ask a question about it.',
     `4. ${highlight('Alt+Shift+M')} hides the toolbar. Something off? Run ${highlight('npx guijam doctor')}`,
+    ...(serviceWorker ? ['', PWA_HINT] : []),
   ].join('\n');
 }
 
@@ -295,7 +301,10 @@ export async function init(options: InitOptions): Promise<number> {
     const wired = await wireStep(project);
     const ready = await providerStep(options);
     await ignoreStep(project.root);
-    note(nextSteps(project, options.highlight), 'Next steps');
+    note(
+      nextSteps(project, options.highlight, await projectRunsDevServiceWorker(project)),
+      'Next steps',
+    );
     outro(
       wired && ready
         ? "You're set. Happy jamming!"

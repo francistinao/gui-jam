@@ -28,10 +28,13 @@ async function loadFixtureVite(): Promise<typeof Vite> {
   return import(pathToFileURL(join(dirname(vitePackageJson), 'dist/node/index.js')).href);
 }
 
-export async function startFixtureServer(configFile?: string): Promise<FixtureServer> {
+export async function startFixtureServer(
+  configFile?: string,
+  root = FIXTURE_DIR,
+): Promise<FixtureServer> {
   const vite = await loadFixtureVite();
   const server = await vite.createServer({
-    root: FIXTURE_DIR,
+    root,
     logLevel: 'warn',
     ...(configFile === undefined ? {} : { configFile: fixturePath(configFile) }),
   });
