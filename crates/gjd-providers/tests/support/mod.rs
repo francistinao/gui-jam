@@ -63,6 +63,7 @@ fn request(
         tools,
         timeout: Duration::from_mins(3),
         cwd: cwd.to_path_buf(),
+        events: None,
     }
 }
 

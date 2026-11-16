@@ -211,6 +211,7 @@ async fn run_probe(
         tools: ToolPolicy::None,
         timeout: PROBE_TIMEOUT,
         cwd: cwd.to_path_buf(),
+        events: None,
     };
     let output = provider
         .generate(discovery, request, CancellationToken::new())

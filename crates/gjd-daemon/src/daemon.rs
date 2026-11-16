@@ -22,7 +22,7 @@ use gjd_core::style::inspect;
 use gjd_core::theme::Theme;
 use gjd_providers::{
     AuthStatus, Discovery, GenerationRequest, ImageInput, ProviderAdapter, ProviderError,
-    ProviderId, ToolPolicy, adapter,
+    ProviderEvent, ProviderId, ToolPolicy, adapter,
 };
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
@@ -411,6 +411,13 @@ struct Changeset {
 
 struct Run {
     cancel: CancellationToken,
+}
+
+struct Prepared {
+    provider: Box<dyn ProviderAdapter>,
+    discovery: Discovery,
+    model: Option<String>,
+    progress: Progress,
 }
 
 struct VariantRun {
@@ -991,6 +998,7 @@ impl Daemon {
             answer: None,
             variants,
             dropped: Vec::new(),
+            notes: Vec::new(),
             update,
         })
     }
@@ -1002,44 +1010,36 @@ impl Daemon {
         notice: Option<&str>,
     ) -> Result<GenerateDone, Failure> {
         let file = job.request.file.as_str();
-        let (provider, discovery) = self.provider().await?;
-        let provider_id = provider.id();
-        let provider_name = provider_id.display_name();
-        if job.request.sketch.is_some() && !provider.capabilities().image_input {
-            return Err(Failure::new(
-                ErrorCode::InvalidRequest,
-                format!("{provider_name} can't read images, so sketches need an AI tool that can."),
-            )
-            .with_action("Choose another with npx guijam provider use <id>."));
-        }
-        let model = config::provider_model(provider_id)
-            .or_else(|| tier.model_for(provider_id).map(str::to_owned));
+        let Prepared {
+            provider,
+            discovery,
+            model,
+            mut progress,
+        } = self.prepare(job, tier).await?;
+        let provider_name = provider.id().display_name();
         let model_label = model.as_deref().unwrap_or("default model");
-        let mut progress = Progress::new(
-            &job.request.run_id,
-            job.style,
-            &self.stylesheet_names(),
-            job.request.sketch.is_some(),
-            provider_name,
-            model_label,
-        );
-        progress.start(Step::Ask);
-        self.report(&progress);
+        let references = self.references(job).await;
         let generation = GenerationRequest {
             model: model.clone(),
             system_prompt: generate::SYSTEM_PROMPT.to_owned(),
             user_prompt: format!(
-                "{}{}",
-                generate::user_prompt(job.style, job.source, job.prompt, tier),
-                self.references(job).await
+                "{}{references}",
+                generate::user_prompt(job.style, job.source, job.prompt, tier)
             ),
             images: sketch_images(job.request),
             tools: ToolPolicy::None,
             timeout: tier.timeout,
             cwd: self.project.path().to_path_buf(),
+            events: None,
         };
         let reply = self
-            .ask(&*provider, &discovery, generation, job.cancel)
+            .ask_reporting(
+                &*provider,
+                &discovery,
+                generation,
+                job.cancel,
+                &mut progress,
+            )
             .await?;
         let route_label = format!("{} · {provider_name} {model_label}", tier.label);
         let route = Route {
@@ -1065,6 +1065,7 @@ impl Daemon {
                 answer: Some(answer),
                 variants: Vec::new(),
                 dropped: Vec::new(),
+                notes: Vec::new(),
                 update: None,
             });
         }
@@ -1092,6 +1093,7 @@ impl Daemon {
             answer: None,
             variants,
             dropped,
+            notes: Vec::new(),
             update,
         })
     }
@@ -1150,6 +1152,70 @@ impl Daemon {
         );
         let folder = assets::prompt_note(&job.request.file, &assets::assets_dir(&files));
         format!("{sketch}{found}{folder}")
+    }
+
+    async fn prepare(&self, job: &Job<'_>, tier: &TierConfig) -> Result<Prepared, Failure> {
+        let mut progress = Progress::new(
+            &job.request.run_id,
+            job.style,
+            &self.stylesheet_names(),
+            job.request.sketch.is_some(),
+            "your AI tool",
+            "checking",
+            tier.timeout,
+        );
+        progress.start(Step::Read);
+        progress.detail("Finding your AI tool…".to_owned());
+        self.report(&progress);
+        let (provider, discovery) = self.provider().await?;
+        let provider_id = provider.id();
+        let provider_name = provider_id.display_name();
+        if job.request.sketch.is_some() && !provider.capabilities().image_input {
+            return Err(Failure::new(
+                ErrorCode::InvalidRequest,
+                format!("{provider_name} can't read images, so sketches need an AI tool that can."),
+            )
+            .with_action("Choose another with npx guijam provider use <id>."));
+        }
+        let model = config::provider_model(provider_id)
+            .or_else(|| tier.model_for(provider_id).map(str::to_owned));
+        let model_label = model.as_deref().unwrap_or("default model");
+        progress.relabel(Step::Ask, generate::ask_label(provider_name, model_label));
+        progress.detail("Gathering the page, assets and files it needs…".to_owned());
+        self.report(&progress);
+        Ok(Prepared {
+            provider,
+            discovery,
+            model,
+            progress,
+        })
+    }
+
+    async fn ask_reporting(
+        &self,
+        provider: &dyn ProviderAdapter,
+        discovery: &Discovery,
+        mut generation: GenerationRequest,
+        cancel: &CancellationToken,
+        progress: &mut Progress,
+    ) -> Result<VariantSet, Failure> {
+        let name = provider.id().display_name();
+        let (events, mut received) = mpsc::unbounded_channel();
+        generation.events = Some(events);
+        progress.start(Step::Ask);
+        progress.detail(generate::event_detail(&ProviderEvent::Started, name));
+        self.report(progress);
+        let ask = self.ask(provider, discovery, generation, cancel);
+        tokio::pin!(ask);
+        loop {
+            tokio::select! {
+                reply = &mut ask => return reply,
+                Some(event) = received.recv() => {
+                    progress.detail(generate::event_detail(&event, name));
+                    self.report(progress);
+                }
+            }
+        }
     }
 
     async fn ask(

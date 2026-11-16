@@ -1,6 +1,7 @@
 import type { Controller, Generation } from './controller';
 import { Button } from './figui/button';
 import { splitPaths } from './model';
+import { RunNotes } from './Popover';
 
 const OPEN_IN_EDITOR = '/__open-in-editor';
 
@@ -16,12 +17,13 @@ interface AnswerPanelProps {
 }
 
 export function AnswerPanel({ generation, controller }: AnswerPanelProps) {
-  const { answer, route, elapsedMs } = generation;
+  const { answer, route, elapsedMs, notes } = generation;
   if (answer === null) return null;
   const meta = [`${(elapsedMs / 1000).toFixed(1)} s`, route?.model].filter(Boolean).join(' · ');
 
   return (
     <section aria-label="Answer" className="flex flex-col gap-2">
+      <RunNotes notes={notes} />
       <p className="typography-body-medium whitespace-pre-wrap text-grey-800">
         {splitPaths(answer).map((part) =>
           'path' in part ? (

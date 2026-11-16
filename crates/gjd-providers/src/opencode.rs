@@ -11,11 +11,11 @@ use tokio::process::Command;
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 
-use crate::process::{EventFold, ProviderProcess, SpawnOptions, run_to_answer};
+use crate::process::{EventFold, ProviderProcess, Signals, SpawnOptions, run_to_answer};
 use crate::text_answer::{TextRun, generate_with_retry};
 use crate::{
     AuthStatus, Capabilities, Discovery, GenerationOutput, GenerationRequest, ModelInfo,
-    ProviderAdapter, ProviderError, ProviderId, RunTimings, ToolPolicy,
+    ProviderAdapter, ProviderError, ProviderEvent, ProviderId, RunTimings, ToolPolicy,
 };
 
 const BINARY: &str = "opencode";
@@ -79,6 +79,7 @@ struct OpenCodeStream {
     ready: Option<Duration>,
     text: String,
     cost: Option<f64>,
+    signals: Signals,
 }
 
 fn not_authenticated() -> ProviderError {
@@ -159,9 +160,11 @@ impl EventFold for OpenCodeStream {
         match event {
             Event::StepStart {} => {
                 self.ready.get_or_insert(elapsed);
+                self.signals.ready();
                 None
             }
             Event::Text { part } => {
+                self.signals.wrote(part.text.len());
                 self.text.push_str(&part.text);
                 None
             }
@@ -435,7 +438,11 @@ impl OpenCode {
             },
         )
         .await?;
-        let mut stream = OpenCodeStream::default();
+        request.emit(ProviderEvent::Started);
+        let mut stream = OpenCodeStream {
+            signals: Signals::new(request.events.clone()),
+            ..OpenCodeStream::default()
+        };
         let answer = run_to_answer(process, &mut stream, request.timeout, &cancel, started).await?;
         Ok(TextRun {
             text: answer.text,
@@ -655,6 +662,7 @@ mod tests {
             tools,
             timeout: Duration::from_secs(60),
             cwd: PathBuf::from("."),
+            events: None,
         }
     }
 

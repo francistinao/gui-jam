@@ -8,11 +8,11 @@ use tokio::process::Command;
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 
-use crate::process::{EventFold, ProviderProcess, SpawnOptions, run_to_answer};
+use crate::process::{EventFold, ProviderProcess, Signals, SpawnOptions, run_to_answer};
 use crate::text_answer::{TextRun, generate_with_retry};
 use crate::{
     AuthStatus, Capabilities, Discovery, GenerationOutput, GenerationRequest, ProviderAdapter,
-    ProviderError, ProviderId, RunTimings, ToolPolicy,
+    ProviderError, ProviderEvent, ProviderId, RunTimings, ToolPolicy,
 };
 
 const BINARY: &str = "gemini";
@@ -50,6 +50,7 @@ struct ResultError {
 struct GeminiStream {
     ready: Option<Duration>,
     text: String,
+    signals: Signals,
 }
 
 fn classify(message: &str) -> ProviderError {
@@ -95,10 +96,12 @@ impl EventFold for GeminiStream {
         match event {
             Event::Init {} => {
                 self.ready.get_or_insert(elapsed);
+                self.signals.ready();
                 None
             }
             Event::Message { role, content } => {
                 if role.as_deref() == Some("assistant") {
+                    self.signals.wrote(content.len());
                     self.text.push_str(&content);
                 }
                 None
@@ -181,7 +184,11 @@ impl GeminiCli {
             },
         )
         .await?;
-        let mut stream = GeminiStream::default();
+        request.emit(ProviderEvent::Started);
+        let mut stream = GeminiStream {
+            signals: Signals::new(request.events.clone()),
+            ..GeminiStream::default()
+        };
         let text = run_to_answer(process, &mut stream, request.timeout, &cancel, started)
             .await
             .map_err(after_exit)?;
@@ -335,6 +342,7 @@ mod tests {
             tools: ToolPolicy::None,
             timeout: Duration::from_secs(60),
             cwd: PathBuf::from("."),
+            events: None,
         };
         let policy = Path::new("/tmp/guijam-policy.toml");
         let none = args(&request, policy);

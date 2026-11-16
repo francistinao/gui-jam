@@ -11,10 +11,10 @@ use tokio::process::Command;
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 
-use crate::process::{EventFold, ProviderProcess, run_to_answer};
+use crate::process::{EventFold, ProviderProcess, Signals, run_to_answer};
 use crate::{
     AuthStatus, Capabilities, Discovery, GenerationOutput, GenerationRequest, ProviderAdapter,
-    ProviderError, ProviderId, RunTimings, ToolPolicy,
+    ProviderError, ProviderEvent, ProviderId, RunTimings, ToolPolicy,
 };
 
 const BINARY: &str = "claude";
@@ -36,8 +36,28 @@ enum StreamEvent {
         error: Option<String>,
     },
     Result(ResultEvent),
+    #[serde(rename = "stream_event")]
+    Partial {
+        event: serde_json::Value,
+    },
     #[serde(other)]
     Other,
+}
+
+fn streamed_bytes(event: &serde_json::Value) -> Option<usize> {
+    match event.get("type")?.as_str()? {
+        "content_block_start" => Some(0),
+        "content_block_delta" => {
+            let delta = event.get("delta")?;
+            let text = delta
+                .get("partial_json")
+                .or_else(|| delta.get("text"))
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default();
+            Some(text.len())
+        }
+        _ => None,
+    }
 }
 
 #[derive(Deserialize)]
@@ -69,6 +89,7 @@ struct Answer {
 struct ClaudeStream {
     ready: Option<Duration>,
     assistant_error: Option<String>,
+    signals: Signals,
 }
 
 impl EventFold for ClaudeStream {
@@ -89,14 +110,25 @@ impl EventFold for ClaudeStream {
         match event {
             StreamEvent::System { subtype } if subtype.as_deref() == Some("init") => {
                 self.ready.get_or_insert(elapsed);
+                self.signals.ready();
                 None
             }
             StreamEvent::Assistant { error: Some(error) } => {
                 self.assistant_error = Some(error);
                 None
             }
+            StreamEvent::Assistant { error: None } => {
+                self.signals.wrote(0);
+                None
+            }
+            StreamEvent::Partial { event } => {
+                if let Some(bytes) = streamed_bytes(&event) {
+                    self.signals.wrote(bytes);
+                }
+                None
+            }
             StreamEvent::Result(result) => Some(self.finish(result)),
-            StreamEvent::System { .. } | StreamEvent::Assistant { .. } | StreamEvent::Other => None,
+            StreamEvent::System { .. } | StreamEvent::Other => None,
         }
     }
 }
@@ -143,6 +175,7 @@ fn args(request: &GenerationRequest) -> Vec<&str> {
         "--output-format",
         "stream-json",
         "--verbose",
+        "--include-partial-messages",
         "--permission-mode",
         "dontAsk",
         "--no-session-persistence",
@@ -260,7 +293,11 @@ impl ProviderAdapter for ClaudeCode {
             user_message(&request).as_bytes(),
         )
         .await?;
-        let mut stream = ClaudeStream::default();
+        request.emit(ProviderEvent::Started);
+        let mut stream = ClaudeStream {
+            signals: Signals::new(request.events.clone()),
+            ..ClaudeStream::default()
+        };
         let answer = run_to_answer(process, &mut stream, request.timeout, &cancel, started).await?;
         Ok(GenerationOutput {
             variant_set: answer.variant_set,
@@ -281,10 +318,33 @@ mod tests {
     use gjd_core::contracts::EditOp;
 
     use super::{Answer, ClaudeStream, args};
-    use crate::process::EventFold;
-    use crate::{GenerationRequest, ProviderError, ToolPolicy};
+    use crate::process::{EventFold, Signals};
+    use crate::{GenerationRequest, ProviderError, ProviderEvent, ToolPolicy};
 
     const SUCCESS: &str = include_str!("../tests/fixtures/claude-code/2.1.325/success.jsonl");
+    const PARTIAL: &str =
+        include_str!("../tests/fixtures/claude-code/2.1.326/partial-messages.jsonl");
+
+    #[test]
+    fn partial_messages_report_ready_then_writing() {
+        let (events, mut received) = tokio::sync::mpsc::unbounded_channel();
+        let mut stream = ClaudeStream {
+            signals: Signals::new(Some(events)),
+            ..ClaudeStream::default()
+        };
+
+        let finished = replay(&mut stream, PARTIAL);
+
+        assert!(finished.is_some(), "the result line ends the run");
+        let mut seen = Vec::new();
+        while let Ok(event) = received.try_recv() {
+            seen.push(event);
+        }
+        assert_eq!(
+            seen,
+            [ProviderEvent::Ready, ProviderEvent::Writing { bytes: 0 }]
+        );
+    }
     const AUTH_FAILURE: &str =
         include_str!("../tests/fixtures/claude-code/2.1.325/auth-failure.jsonl");
 
@@ -304,6 +364,7 @@ mod tests {
             tools,
             timeout: Duration::from_secs(1),
             cwd: PathBuf::from("."),
+            events: None,
         }
     }
 
@@ -409,6 +470,7 @@ mod tests {
         );
         for run in [&no_tools_args, &read_only_args] {
             assert!(run.contains(&"--strict-mcp-config"));
+            assert!(run.contains(&"--include-partial-messages"));
             assert_eq!(flag_value(run, "--permission-mode"), Some("dontAsk"));
         }
     }

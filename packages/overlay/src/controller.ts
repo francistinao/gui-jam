@@ -73,6 +73,10 @@ export interface Generation {
   elapsedMs: number;
   answer: string | null;
   error: Notice | null;
+  notes: string[];
+  startedAt: number | null;
+  stepSince: number | null;
+  timeoutMs: number | null;
 }
 
 const IDLE_GENERATION: Generation = {
@@ -87,6 +91,10 @@ const IDLE_GENERATION: Generation = {
   elapsedMs: 0,
   answer: null,
   error: null,
+  notes: [],
+  startedAt: null,
+  stepSince: null,
+  timeoutMs: null,
 };
 
 export interface SketchState {
@@ -229,8 +237,21 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
     if (message.type !== 'generate.progress') return;
     const jobId = runs.get(message.payload.runId);
     if (!jobId) return;
-    const { steps } = message.payload;
-    updateJob(jobId, (job) => ({ ...job, generation: { ...job.generation, steps } }));
+    const { steps, timeoutMs } = message.payload;
+    updateJob(jobId, (job) => {
+      const before = job.generation.steps.find((step) => step.state === 'active')?.label;
+      const after = steps.find((step) => step.state === 'active')?.label;
+      const stepSince = before === after ? job.generation.stepSince : Date.now();
+      return {
+        ...job,
+        generation: {
+          ...job.generation,
+          steps,
+          stepSince,
+          timeoutMs: timeoutMs ?? job.generation.timeoutMs,
+        },
+      };
+    });
   });
 
   function jobById(id: string | null): Job | undefined {
@@ -399,7 +420,14 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
           ? {
               ...entry,
               previewed: false,
-              generation: { ...IDLE_GENERATION, prompt, status: 'running', runId },
+              generation: {
+                ...IDLE_GENERATION,
+                prompt,
+                status: 'running',
+                runId,
+                startedAt: Date.now(),
+                stepSince: Date.now(),
+              },
             }
           : entry,
       ),
@@ -436,7 +464,7 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
       });
       return;
     }
-    const { variants, dropped, route, elapsedMs, answer, update } = reply.payload;
+    const { variants, dropped, route, elapsedMs, answer, update, notes } = reply.payload;
     const previewed = update !== undefined;
     store.set({
       jobs: store.get().jobs.map((entry) => {
@@ -453,6 +481,7 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
             route,
             elapsedMs,
             answer: answer ?? null,
+            notes: [...(notes ?? [])],
           },
         };
       }),

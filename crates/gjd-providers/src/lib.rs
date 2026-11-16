@@ -15,6 +15,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use gjd_core::contracts::VariantSet;
+use tokio::sync::mpsc::UnboundedSender;
 use tokio_util::sync::CancellationToken;
 
 pub use claude_code::ClaudeCode;
@@ -168,6 +169,14 @@ pub struct ImageInput {
     pub base64: String,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ProviderEvent {
+    Started,
+    Ready,
+    Writing { bytes: usize },
+    Retrying(String),
+}
+
 #[derive(Clone, Debug)]
 pub struct GenerationRequest {
     pub model: Option<String>,
@@ -177,6 +186,15 @@ pub struct GenerationRequest {
     pub tools: ToolPolicy,
     pub timeout: Duration,
     pub cwd: PathBuf,
+    pub events: Option<UnboundedSender<ProviderEvent>>,
+}
+
+impl GenerationRequest {
+    pub fn emit(&self, event: ProviderEvent) {
+        if let Some(events) = &self.events {
+            let _ = events.send(event);
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug)]

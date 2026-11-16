@@ -7,7 +7,7 @@ use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 
 use crate::schema::{STRICT_SCHEMA, drop_null_optionals};
-use crate::{GenerationOutput, GenerationRequest, ProviderError, RunTimings};
+use crate::{GenerationOutput, GenerationRequest, ProviderError, ProviderEvent, RunTimings};
 
 const MIN_RETRY_WINDOW: Duration = Duration::from_secs(10);
 const NO_JSON: &str = "the answer contains no JSON object";
@@ -160,6 +160,7 @@ where
     if remaining < MIN_RETRY_WINDOW {
         return Err(ProviderError::InvalidOutput(reason));
     }
+    request.emit(ProviderEvent::Retrying(reason.clone()));
     let mut retry = request;
     retry.timeout = remaining;
     retry.user_prompt = format!(
@@ -191,7 +192,7 @@ mod tests {
     use tokio_util::sync::CancellationToken;
 
     use super::{TextRun, extract_variant_set, generate_with_retry};
-    use crate::{GenerationRequest, ProviderError, RunTimings, ToolPolicy};
+    use crate::{GenerationRequest, ProviderError, ProviderEvent, RunTimings, ToolPolicy};
 
     const ANSWER: &str = r#"{"answer":"It sits in the header.","variants":[]}"#;
 
@@ -236,6 +237,7 @@ mod tests {
             tools: ToolPolicy::None,
             timeout: Duration::from_secs(60),
             cwd: PathBuf::from("."),
+            events: None,
         }
     }
 
@@ -253,7 +255,12 @@ mod tests {
     #[tokio::test]
     async fn retries_once_with_the_reason_and_the_schema() {
         let prompts = RefCell::new(Vec::new());
-        let output = generate_with_retry(request(), &CancellationToken::new(), |sent| {
+        let (events, mut received) = tokio::sync::mpsc::unbounded_channel();
+        let watched = GenerationRequest {
+            events: Some(events),
+            ..request()
+        };
+        let output = generate_with_retry(watched, &CancellationToken::new(), |sent| {
             prompts
                 .borrow_mut()
                 .push((sent.system_prompt, sent.user_prompt));
@@ -284,6 +291,12 @@ mod tests {
         );
         assert!(output.variant_set.variants.is_empty());
         assert!((output.cost_usd.expect("cost") - 0.02).abs() < 1e-9);
+        assert_eq!(
+            received.try_recv().ok(),
+            Some(ProviderEvent::Retrying(
+                "the answer contains no JSON object".to_owned()
+            ))
+        );
     }
 
     #[tokio::test]

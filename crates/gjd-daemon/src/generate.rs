@@ -3,9 +3,9 @@ use std::time::Duration;
 
 use gjd_core::contracts::{
     EditOp, ElementStyle, ElementStyleClassSource, GenerateProgress, GenerateProgressStepsItem,
-    GenerateProgressStepsItemState, RouteTier,
+    GenerateProgressStepsItemDetail, GenerateProgressStepsItemState, RouteTier,
 };
-use gjd_providers::ProviderId;
+use gjd_providers::{ProviderEvent, ProviderId};
 
 pub const MAX_OPS: usize = 40;
 pub const VARIANTS: usize = 3;
@@ -30,7 +30,7 @@ pub const R1: TierConfig = TierConfig {
 pub const R2: TierConfig = TierConfig {
     tier: RouteTier::R2,
     label: "R2",
-    timeout: Duration::from_secs(120),
+    timeout: Duration::from_secs(180),
     context_lines: 120,
 };
 
@@ -93,6 +93,31 @@ pub struct Progress {
     run_id: String,
     steps: Vec<(Step, String)>,
     active: Step,
+    detail: Option<String>,
+    timeout: Duration,
+}
+
+const DETAIL_CHARS: usize = 200;
+
+#[must_use]
+pub fn ask_label(provider: &str, model: &str) -> String {
+    format!("Asking {provider} ({model})")
+}
+
+#[must_use]
+pub fn event_detail(event: &ProviderEvent, provider: &str) -> String {
+    let detail = match event {
+        ProviderEvent::Started => format!("Starting {provider}…"),
+        ProviderEvent::Ready => format!("{provider} is thinking…"),
+        ProviderEvent::Writing { bytes } if *bytes < 1024 => "Writing the variants…".to_owned(),
+        ProviderEvent::Writing { bytes } => {
+            format!("Writing the variants… {} KB", bytes.div_ceil(1024))
+        }
+        ProviderEvent::Retrying(reason) => {
+            format!("The first answer wasn't usable ({reason}), asking again…")
+        }
+    };
+    detail.chars().take(DETAIL_CHARS).collect()
 }
 
 impl Progress {
@@ -104,6 +129,7 @@ impl Progress {
         sketch: bool,
         provider: &str,
         model: &str,
+        timeout: Duration,
     ) -> Self {
         let file_name = style.file.rsplit('/').next().unwrap_or(&style.file);
         let mut steps = vec![(
@@ -120,7 +146,7 @@ impl Progress {
             ));
         }
         steps.extend([
-            (Step::Ask, format!("Asking {provider} ({model})")),
+            (Step::Ask, ask_label(provider, model)),
             (Step::Check, "Checking the variants".to_owned()),
             (Step::Preview, "Previewing V1".to_owned()),
         ]);
@@ -128,11 +154,18 @@ impl Progress {
             run_id: run_id.to_owned(),
             steps,
             active: Step::Read,
+            detail: None,
+            timeout,
         }
     }
 
     pub fn start(&mut self, step: Step) {
         self.active = step;
+        self.detail = None;
+    }
+
+    pub fn detail(&mut self, detail: String) {
+        self.detail = Some(detail);
     }
 
     pub fn relabel(&mut self, step: Step, label: String) {
@@ -145,10 +178,15 @@ impl Progress {
     pub fn snapshot(&self) -> GenerateProgress {
         GenerateProgress {
             run_id: self.run_id.clone(),
+            timeout_ms: u64::try_from(self.timeout.as_millis()).ok(),
             steps: self
                 .steps
                 .iter()
                 .map(|(step, label)| GenerateProgressStepsItem {
+                    detail: (*step == self.active)
+                        .then(|| self.detail.clone())
+                        .flatten()
+                        .and_then(|detail| GenerateProgressStepsItemDetail::try_from(detail).ok()),
                     label: label.clone(),
                     state: match step.cmp(&self.active) {
                         std::cmp::Ordering::Less => GenerateProgressStepsItemState::Done,
@@ -248,11 +286,15 @@ pub fn op_file(op: &EditOp) -> &str {
 mod tests {
     use std::fmt::Write as _;
     use std::num::NonZeroU64;
+    use std::time::Duration;
 
-    use gjd_core::contracts::{ElementStyle, GenerateProgressStepsItemState as State};
+    use gjd_core::contracts::{
+        ElementStyle, GenerateProgress, GenerateProgressStepsItemState as State,
+    };
     use gjd_core::theme::Theme;
+    use gjd_providers::ProviderEvent;
 
-    use super::{Progress, R1, R2, Step, user_prompt};
+    use super::{Progress, R1, R2, Step, event_detail, user_prompt};
 
     fn states(progress: &Progress) -> Vec<(String, State)> {
         progress
@@ -274,6 +316,7 @@ mod tests {
             false,
             "Claude Code",
             "haiku",
+            Duration::from_secs(60),
         );
 
         progress.start(Step::Ask);
@@ -299,7 +342,15 @@ mod tests {
     fn progress_skips_the_theme_step_without_theme_tokens() {
         let style = inspect("src/A.tsx", BUTTON, 3, 5, &Theme::default());
 
-        let progress = Progress::new("r1", &style, &[], false, "Claude Code", "haiku");
+        let progress = Progress::new(
+            "r1",
+            &style,
+            &[],
+            false,
+            "Claude Code",
+            "haiku",
+            Duration::from_secs(60),
+        );
 
         let labels: Vec<String> = states(&progress)
             .into_iter()
@@ -307,6 +358,84 @@ mod tests {
             .collect();
         assert!(!labels.iter().any(|label| label.contains("tokens")));
         assert_eq!(labels.len(), 4);
+    }
+
+    #[test]
+    fn only_the_active_step_carries_the_detail_and_starting_a_step_clears_it() {
+        let style = inspect("src/A.tsx", BUTTON, 3, 5, &Theme::default());
+        let mut progress = Progress::new(
+            "r1",
+            &style,
+            &[],
+            true,
+            "Codex",
+            "default model",
+            Duration::from_secs(180),
+        );
+
+        progress.detail("Finding your AI tool…".to_owned());
+        let first = progress.snapshot();
+        progress.start(Step::Ask);
+        let cleared = progress.snapshot();
+        progress.detail(event_detail(&ProviderEvent::Ready, "Codex"));
+        let thinking = progress.snapshot();
+
+        assert_eq!(first.timeout_ms, Some(180_000));
+        let details = |snapshot: &GenerateProgress| -> Vec<Option<String>> {
+            snapshot
+                .steps
+                .iter()
+                .map(|step| step.detail.clone().map(String::from))
+                .collect()
+        };
+        assert_eq!(
+            details(&first),
+            [
+                Some("Finding your AI tool…".to_owned()),
+                None,
+                None,
+                None,
+                None
+            ]
+        );
+        assert!(details(&cleared).iter().all(Option::is_none));
+        assert_eq!(
+            details(&thinking),
+            [
+                None,
+                None,
+                Some("Codex is thinking…".to_owned()),
+                None,
+                None
+            ]
+        );
+    }
+
+    #[test]
+    fn describes_each_provider_event_in_plain_words() {
+        let cases = [
+            (ProviderEvent::Started, "Starting Claude Code…"),
+            (ProviderEvent::Ready, "Claude Code is thinking…"),
+            (ProviderEvent::Writing { bytes: 0 }, "Writing the variants…"),
+            (
+                ProviderEvent::Writing { bytes: 1023 },
+                "Writing the variants…",
+            ),
+            (
+                ProviderEvent::Writing { bytes: 1024 },
+                "Writing the variants… 1 KB",
+            ),
+            (
+                ProviderEvent::Writing { bytes: 5000 },
+                "Writing the variants… 5 KB",
+            ),
+        ];
+        for (event, expected) in cases {
+            assert_eq!(event_detail(&event, "Claude Code"), expected);
+        }
+        let retry = event_detail(&ProviderEvent::Retrying("x".repeat(500)), "OpenCode");
+        assert!(retry.starts_with("The first answer wasn't usable (xxx"));
+        assert_eq!(retry.chars().count(), 200);
     }
 
     fn inspect(file: &str, source: &str, line: u64, column: u64, theme: &Theme) -> ElementStyle {

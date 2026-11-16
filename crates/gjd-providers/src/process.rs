@@ -13,7 +13,7 @@ use tokio::task::JoinHandle;
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 
-use crate::ProviderError;
+use crate::{ProviderError, ProviderEvent};
 
 const STDERR_TAIL_BYTES: usize = 4096;
 const EXIT_GRACE: Duration = Duration::from_secs(10);
@@ -185,6 +185,52 @@ fn keep_tail(text: &str) -> String {
     text[start..].to_owned()
 }
 
+const WRITING_STEP_BYTES: usize = 2048;
+
+#[derive(Default)]
+pub(crate) struct Signals {
+    events: Option<mpsc::UnboundedSender<ProviderEvent>>,
+    ready: bool,
+    written: usize,
+    reported: Option<usize>,
+}
+
+impl Signals {
+    pub(crate) fn new(events: Option<mpsc::UnboundedSender<ProviderEvent>>) -> Self {
+        Self {
+            events,
+            ..Self::default()
+        }
+    }
+
+    fn send(&self, event: ProviderEvent) {
+        if let Some(events) = &self.events {
+            let _ = events.send(event);
+        }
+    }
+
+    pub(crate) fn ready(&mut self) {
+        if !self.ready {
+            self.ready = true;
+            self.send(ProviderEvent::Ready);
+        }
+    }
+
+    pub(crate) fn wrote(&mut self, bytes: usize) {
+        self.ready();
+        self.written += bytes;
+        let due = self
+            .reported
+            .is_none_or(|last| self.written >= last + WRITING_STEP_BYTES);
+        if due {
+            self.reported = Some(self.written);
+            self.send(ProviderEvent::Writing {
+                bytes: self.written,
+            });
+        }
+    }
+}
+
 pub(crate) trait EventFold {
     type Answer;
 
@@ -246,5 +292,55 @@ pub(crate) async fn run_to_answer<F: EventFold>(
                 stderr_tail,
             })
         }
+    }
+}
+
+#[cfg(test)]
+mod signal_tests {
+    use super::Signals;
+    use crate::ProviderEvent;
+
+    #[test]
+    fn writing_is_reported_first_and_then_every_two_kilobytes() {
+        let (events, mut received) = tokio::sync::mpsc::unbounded_channel();
+        let mut signals = Signals::new(Some(events));
+
+        signals.ready();
+        signals.ready();
+        signals.wrote(10);
+        signals.wrote(100);
+        signals.wrote(2000);
+        signals.wrote(1);
+        signals.wrote(3000);
+
+        let mut seen = Vec::new();
+        while let Ok(event) = received.try_recv() {
+            seen.push(event);
+        }
+        assert_eq!(
+            seen,
+            [
+                ProviderEvent::Ready,
+                ProviderEvent::Writing { bytes: 10 },
+                ProviderEvent::Writing { bytes: 2110 },
+                ProviderEvent::Writing { bytes: 5111 },
+            ]
+        );
+    }
+
+    #[test]
+    fn writing_implies_ready_and_no_channel_is_fine() {
+        let (events, mut received) = tokio::sync::mpsc::unbounded_channel();
+        let mut signals = Signals::new(Some(events));
+        signals.wrote(5);
+        assert_eq!(received.try_recv().ok(), Some(ProviderEvent::Ready));
+        assert_eq!(
+            received.try_recv().ok(),
+            Some(ProviderEvent::Writing { bytes: 5 })
+        );
+
+        let mut silent = Signals::default();
+        silent.ready();
+        silent.wrote(9999);
     }
 }

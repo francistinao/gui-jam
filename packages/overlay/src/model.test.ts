@@ -9,6 +9,7 @@ import {
   cssColor,
   droppedNote,
   fillOfToken,
+  formatElapsed,
   hexOfComputedColor,
   invertChanges,
   OPACITY_RANGE,
@@ -19,6 +20,7 @@ import {
   radiusOfToken,
   shiftedLine,
   splitPaths,
+  stillWorking,
   unionRect,
 } from './model';
 
@@ -318,5 +320,55 @@ describe('invertChanges', () => {
     expect(inverted.map((change) => change.line)).toEqual([1, 41]);
     expect(shiftedLine(shiftedLine(50, changes), inverted)).toBe(50);
     expect(shiftedLine(31, inverted)).toBe(30);
+  });
+});
+
+describe('stillWorking', () => {
+  const plain = { sketch: false, images: 0, links: 0 };
+
+  it('starts plain, then explains the wait in steps', () => {
+    expect(stillWorking(0, 60_000, plain)).toBe('Generating…');
+    expect(stillWorking(14_999, 60_000, plain)).toBe('Generating…');
+    expect(stillWorking(15_000, 60_000, plain)).toBe(
+      'Still generating. Most changes take 10–40 s.',
+    );
+    expect(stillWorking(15_000, 180_000, { ...plain, sketch: true })).toBe(
+      'Still generating. Sketches and new components usually take 20–60 s.',
+    );
+    expect(stillWorking(45_000, 60_000, plain)).toBe(
+      'Still working: the model is writing three takes on your request.',
+    );
+    expect(stillWorking(90_000, 180_000, plain)).toBe(
+      'Taking longer than usual. It stops on its own after 180 s, or Cancel any time.',
+    );
+    expect(stillWorking(90_000, null, plain)).toBe(
+      'Taking longer than usual. You can keep waiting or Cancel any time.',
+    );
+  });
+
+  it('names the reason that fits the request', () => {
+    expect(stillWorking(50_000, 300_000, { ...plain, images: 1 })).toBe(
+      'Still working: matching the look of your image.',
+    );
+    expect(stillWorking(50_000, 300_000, { ...plain, images: 3, sketch: true })).toBe(
+      'Still working: matching the look of your 3 images.',
+    );
+    expect(stillWorking(50_000, 300_000, { ...plain, links: 2 })).toBe(
+      'Still working: using what it read from 2 links.',
+    );
+    expect(stillWorking(50_000, 300_000, { ...plain, sketch: true })).toBe(
+      'Still working on your sketch: laying out the parts and their styles.',
+    );
+  });
+});
+
+describe('formatElapsed', () => {
+  it('shows seconds, then minutes and padded seconds', () => {
+    expect(formatElapsed(-5)).toBe('0 s');
+    expect(formatElapsed(999)).toBe('0 s');
+    expect(formatElapsed(12_400)).toBe('12 s');
+    expect(formatElapsed(59_999)).toBe('59 s');
+    expect(formatElapsed(60_000)).toBe('1 min 00 s');
+    expect(formatElapsed(125_000)).toBe('2 min 05 s');
   });
 });

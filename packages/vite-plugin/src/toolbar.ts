@@ -7,7 +7,7 @@ type HotContext = NonNullable<ImportMeta['hot']>;
 
 const WIDGET_URL = '/@guijam/widget.js';
 const REQUEST_TIMEOUT_MS = 20_000;
-const GENERATION_TIMEOUT_MS = 155_000;
+const GENERATION_TIMEOUT_MS = 335_000;
 
 export interface ToolSpec {
   tool: Tool;

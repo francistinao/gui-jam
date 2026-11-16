@@ -346,3 +346,49 @@ export function jobBadge({ status, variants, answered, failed }: BadgeInput): {
   if (failed) return { state: 'error', text: 'Failed' };
   return { state: 'draft', text: 'Draft' };
 }
+
+export interface WorkContext {
+  sketch: boolean;
+  images: number;
+  links: number;
+}
+
+export const STILL_WORKING_MS = 15_000;
+export const SLOW_MS = 45_000;
+export const VERY_SLOW_MS = 90_000;
+
+function reason({ sketch, images, links }: WorkContext): string {
+  if (images > 0) {
+    return `Still working: matching the look of your ${images === 1 ? 'image' : `${images} images`}.`;
+  }
+  if (links > 0) {
+    return `Still working: using what it read from ${links === 1 ? 'your link' : `${links} links`}.`;
+  }
+  if (sketch) return 'Still working on your sketch: laying out the parts and their styles.';
+  return 'Still working: the model is writing three takes on your request.';
+}
+
+export function stillWorking(
+  elapsedMs: number,
+  timeoutMs: number | null,
+  context: WorkContext,
+): string {
+  if (elapsedMs < STILL_WORKING_MS) return 'Generating…';
+  if (elapsedMs < SLOW_MS) {
+    return context.sketch || context.images > 0
+      ? 'Still generating. Sketches and new components usually take 20–60 s.'
+      : 'Still generating. Most changes take 10–40 s.';
+  }
+  if (elapsedMs < VERY_SLOW_MS) return reason(context);
+  if (timeoutMs === null)
+    return 'Taking longer than usual. You can keep waiting or Cancel any time.';
+  const limit = Math.round(timeoutMs / 1000);
+  return `Taking longer than usual. It stops on its own after ${limit} s, or Cancel any time.`;
+}
+
+export function formatElapsed(ms: number): string {
+  const seconds = Math.max(0, Math.floor(ms / 1000));
+  if (seconds < 60) return `${seconds} s`;
+  const minutes = Math.floor(seconds / 60);
+  return `${minutes} min ${String(seconds % 60).padStart(2, '0')} s`;
+}

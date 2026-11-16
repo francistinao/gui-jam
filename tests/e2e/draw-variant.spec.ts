@@ -130,7 +130,7 @@ test('a drawn prompt shows its progress, then three variants that switch live wi
   const prompt = await askAbout(page, button, 'Make it blue with a soft shadow, pause');
 
   const progress = prompt.getByRole('list', { name: 'Progress' });
-  await expect(progress.getByRole('listitem')).toHaveText([
+  await expect(progress.locator('[data-step-label]')).toHaveText([
     'Reading <button> at OrderButton.tsx:3',
     'Applying your index.css tokens',
     'Asking Claude Code (haiku)',

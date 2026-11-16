@@ -1741,6 +1741,11 @@
         "runId": {
           "type": "string"
         },
+        "timeoutMs": {
+          "description": "How long the run may take in total before it stops with a timeout.",
+          "type": "integer",
+          "minimum": 0
+        },
         "steps": {
           "type": "array",
           "items": {
@@ -1761,6 +1766,11 @@
                   "active",
                   "pending"
                 ]
+              },
+              "detail": {
+                "description": "What the active step is doing right now, such as the AI tool starting, thinking, writing or retrying.",
+                "type": "string",
+                "maxLength": 200
               }
             }
           }
@@ -1876,6 +1886,15 @@
           "maxItems": 3,
           "items": {
             "$ref": "#/$defs/VariantPreview"
+          }
+        },
+        "notes": {
+          "description": "Context GUIJam could not gather, such as a link that did not load. The run still answered.",
+          "type": "array",
+          "maxItems": 5,
+          "items": {
+            "type": "string",
+            "maxLength": 300
           }
         },
         "dropped": {

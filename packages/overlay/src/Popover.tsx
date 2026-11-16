@@ -119,3 +119,17 @@ export function CodeChanges({ changes }: { changes: readonly CodeChange[] }) {
     </section>
   );
 }
+
+export function RunNotes({ notes }: { notes: readonly string[] }) {
+  if (notes.length === 0) return null;
+  return (
+    <ul
+      aria-label="Notes"
+      className="typography-body-small m-0 flex list-none flex-col gap-1 rounded-md bg-yellow-100 p-2 text-grey-800"
+    >
+      {notes.map((note) => (
+        <li key={note}>{note}</li>
+      ))}
+    </ul>
+  );
+}

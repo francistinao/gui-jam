@@ -2,7 +2,7 @@ import type { Controller, Generation } from './controller';
 import { Button } from './figui/button';
 import { cn } from './figui/cn';
 import { droppedNote } from './model';
-import { CodeChanges } from './Popover';
+import { CodeChanges, RunNotes } from './Popover';
 
 interface VariantsPanelProps {
   generation: Generation;
@@ -11,7 +11,7 @@ interface VariantsPanelProps {
 }
 
 export function VariantsPanel({ generation, busy, controller }: VariantsPanelProps) {
-  const { variants, active, dropped, route, elapsedMs } = generation;
+  const { variants, active, dropped, route, elapsedMs, notes } = generation;
   const variant = variants[active];
   if (!variant) return null;
   const note = droppedNote(dropped);
@@ -23,6 +23,7 @@ export function VariantsPanel({ generation, busy, controller }: VariantsPanelPro
         <h3 className="typography-body-medium-strong">Variants</h3>
         <span className="typography-body-small text-grey-500">Live on your page</span>
       </div>
+      <RunNotes notes={notes} />
       <fieldset aria-label="Pick a variant" className="m-0 grid grid-cols-3 gap-2 border-0 p-0">
         {variants.map((option, index) => (
           <button

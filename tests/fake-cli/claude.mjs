@@ -51,6 +51,21 @@ if (/slow/i.test(request)) {
   });
 } else {
   if (/pause/i.test(request)) await new Promise((resolve) => setTimeout(resolve, 1500));
+  if (/stepwise/i.test(request)) {
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    print({ type: 'stream_event', event: { type: 'message_start' } });
+    print({ type: 'stream_event', event: { type: 'content_block_start' } });
+    for (let chunk = 0; chunk < 3; chunk += 1) {
+      print({
+        type: 'stream_event',
+        event: {
+          type: 'content_block_delta',
+          delta: { type: 'input_json_delta', partial_json: 'x'.repeat(1100) },
+        },
+      });
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+  }
   if (/linger/i.test(request)) await new Promise((resolve) => setTimeout(resolve, 4000));
   const icon = /\b(star|leaf)\b/i.exec(request)?.[1]?.toLowerCase() ?? 'cup';
   const iconName = `${icon[0].toUpperCase()}${icon.slice(1)} icon`;

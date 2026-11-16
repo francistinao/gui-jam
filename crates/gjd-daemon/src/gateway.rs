@@ -13,6 +13,8 @@ use tokio_util::sync::CancellationToken;
 
 use crate::daemon::{Daemon, Failure, PluginLink};
 
+const MAX_MESSAGE_BYTES: usize = 64 << 20;
+
 #[derive(Clone)]
 struct Gateway {
     daemon: Arc<Daemon>,
@@ -46,7 +48,10 @@ async fn upgrade(
     if let Err(status) = admit(&headers, &gateway) {
         return status.into_response();
     }
-    socket.on_upgrade(move |socket| connection(gateway.daemon, socket))
+    socket
+        .max_message_size(MAX_MESSAGE_BYTES)
+        .max_frame_size(MAX_MESSAGE_BYTES)
+        .on_upgrade(move |socket| connection(gateway.daemon, socket))
 }
 
 fn admit(headers: &HeaderMap, gateway: &Gateway) -> Result<(), StatusCode> {
@@ -104,12 +109,18 @@ async fn connection(daemon: Arc<Daemon>, mut socket: WebSocket) {
     daemon.disconnected(&link);
 }
 
+fn request_id(text: &str) -> Option<String> {
+    let value: serde_json::Value = serde_json::from_str(text).ok()?;
+    value.get("id")?.as_str().map(str::to_owned)
+}
+
 fn dispatch(daemon: &Arc<Daemon>, link: &PluginLink, text: &str) {
     let message = match serde_json::from_str::<GuijamMessage>(text) {
         Ok(message) => message,
         Err(error) => {
             let _ = link.send(
-                Failure::invalid_request(format!("unreadable message: {error}")).into_message(None),
+                Failure::invalid_request(format!("unreadable message: {error}"))
+                    .into_message(request_id(text)),
             );
             return;
         }
@@ -125,7 +136,7 @@ fn dispatch(daemon: &Arc<Daemon>, link: &PluginLink, text: &str) {
 
 #[cfg(test)]
 mod tests {
-    use super::constant_time_eq;
+    use super::{constant_time_eq, request_id};
 
     #[test]
     fn compares_tokens_exactly() {
@@ -133,5 +144,18 @@ mod tests {
         assert!(!constant_time_eq(b"abd", b"abc"));
         assert!(!constant_time_eq(b"ab", b"abc"));
         assert!(!constant_time_eq(b"", b"abc"));
+    }
+
+    #[test]
+    fn finds_the_id_of_a_request_it_cannot_read() {
+        let too_long = format!(
+            r#"{{"type":"generate.request","id":"p7","payload":{{"prompt":"{}"}}}}"#,
+            "x".repeat(5000)
+        );
+
+        assert_eq!(request_id(&too_long).as_deref(), Some("p7"));
+        assert_eq!(request_id(r#"{"type":"nope","id":42}"#), None);
+        assert_eq!(request_id("not json"), None);
+        assert_eq!(request_id(r#"{"type":"element.inspect"}"#), None);
     }
 }

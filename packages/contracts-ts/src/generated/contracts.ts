@@ -466,6 +466,13 @@ export interface GenerateDone {
     | [VariantPreview]
     | [VariantPreview, VariantPreview]
     | [VariantPreview, VariantPreview, VariantPreview];
+  notes?:
+    | []
+    | [string]
+    | [string, string]
+    | [string, string, string]
+    | [string, string, string, string]
+    | [string, string, string, string, string];
   dropped: {
     label?: string;
     reason: string;
@@ -504,9 +511,11 @@ export interface GenerateCancelledMessage {
 }
 export interface GenerateProgress {
   runId: string;
+  timeoutMs?: number;
   steps: {
     label: string;
     state: 'done' | 'active' | 'pending';
+    detail?: string;
   }[];
 }
 export interface VariantSelect {

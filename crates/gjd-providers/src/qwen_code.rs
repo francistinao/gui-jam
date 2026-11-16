@@ -10,11 +10,11 @@ use tokio::process::Command;
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 
-use crate::process::{EventFold, ProviderProcess, run_to_answer};
+use crate::process::{EventFold, ProviderProcess, Signals, run_to_answer};
 use crate::text_answer::{TextRun, generate_with_retry};
 use crate::{
     AuthStatus, Capabilities, Discovery, GenerationOutput, GenerationRequest, ProviderAdapter,
-    ProviderError, ProviderId, RunTimings, ToolPolicy,
+    ProviderError, ProviderEvent, ProviderId, RunTimings, ToolPolicy,
 };
 
 const BINARY: &str = "qwen";
@@ -79,6 +79,7 @@ struct QwenStream {
     ready: Option<Duration>,
     text: String,
     structured: Option<Value>,
+    signals: Signals,
 }
 
 struct Answer {
@@ -126,14 +127,19 @@ impl EventFold for QwenStream {
             Event::System { subtype } => {
                 if subtype.as_deref() == Some("init") {
                     self.ready.get_or_insert(elapsed);
+                    self.signals.ready();
                 }
                 None
             }
             Event::Assistant { message } => {
                 for block in message.content {
                     match block {
-                        ContentBlock::Text { text } => self.text.push_str(&text),
+                        ContentBlock::Text { text } => {
+                            self.signals.wrote(text.len());
+                            self.text.push_str(&text);
+                        }
                         ContentBlock::ToolUse { name, input } if name == STRUCTURED_TOOL => {
+                            self.signals.wrote(input.to_string().len());
                             self.structured = Some(input);
                         }
                         ContentBlock::ToolUse { .. } | ContentBlock::Other => {}
@@ -229,7 +235,11 @@ impl QwenCode {
             request.user_prompt.as_bytes(),
         )
         .await?;
-        let mut stream = QwenStream::default();
+        request.emit(ProviderEvent::Started);
+        let mut stream = QwenStream {
+            signals: Signals::new(request.events.clone()),
+            ..QwenStream::default()
+        };
         let answer = run_to_answer(process, &mut stream, request.timeout, &cancel, started).await?;
         Ok(TextRun {
             text: answer.text,
@@ -351,6 +361,7 @@ mod tests {
             tools: ToolPolicy::None,
             timeout: Duration::from_secs(60),
             cwd: PathBuf::from("."),
+            events: None,
         };
         let none = args(&request);
         let read_only = args(&GenerationRequest {

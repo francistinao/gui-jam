@@ -12,11 +12,11 @@ use tokio::process::Command;
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 
-use crate::process::{EventFold, ProviderProcess, run_to_answer};
+use crate::process::{EventFold, ProviderProcess, Signals, run_to_answer};
 use crate::schema::{STRICT_SCHEMA, drop_null_optionals};
 use crate::{
     AuthStatus, Capabilities, Discovery, GenerationOutput, GenerationRequest, ImageInput,
-    ProviderAdapter, ProviderError, ProviderId, RunTimings, ToolPolicy,
+    ProviderAdapter, ProviderError, ProviderEvent, ProviderId, RunTimings, ToolPolicy,
 };
 
 const BINARY: &str = "codex";
@@ -70,6 +70,7 @@ struct EventError {
 struct CodexStream {
     ready: Option<Duration>,
     message: Option<String>,
+    signals: Signals,
 }
 
 impl EventFold for CodexStream {
@@ -90,11 +91,13 @@ impl EventFold for CodexStream {
         match event {
             Event::ThreadStarted {} => {
                 self.ready.get_or_insert(elapsed);
+                self.signals.ready();
                 None
             }
             Event::ItemCompleted {
                 item: Item::AgentMessage { text },
             } => {
+                self.signals.wrote(text.len());
                 self.message = Some(text);
                 None
             }
@@ -293,7 +296,11 @@ impl ProviderAdapter for Codex {
             request.user_prompt.as_bytes(),
         )
         .await?;
-        let mut stream = CodexStream::default();
+        request.emit(ProviderEvent::Started);
+        let mut stream = CodexStream {
+            signals: Signals::new(request.events.clone()),
+            ..CodexStream::default()
+        };
         let variant_set =
             run_to_answer(process, &mut stream, request.timeout, &cancel, started).await?;
         Ok(GenerationOutput {
@@ -347,6 +354,7 @@ mod tests {
             tools,
             timeout: Duration::from_secs(1),
             cwd: PathBuf::from("."),
+            events: None,
         }
     }
 
