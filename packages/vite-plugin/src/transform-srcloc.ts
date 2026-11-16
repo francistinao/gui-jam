@@ -1,5 +1,5 @@
 import MagicString, { type SourceMap } from 'magic-string';
-import { parseSync, Visitor } from 'oxc-parser';
+import { type Expression, type Program, parseSync, Visitor } from 'oxc-parser';
 
 export const SRC_ATTRIBUTE = 'data-gj-src';
 
@@ -39,15 +39,58 @@ function isIntrinsic(name: string): boolean {
   return first >= 97 && first <= 122;
 }
 
+const TAG_NAME = /^[a-z][a-z0-9-]*$/;
+
+function mayHoldTagName(node: Expression | null | undefined): boolean {
+  if (!node) return false;
+  switch (node.type) {
+    case 'Literal':
+      return typeof node.value === 'string' && TAG_NAME.test(node.value);
+    case 'ConditionalExpression':
+      return mayHoldTagName(node.consequent) || mayHoldTagName(node.alternate);
+    case 'LogicalExpression':
+      return mayHoldTagName(node.left) || mayHoldTagName(node.right);
+    case 'ParenthesizedExpression':
+    case 'TSAsExpression':
+    case 'TSSatisfiesExpression':
+    case 'TSNonNullExpression':
+      return mayHoldTagName(node.expression);
+    default:
+      return false;
+  }
+}
+
 /**
- * Adds `data-gj-src="<path>:<line>:<column>"` to every intrinsic JSX element so a
- * rendered DOM node can be traced back to the element that produced it. Returns
- * null when the module has no intrinsic elements or does not parse.
+ * Names like shadcn's `const Comp = asChild ? Slot.Root : 'button'`: a capitalized
+ * binding that can hold an intrinsic tag, so `<Comp>` may render a DOM element itself.
+ */
+function polymorphicTagNames(program: Program): Set<string> {
+  const names = new Set<string>();
+  new Visitor({
+    VariableDeclarator(node) {
+      if (
+        node.id.type === 'Identifier' &&
+        !isIntrinsic(node.id.name) &&
+        mayHoldTagName(node.init)
+      ) {
+        names.add(node.id.name);
+      }
+    },
+  }).visit(program);
+  return names;
+}
+
+/**
+ * Adds `data-gj-src="<path>:<line>:<column>"` to every intrinsic JSX element, and to
+ * polymorphic tag variables, so a rendered DOM node can be traced back to the element
+ * that produced it. `prepend` is put before the module in the same source map. Returns null
+ * when the module does not parse, or when nothing was annotated and there is nothing to prepend.
  */
 export function injectSourceLocations(
   code: string,
   id: string,
   projectPath: string,
+  prepend = '',
 ): AnnotatedModule | null {
   const parsed = parseSync(id, code);
   if (parsed.errors.length > 0) return null;
@@ -55,11 +98,14 @@ export function injectSourceLocations(
   const lineStarts = lineStartsOf(code);
   const attributePath = projectPath.replaceAll('&', '&amp;').replaceAll('"', '&quot;');
   const output = new MagicString(code);
+  const polymorphic = polymorphicTagNames(parsed.program);
   let annotated = 0;
 
   new Visitor({
     JSXOpeningElement(node) {
-      if (node.name.type !== 'JSXIdentifier' || !isIntrinsic(node.name.name)) return;
+      if (node.name.type !== 'JSXIdentifier') return;
+      const { name } = node.name;
+      if (!isIntrinsic(name) && !polymorphic.has(name)) return;
       const alreadyAnnotated = node.attributes.some(
         (attribute) =>
           attribute.type === 'JSXAttribute' &&
@@ -73,7 +119,8 @@ export function injectSourceLocations(
     },
   }).visit(parsed.program);
 
-  if (annotated === 0) return null;
+  if (annotated === 0 && prepend === '') return null;
+  output.prepend(prepend);
   return {
     code: output.toString(),
     map: output.generateMap({ source: id, includeContent: true, hires: 'boundary' }),

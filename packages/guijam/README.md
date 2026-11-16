@@ -21,3 +21,7 @@ export default defineConfig({
 ```
 
 Requirements: Node `^20.19.0 || >=22.12.0`, Vite 6, 7 or 8. GUIJam is a development tool and does nothing in production builds.
+
+### Pages rendered by a backend (Laravel, Inertia)
+
+When the HTML comes from another server, for example through Laravel's `@vite` directive, Vite never sees an `index.html`. GUIJam then loads itself from the script entries listed in `build.rollupOptions.input`, which `laravel-vite-plugin` sets for you. No extra setup is needed.

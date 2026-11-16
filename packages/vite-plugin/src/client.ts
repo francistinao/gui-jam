@@ -20,9 +20,14 @@ function toUpdateError(err: ErrorPayload['err'], urls: readonly string[]): Updat
   return error;
 }
 
-const hot = import.meta.hot;
+// The page can load this module under two URLs (the injected `/@id/` script and an
+// import added to a script entry); the browser runs each, so only the first one boots.
+const BOOTED: unique symbol = Symbol.for('guijam.client.booted');
+const scope = globalThis as typeof globalThis & { [BOOTED]?: true };
+const hot = scope[BOOTED] ? undefined : import.meta.hot;
 
 if (hot) {
+  scope[BOOTED] = true;
   let pending: PendingUpdate | null = null;
 
   const report = (status: UpdateResult['status'], errors: UpdateError[]) => {

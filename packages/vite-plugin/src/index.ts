@@ -4,11 +4,13 @@ import { createRequire } from 'node:module';
 import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { GuijamMessage, UpdateError, UpdateResult } from '@guijam/contracts-ts';
+import MagicString from 'magic-string';
 import {
   type DevEnvironment,
   type EnvironmentModuleNode,
   normalizePath,
   type Plugin,
+  type ResolvedConfig,
   type ViteDevServer,
   version as viteVersion,
 } from 'vite';
@@ -43,6 +45,8 @@ const WIDGET_URL = '/@guijam/widget.js';
 const WIDGET_FILE = fileURLToPath(new URL('./widget.js', import.meta.url));
 const UPDATE_TIMEOUT_MS = 3000;
 const JSX_MODULE = /\.[jt]sx$/;
+const SCRIPT_MODULE = /\.[cm]?[jt]sx?$/;
+const CLIENT_IMPORT = `import '${CLIENT_ID}';\n`;
 const CSS_ID = /\.css(?:\?.*)?$/;
 const NON_STYLESHEET_QUERY = /[?&](?:worker|sharedworker|raw|url)\b/;
 const TAILWIND_ROOT = /@import\s+["']tailwindcss["']|@tailwind\s+utilities/;
@@ -52,6 +56,21 @@ function readPluginVersion(): string {
   const manifest: unknown = createRequire(import.meta.url)('../package.json');
   const version = (manifest as { version?: unknown }).version;
   return typeof version === 'string' ? version : '0.0.0';
+}
+
+/**
+ * Script entries named in the build input. Backend-served pages (Laravel's `@vite`,
+ * Inertia) load these directly, so `transformIndexHtml` never runs for them.
+ */
+function scriptEntriesOf(config: ResolvedConfig): Set<string> {
+  const input = config.build.rolldownOptions?.input ?? config.build.rollupOptions?.input;
+  const files =
+    typeof input === 'string' ? [input] : Array.isArray(input) ? input : Object.values(input ?? {});
+  return new Set(
+    files
+      .filter((file) => SCRIPT_MODULE.test(file))
+      .map((file) => normalizePath(resolve(config.root, file))),
+  );
 }
 
 function toUpdateError(error: unknown, file: string): UpdateError {
@@ -76,6 +95,7 @@ export function guijam(options: GuijamOptions = {}): Plugin<GuijamApi> {
   let daemon: DaemonClient | undefined;
   let root = process.cwd();
   let candidatesDir = '';
+  let scriptEntries = new Set<string>();
 
   function tailwindRootFiles(): string[] {
     return [...new Set([...tailwindRootIds].map((id) => id.split('?', 1)[0] ?? id))];
@@ -239,6 +259,7 @@ export function guijam(options: GuijamOptions = {}): Plugin<GuijamApi> {
     configResolved(config) {
       root = config.root;
       candidatesDir = join(root, '.guijam', 'run', 'candidates');
+      scriptEntries = scriptEntriesOf(config);
     },
 
     async configureServer(server) {
@@ -273,10 +294,21 @@ export function guijam(options: GuijamOptions = {}): Plugin<GuijamApi> {
       // Must see JSX and Tailwind stylesheets before any other plugin rewrites them.
       order: 'pre',
       handler(code, id) {
+        const prepend =
+          this.environment.name === 'client' && scriptEntries.has(id.split('?', 1)[0] ?? id)
+            ? CLIENT_IMPORT
+            : '';
         if (JSX_MODULE.test(id)) {
           const projectPath = normalizePath(relative(root, id));
           if (projectPath.startsWith('..') || id.includes('/node_modules/')) return null;
-          return injectSourceLocations(code, id, projectPath);
+          return injectSourceLocations(code, id, projectPath, prepend);
+        }
+        if (prepend !== '') {
+          const output = new MagicString(code).prepend(prepend);
+          return {
+            code: output.toString(),
+            map: output.generateMap({ source: id, includeContent: true, hires: 'boundary' }),
+          };
         }
         if (!CSS_ID.test(id) || NON_STYLESHEET_QUERY.test(id) || !TAILWIND_ROOT.test(code)) {
           return null;

@@ -30,9 +30,14 @@ async function loadFixtureVite(): Promise<typeof Vite> {
   return import(pathToFileURL(join(dirname(vitePackageJson), 'dist/node/index.js')).href);
 }
 
-export async function startFixtureServer(): Promise<FixtureServer> {
+/** `configFile` is relative to the fixture; the default is its `vite.config.ts`. */
+export async function startFixtureServer(configFile?: string): Promise<FixtureServer> {
   const vite = await loadFixtureVite();
-  const server = await vite.createServer({ root: FIXTURE_DIR, logLevel: 'warn' });
+  const server = await vite.createServer({
+    root: FIXTURE_DIR,
+    logLevel: 'warn',
+    ...(configFile === undefined ? {} : { configFile: fixturePath(configFile) }),
+  });
   await server.listen();
   const url = server.resolvedUrls?.local[0];
   if (!url) throw new Error('Vite did not report a local URL');

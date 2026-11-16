@@ -52,6 +52,8 @@ GUIJAM_GJD_BIN=$PWD/target/debug/gjd pnpm --filter small-react-tailwind4 dev
 
 The GUIJam toolbar sits at the bottom right of the page; Alt+Shift+M hides it. The plugin starts the `gjd` daemon named by `GUIJAM_GJD_BIN` (or the plugin's `daemonBinary` option). Without one, the page still loads; choosing an element then shows that the daemon is unavailable. Ask AI runs the `claude` on your `PATH`, so it must be logged in.
 
+The client is added to every page through `index.html`. When a backend renders the page (Laravel's `@vite`, Inertia), the plugin instead adds it to the script entries in `build.rollupOptions.input`. `fixtures/small-react-tailwind4/vite.backend.config.ts` and `tests/e2e/backend-served.spec.ts` cover that setup.
+
 `gjd daemon status --project fixtures/small-react-tailwind4` and `gjd daemon stop --project …` inspect and stop the daemon. It also exits after 30 minutes without a dev server.
 
 ## CI and releases

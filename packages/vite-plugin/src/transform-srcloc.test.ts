@@ -54,6 +54,38 @@ describe('injectSourceLocations', () => {
     );
   });
 
+  it("annotates shadcn's polymorphic Comp, which renders a <button> or merges onto its child", () => {
+    const code = [
+      'function Button({ asChild = false, ...props }) {',
+      "  const Comp = (asChild ? SlotPrimitive.Slot : 'button') as React.ElementType;",
+      '  return <Comp data-slot="button" {...props} />;',
+      '}',
+    ].join('\n');
+
+    expect(annotate(code)).toContain('<Comp data-gj-src="src/App.tsx:3:10" data-slot="button"');
+  });
+
+  it('annotates tag variables that fall back to a tag name', () => {
+    const code =
+      "const Tag = as ?? 'h2';\nconst Box = as || 'div';\nconst x = <><Tag /><Box /></>;";
+
+    expect(annotate(code)).toBe(
+      'const Tag = as ?? \'h2\';\nconst Box = as || \'div\';\nconst x = <><Tag data-gj-src="src/App.tsx:3:13" /><Box data-gj-src="src/App.tsx:3:20" /></>;',
+    );
+  });
+
+  it('leaves components that cannot hold a tag name alone', () => {
+    const code = [
+      "import { Card } from './card';",
+      'const Icon = icons[name];',
+      "const Label = props.label ?? 'Untitled';",
+      'function Row() { return null; }',
+      'const x = <><Card /><Icon /><Label /><Row /></>;',
+    ].join('\n');
+
+    expect(annotate(code)).toBeUndefined();
+  });
+
   it('does not annotate an element twice', () => {
     const code = 'const x = <i data-gj-src="src/App.tsx:1:11" />;';
 

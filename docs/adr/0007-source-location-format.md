@@ -1,6 +1,6 @@
 # 0007. Source location format: `data-gj-src="<path>:<line>:<column>"`
 
-- Status: accepted
+- Status: accepted, amended 2026-11-17
 - Date: 2026-11-17
 - Code: `packages/vite-plugin/src/transform-srcloc.ts`
 
@@ -22,3 +22,12 @@ F-CORE-01 maps every rendered DOM element to the JSX element that produced it. T
 - Verified: the transform unit tests and `tests/e2e/srcloc.spec.ts` check positions after Korean text on the same line (`src/App.tsx:31:20`), with spread props, fragments and `cn()`.
 - FR-022 holds: the plugin is `apply: 'serve'`, and `fixtures/small-react-tailwind4/tests/build-isolation.test.ts` asserts byte-identical builds. That test fails if `apply: 'serve'` is removed.
 - Attributes are longer than a fileId would make them (around 30 bytes each). If that ever matters on large pages, the format can switch to ids without changing the Rust resolver, which only consumes `{file, line, column}`.
+
+## Amendment (2026-11-17): polymorphic tag variables
+
+Running the packed package in a real shadcn app showed that `Button` never got a location. It renders `<Comp>`, where `const Comp = asChild ? Slot.Root : 'button'`. Select mode then picked the nearest annotated ancestor, which was the whole header.
+
+- A capitalized name bound by `const`/`let` to an expression that can hold a tag name is now annotated like an intrinsic element. The expression can be a lowercase string literal, or a conditional or `??`/`||` expression with one as a branch, looking through parentheses and `as`/`satisfies`/`!`. Examples: `asChild ? Slot.Root : 'button'`, `as ?? 'div'`.
+- When `Comp` is the string, the DOM element gets the attribute. When it is Radix `Slot`, the attribute is merged onto the child. A child annotated in user code keeps its own location, because the child's props win the merge.
+- Imported components, components declared as functions or classes, and other variables (`icons[name]`) stay unannotated.
+- In shadcn, the selection is now `ui/button.tsx`. Its `className` is `cn(buttonVariants(...))`, so the panel offers Ask AI rather than fine-tune. Editing a single instance at the call site stays F-UI-09 (P2).
