@@ -17,7 +17,8 @@ Commands
 
 Options
   -y, --yes            Use the defaults instead of asking
-      --provider <id>  The AI tool to use: claude-code, codex or opencode
+      --provider <id>  The AI tool to use: claude-code, codex, opencode, qwen-code
+                       or gemini-cli
       --model <id>     The model to use with it, such as deepseek/deepseek-chat
       --skip-install   Don't add guijam to package.json
       --cwd <dir>      Run in another folder

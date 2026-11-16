@@ -1,8 +1,10 @@
 mod claude_code;
 mod codex;
 mod error;
+mod gemini_cli;
 mod opencode;
 mod process;
+mod qwen_code;
 mod schema;
 mod text_answer;
 
@@ -18,17 +20,27 @@ use tokio_util::sync::CancellationToken;
 pub use claude_code::ClaudeCode;
 pub use codex::Codex;
 pub use error::ProviderError;
+pub use gemini_cli::GeminiCli;
 pub use opencode::OpenCode;
+pub use qwen_code::QwenCode;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ProviderId {
     ClaudeCode,
     Codex,
     OpenCode,
+    QwenCode,
+    GeminiCli,
 }
 
 impl ProviderId {
-    pub const ALL: [Self; 3] = [Self::ClaudeCode, Self::Codex, Self::OpenCode];
+    pub const ALL: [Self; 5] = [
+        Self::ClaudeCode,
+        Self::Codex,
+        Self::OpenCode,
+        Self::QwenCode,
+        Self::GeminiCli,
+    ];
 
     #[must_use]
     pub fn as_str(self) -> &'static str {
@@ -36,6 +48,8 @@ impl ProviderId {
             Self::ClaudeCode => "claude-code",
             Self::Codex => "codex",
             Self::OpenCode => "opencode",
+            Self::QwenCode => "qwen-code",
+            Self::GeminiCli => "gemini-cli",
         }
     }
 
@@ -45,6 +59,8 @@ impl ProviderId {
             Self::ClaudeCode => "Claude Code",
             Self::Codex => "Codex",
             Self::OpenCode => "OpenCode",
+            Self::QwenCode => "Qwen Code",
+            Self::GeminiCli => "Gemini CLI",
         }
     }
 
@@ -53,7 +69,7 @@ impl ProviderId {
         match self {
             Self::ClaudeCode => Some("haiku"),
             Self::Codex => Some("gpt-6-luna"),
-            Self::OpenCode => None,
+            Self::OpenCode | Self::QwenCode | Self::GeminiCli => None,
         }
     }
 
@@ -61,7 +77,7 @@ impl ProviderId {
     pub fn standard_model(self) -> Option<&'static str> {
         match self {
             Self::ClaudeCode => Some("sonnet"),
-            Self::Codex | Self::OpenCode => None,
+            Self::Codex | Self::OpenCode | Self::QwenCode | Self::GeminiCli => None,
         }
     }
 
@@ -71,6 +87,8 @@ impl ProviderId {
             Self::ClaudeCode => "npm install -g @anthropic-ai/claude-code",
             Self::Codex => "npm install -g @openai/codex",
             Self::OpenCode => "npm install -g opencode-ai",
+            Self::QwenCode => "npm install -g @qwen-code/qwen-code",
+            Self::GeminiCli => "npm install -g @google/gemini-cli",
         }
     }
 }
@@ -202,5 +220,7 @@ pub fn adapter(id: ProviderId) -> Option<Box<dyn ProviderAdapter>> {
         ProviderId::ClaudeCode => Some(Box::new(ClaudeCode)),
         ProviderId::Codex => Some(Box::new(Codex)),
         ProviderId::OpenCode => Some(Box::new(OpenCode)),
+        ProviderId::QwenCode => Some(Box::new(QwenCode)),
+        ProviderId::GeminiCli => Some(Box::new(GeminiCli)),
     }
 }

@@ -60,7 +60,7 @@ Every applied change shows an **Undo** for 10 seconds, and `Alt+Shift+M` hides t
 - Node `^20.19.0` or `>=22.12.0`, on macOS or Linux
 - Vite 6, 7 or 8, with React, Preact or Solid. Vue, Svelte, Nuxt, Next.js and Angular support is in progress.
 - Tailwind CSS for the fine-tune panel. Draw and Ask work with any CSS.
-- An AI coding CLI, installed and logged in: [Claude Code](https://claude.com/claude-code), [Codex](https://github.com/openai/codex) or [OpenCode](https://opencode.ai). OpenCode reaches DeepSeek, GLM and many other models with your own key. `init` helps you pick one and log in.
+- An AI coding CLI, installed and logged in: [Claude Code](https://claude.com/claude-code), [Codex](https://github.com/openai/codex) or [OpenCode](https://opencode.ai). OpenCode reaches DeepSeek, GLM and many other models with your own key. [Qwen Code](https://github.com/QwenLM/qwen-code) and [Gemini CLI](https://github.com/google-gemini/gemini-cli) are supported too, but haven't been verified live yet. `init` helps you pick one and log in.
 
 ### Pages rendered by a backend
 
