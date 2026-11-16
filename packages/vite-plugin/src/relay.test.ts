@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { checkWidgetRequest, errorReply, terminalLine } from './relay.js';
+import { checkWidgetRequest, errorReply, replyWindowMs, terminalLine } from './relay.js';
 
 describe('checkWidgetRequest', () => {
   it('admits a widget request with an id and a payload', () => {
@@ -39,6 +39,14 @@ describe('checkWidgetRequest', () => {
       ok: false,
       reply: errorReply('INVALID_REQUEST', 'requests must be objects', undefined),
     });
+  });
+});
+
+describe('replyWindowMs', () => {
+  it('waits longer for a generation than for edits', () => {
+    expect(replyWindowMs('generate.request')).toBe(90_000);
+    expect(replyWindowMs('generate.cancel')).toBeUndefined();
+    expect(replyWindowMs('finetune.preview')).toBeUndefined();
   });
 });
 

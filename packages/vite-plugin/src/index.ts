@@ -13,7 +13,7 @@ import {
   version as viteVersion,
 } from 'vite';
 import { DaemonClient } from './daemon-client.js';
-import { checkWidgetRequest, errorReply, terminalLine } from './relay.js';
+import { checkWidgetRequest, errorReply, replyWindowMs, terminalLine } from './relay.js';
 import { injectSourceLocations } from './transform-srcloc.js';
 import { createUpdateTracker, isUpdateResult } from './update-tracker.js';
 
@@ -111,7 +111,7 @@ export function guijam(options: GuijamOptions = {}): Plugin<GuijamApi> {
       );
     }
     try {
-      const reply = await daemon.request(checked.message);
+      const reply = await daemon.request(checked.message, replyWindowMs(checked.message.type));
       const line = terminalLine(reply);
       if (line) devServer?.config.logger.info(`[guijam] ${line}`, { timestamp: true });
       return { ...reply, id };

@@ -6,7 +6,17 @@ const WIDGET_REQUEST_TYPES = [
   'changeset.commit',
   'changeset.discard',
   'journal.undo',
+  'generate.request',
+  'generate.cancel',
 ] as const satisfies readonly GuijamMessage['type'][];
+
+/** The daemon gives a provider 60 s (route R1), then previews the variant. */
+const GENERATION_REPLY_MS = 90_000;
+
+/** How long to wait for the daemon's reply, or undefined for the default. */
+export function replyWindowMs(type: GuijamMessage['type']): number | undefined {
+  return type === 'generate.request' ? GENERATION_REPLY_MS : undefined;
+}
 
 type WidgetRequestType = (typeof WIDGET_REQUEST_TYPES)[number];
 

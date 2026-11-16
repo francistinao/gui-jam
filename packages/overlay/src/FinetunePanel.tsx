@@ -1,5 +1,5 @@
-import type { CodeChange, ElementStyle, StyleGroup, StyleToken } from '@guijam/contracts-ts';
-import { useCallback, useEffect, useState } from 'react';
+import type { ElementStyle, StyleGroup, StyleToken } from '@guijam/contracts-ts';
+import { useEffect, useState } from 'react';
 import type { Controller, Draft, WidgetState } from './controller';
 import { Button } from './figui/button';
 import { ColorChit } from './figui/color-chit';
@@ -14,10 +14,10 @@ import {
   type PanelSection,
   panelSections,
   parseHex,
-  placePopover,
   RADIUS_RANGE,
   radiusOfToken,
 } from './model';
+import { CodeChanges, Popover, PopoverHeader } from './Popover';
 import { type Store, useStore } from './store';
 
 const GROUP_LABELS: Record<StyleGroup, string> = {
@@ -28,7 +28,6 @@ const GROUP_LABELS: Record<StyleGroup, string> = {
   effects: 'Effects',
   opacity: 'Opacity',
 };
-const POPOVER_WIDTH = 300;
 const DEFAULT_RADIUS_PX = 8;
 const DEFAULT_FILL = '#FFFFFF';
 
@@ -284,29 +283,6 @@ function Section({
   );
 }
 
-function numbered(first: number, sign: string, lines: readonly string[]): string {
-  return lines.map((line, index) => `${first + index} ${sign} ${line.trim()}`).join('\n');
-}
-
-function CodeChanges({ changes }: { changes: readonly CodeChange[] }) {
-  if (changes.length === 0) {
-    return <p className="typography-body-medium py-3 text-grey-500">No changes yet.</p>;
-  }
-  return (
-    <div className="flex flex-col gap-2 py-2">
-      {changes.map((change) => (
-        <pre
-          key={`${change.file}:${change.line}`}
-          className="typography-body-small overflow-x-auto rounded-md bg-grey-100 p-2 font-mono"
-        >
-          <span className="block text-red-600">{numbered(change.line, '−', change.before)}</span>
-          <span className="block text-green-600">{numbered(change.line, '+', change.after)}</span>
-        </pre>
-      ))}
-    </div>
-  );
-}
-
 export function FinetunePanel({ store, controller }: PanelProps) {
   const selection = useStore(store, (state) => state.selection);
   const anchor = useStore(store, (state) => state.anchor);
@@ -315,54 +291,23 @@ export function FinetunePanel({ store, controller }: PanelProps) {
   const draft = useStore(store, (state) => state.draft);
   const preview = useStore(store, (state) => state.preview);
   const busy = useStore(store, (state) => state.busy);
-  const [height, setHeight] = useState(360);
-  // The panel mounts and unmounts with the selection, so its size is tracked from the ref.
-  const measure = useCallback((element: HTMLDivElement | null) => {
-    if (!element) return;
-    const observer = new ResizeObserver(() => setHeight(element.offsetHeight));
-    observer.observe(element);
-    return () => observer.disconnect();
-  }, []);
 
   if (!selection || !anchor) return null;
-  const placement = placePopover(
-    anchor,
-    { width: POPOVER_WIDTH, height },
-    { width: window.innerWidth, height: window.innerHeight },
-  );
   const unsaved = preview !== null || Object.keys(draft).length > 0;
   const sections = style ? panelSections(style) : [];
 
   return (
-    <div
-      ref={measure}
-      role="dialog"
-      aria-label={`Fine-tune ${selection.file}`}
-      data-interactive=""
-      className="fixed flex flex-col rounded-[13px] bg-white-1000 p-3 text-black-800 shadow-500 ring-1 ring-black-100"
-      style={{ left: placement.left, top: placement.top, width: POPOVER_WIDTH }}
-    >
-      <header className="flex items-start justify-between gap-2 pb-2">
-        <div className="min-w-0">
-          <div className="flex items-center gap-2">
-            <span className="typography-body-medium font-[600]">{style?.tag ?? '…'}</span>
-            <span className="typography-body-small rounded-sm bg-green-100 px-1 text-green-700">
-              Fine-tune
-            </span>
-          </div>
-          <code className="typography-body-small block truncate text-grey-500">
-            {`${selection.file}:${selection.line}`}
-          </code>
-        </div>
-        <Button
-          variant="ghost"
-          size="icon"
-          aria-label="Close"
-          onClick={() => void controller.close()}
-        >
-          ×
+    <Popover label={`Fine-tune ${selection.file}`} anchor={anchor}>
+      <PopoverHeader
+        tag={style?.tag}
+        badge="Fine-tune"
+        selection={selection}
+        controller={controller}
+      >
+        <Button variant="ghost" onClick={() => void controller.askAI()}>
+          Ask AI
         </Button>
-      </header>
+      </PopoverHeader>
       {selection.instances > 1 ? (
         <p
           role="note"
@@ -415,6 +360,6 @@ export function FinetunePanel({ store, controller }: PanelProps) {
           Apply
         </Button>
       </footer>
-    </div>
+    </Popover>
   );
 }

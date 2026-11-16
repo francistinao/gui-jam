@@ -1,6 +1,7 @@
 import { createRoot } from 'react-dom/client';
 import { App } from './App';
 import { createController, initialState, type WidgetState } from './controller';
+import { createDrawLayer } from './draw-layer';
 import type { Widget, WidgetHost } from './host';
 import { createSelectLayer } from './select-layer';
 import { createStore } from './store';
@@ -27,22 +28,43 @@ function adoptStyles(shadowRoot: ShadowRoot): void {
 
 export function mount(host: WidgetHost): Widget {
   adoptStyles(host.shadowRoot);
+  const layer = document.createElement('div');
+  layer.className = 'guijam-layer';
+  // React clears its root on mount, so the draw canvas sits beside the root, not in it.
   const container = document.createElement('div');
-  container.className = 'guijam-layer';
-  host.shadowRoot.append(container);
+  layer.append(container);
+  host.shadowRoot.append(layer);
 
   const store = createStore<WidgetState>(initialState);
   const controller = createController(host, store);
-  const layer = createSelectLayer({
+  const selectLayer = createSelectLayer({
     hostElement: host.hostElement,
     onHover: controller.hover,
     onPick: (element) => void controller.select(element),
   });
 
+  const drawLayer = createDrawLayer({
+    parent: layer,
+    onStroke: (stroke) => {
+      void controller.draw(stroke).then((found) => {
+        if (!found) drawLayer.clear();
+      });
+    },
+  });
+  // The stroke stays on screen while its prompt is open, and goes when it closes.
+  let selected = false;
+  store.subscribe(() => {
+    const now = store.get().selection !== null;
+    if (selected && !now) drawLayer.clear();
+    selected = now;
+  });
+
   function setTool(tool: WidgetState['tool']): void {
     store.set({ tool });
-    if (tool === 'select') layer.enable();
-    else layer.disable();
+    if (tool === 'select') selectLayer.enable();
+    else selectLayer.disable();
+    if (tool === 'draw') drawLayer.enable();
+    else drawLayer.disable();
   }
 
   document.addEventListener('keydown', (event) => {

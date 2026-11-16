@@ -6,7 +6,15 @@ import type {
   RadiusValue,
 } from '@guijam/contracts-ts';
 import type { WidgetHost } from './host';
-import { cssColor, type HexColor, hexOfComputedColor, type Rect, type Tool } from './model';
+import {
+  chooseDrawTarget,
+  cssColor,
+  type HexColor,
+  hexOfComputedColor,
+  type Rect,
+  samplePoints,
+  type Tool,
+} from './model';
 import type { Store } from './store';
 
 const PREVIEW_DEBOUNCE_MS = 120;
@@ -34,8 +42,30 @@ export interface Notice {
   undoJournalId?: string;
 }
 
+export type PanelMode = 'finetune' | 'prompt';
+
+export interface Variant {
+  changesetId: string;
+  label: string;
+  rationale: string;
+  changes: CodeChange[];
+  provider: string;
+  elapsedMs: number;
+}
+
+export interface Generation {
+  prompt: string;
+  status: 'idle' | 'running' | 'ready';
+  variant: Variant | null;
+}
+
+const IDLE_GENERATION: Generation = { prompt: '', status: 'idle', variant: null };
+
 export interface WidgetState {
   tool: Tool | null;
+  /** Which popover the selection shows: Figma-style fine-tune, or a prompt for Ask AI. */
+  mode: PanelMode;
+  generation: Generation;
   hovered: Rect | null;
   selection: Selection | null;
   anchor: Rect | null;
@@ -50,6 +80,8 @@ export interface WidgetState {
 
 export const initialState: WidgetState = {
   tool: null,
+  mode: 'finetune',
+  generation: IDLE_GENERATION,
   hovered: null,
   selection: null,
   anchor: null,
@@ -77,6 +109,19 @@ function elementsAt(src: string): HTMLElement[] {
   return [...document.querySelectorAll<HTMLElement>(`[${SRC_ATTRIBUTE}="${CSS.escape(src)}"]`)];
 }
 
+/** The annotated element a stroke means (FR-030), looked up under five points of it. */
+function elementUnder(stroke: Rect): Element | null {
+  const found = new Set<Element>();
+  for (const { x, y } of samplePoints(stroke)) {
+    for (const element of document.elementsFromPoint(x, y)) {
+      if (element.hasAttribute(SRC_ATTRIBUTE)) found.add(element);
+    }
+  }
+  const candidates = [...found];
+  const index = chooseDrawTarget(stroke, candidates.map(rectOf));
+  return index === null ? null : (candidates[index] ?? null);
+}
+
 function readCurrent(element: Element): WidgetState['current'] {
   const computed = getComputedStyle(element);
   const radius = Number.parseFloat(computed.borderTopLeftRadius);
@@ -95,6 +140,10 @@ function failure(reply: GuijamMessage): Notice {
   return { kind: 'error', message: `Unexpected reply: ${reply.type}` };
 }
 
+function appliedTo(selection: Selection): string {
+  return `Applied to ${selection.file.split('/').pop() ?? selection.file}.`;
+}
+
 export type Controller = ReturnType<typeof createController>;
 
 export function createController(host: WidgetHost, store: Store<WidgetState>) {
@@ -102,6 +151,8 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
   let previewing: Promise<void> | undefined;
   let noticeTimer: ReturnType<typeof setTimeout> | undefined;
   let editSequence = 0;
+  /** The generation whose reply is still wanted; cleared by cancel and close. */
+  let runId: string | null = null;
   const styled = new Set<HTMLElement>();
 
   function notify(notice: Notice | null, durationMs = NOTICE_MS): void {
@@ -216,21 +267,147 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
     });
   }
 
-  return {
-    async select(element: Element): Promise<void> {
-      const src = element.getAttribute(SRC_ATTRIBUTE);
-      const parsed = src === null ? null : parseSrc(src);
-      if (!parsed) return;
-      if (hasUnsaved()) await revert('Unsaved tweaks were reverted.');
-      const selection: Selection = { ...parsed, instances: elementsAt(parsed.src).length };
-      store.set({
-        selection,
-        anchor: rectOf(element),
-        style: null,
-        current: readCurrent(element),
-        draft: {},
-        preview: null,
+  /** Cancels a run in flight and discards a variant on show; the prompt stays. */
+  async function settleGeneration(): Promise<void> {
+    const { generation } = store.get();
+    if (runId) {
+      const cancelled = runId;
+      runId = null;
+      void host.request({ type: 'generate.cancel', payload: { runId: cancelled } });
+    }
+    store.set({ generation: { ...generation, status: 'idle', variant: null } });
+    if (generation.variant) {
+      await host.request({
+        type: 'changeset.discard',
+        payload: { changesetId: generation.variant.changesetId },
       });
+    }
+  }
+
+  async function open(element: Element, mode: PanelMode): Promise<void> {
+    const src = element.getAttribute(SRC_ATTRIBUTE);
+    const parsed = src === null ? null : parseSrc(src);
+    if (!parsed) return;
+    if (hasUnsaved()) await revert('Unsaved tweaks were reverted.');
+    await settleGeneration();
+    const selection: Selection = { ...parsed, instances: elementsAt(parsed.src).length };
+    store.set({
+      selection,
+      mode,
+      generation: IDLE_GENERATION,
+      anchor: rectOf(element),
+      style: null,
+      current: readCurrent(element),
+      draft: {},
+      preview: null,
+    });
+    await inspect(selection);
+  }
+
+  return {
+    select: (element: Element) => open(element, 'finetune'),
+
+    /** Opens the prompt for the element a stroke marks; false when there is none. */
+    async draw(stroke: Rect): Promise<boolean> {
+      const element = elementUnder(stroke);
+      if (!element) {
+        notify({ kind: 'info', message: 'Nothing editable under that mark.' });
+        return false;
+      }
+      await open(element, 'prompt');
+      return true;
+    },
+
+    async askAI(): Promise<void> {
+      await revert(hasUnsaved() ? 'Unsaved tweaks were reverted.' : undefined);
+      store.set({ mode: 'prompt' });
+    },
+
+    setPrompt(prompt: string): void {
+      store.set({ generation: { ...store.get().generation, prompt } });
+    },
+
+    async generate(): Promise<void> {
+      const { selection, generation } = store.get();
+      const prompt = generation.prompt.trim();
+      if (!selection || !prompt || generation.status !== 'idle') return;
+      const id = crypto.randomUUID();
+      runId = id;
+      store.set({ generation: { ...generation, status: 'running', variant: null } });
+      const reply = await host.request({
+        type: 'generate.request',
+        payload: {
+          runId: id,
+          file: selection.file,
+          line: selection.line,
+          column: selection.column,
+          prompt,
+        },
+      });
+      if (runId !== id) {
+        // Cancelled or closed meanwhile: a variant that was previewed anyway must go.
+        if (reply.type === 'generate.done') {
+          void host.request({
+            type: 'changeset.discard',
+            payload: { changesetId: reply.payload.changesetId },
+          });
+        }
+        return;
+      }
+      runId = null;
+      const latest = store.get().generation;
+      if (reply.type !== 'generate.done') {
+        store.set({ generation: { ...latest, status: 'idle' } });
+        notify(failure(reply), UNDO_WINDOW_MS);
+        return;
+      }
+      const { changesetId, label, rationale, changes, provider, elapsedMs } = reply.payload;
+      store.set({
+        generation: {
+          ...latest,
+          status: 'ready',
+          variant: { changesetId, label, rationale, changes, provider, elapsedMs },
+        },
+      });
+    },
+
+    async cancelGeneration(): Promise<void> {
+      if (!runId) return;
+      const cancelled = runId;
+      runId = null;
+      store.set({ generation: { ...store.get().generation, status: 'idle' } });
+      await host.request({ type: 'generate.cancel', payload: { runId: cancelled } });
+    },
+
+    discardVariant: () => settleGeneration(),
+
+    /** Commits the variant, then keeps the element selected for fine-tuning (J2.4). */
+    async applyVariant(): Promise<void> {
+      const { selection, generation } = store.get();
+      const { variant } = generation;
+      if (!selection || !variant) return;
+      store.set({ busy: true });
+      const reply = await host.request({
+        type: 'changeset.commit',
+        payload: { changesetId: variant.changesetId },
+      });
+      if (reply.type !== 'commit.done') {
+        store.set({ busy: false, generation: { ...generation, status: 'idle', variant: null } });
+        notify(failure(reply), UNDO_WINDOW_MS);
+        return;
+      }
+      const element = elementsAt(selection.src)[0];
+      store.set({
+        busy: false,
+        mode: 'finetune',
+        generation: IDLE_GENERATION,
+        style: null,
+        current: element ? readCurrent(element) : null,
+      });
+      notify(
+        { kind: 'info', message: appliedTo(selection), undoJournalId: reply.payload.journalId },
+        UNDO_WINDOW_MS,
+      );
       await inspect(selection);
     },
 
@@ -277,9 +454,8 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
         await inspect(selection);
         return;
       }
-      const file = selection.file.split('/').pop() ?? selection.file;
       notify(
-        { kind: 'info', message: `Applied to ${file}.`, undoJournalId: reply.payload.journalId },
+        { kind: 'info', message: appliedTo(selection), undoJournalId: reply.payload.journalId },
         UNDO_WINDOW_MS,
       );
       await inspect(selection);
@@ -299,8 +475,21 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
     },
 
     async close(): Promise<void> {
-      await revert(hasUnsaved() ? 'Unsaved tweaks were reverted.' : undefined);
-      store.set({ selection: null, anchor: null, style: null, current: null });
+      const notice = hasUnsaved()
+        ? 'Unsaved tweaks were reverted.'
+        : store.get().generation.variant
+          ? 'The variant was discarded.'
+          : undefined;
+      await settleGeneration();
+      await revert(notice);
+      store.set({
+        selection: null,
+        anchor: null,
+        style: null,
+        current: null,
+        mode: 'finetune',
+        generation: IDLE_GENERATION,
+      });
     },
 
     dismissNotice: () => notify(null),

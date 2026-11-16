@@ -118,7 +118,7 @@ export class DaemonClient {
   }
 
   /** Sends a request and resolves with the daemon's reply (which may be an `error`). */
-  request(message: OutgoingMessage): Promise<GuijamMessage> {
+  request(message: OutgoingMessage, timeoutMs = REQUEST_TIMEOUT_MS): Promise<GuijamMessage> {
     const socket = this.#socket;
     if (socket?.readyState !== WebSocket.OPEN) {
       return Promise.reject(new DaemonUnavailableError('the GUIJam daemon is not connected'));
@@ -127,10 +127,8 @@ export class DaemonClient {
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.#pending.delete(id);
-        reject(
-          new Error(`the daemon did not answer ${message.type} within ${REQUEST_TIMEOUT_MS} ms`),
-        );
-      }, REQUEST_TIMEOUT_MS);
+        reject(new Error(`the daemon did not answer ${message.type} within ${timeoutMs} ms`));
+      }, timeoutMs);
       this.#pending.set(id, { resolve, reject, timer });
       socket.send(JSON.stringify({ ...message, id }));
     });

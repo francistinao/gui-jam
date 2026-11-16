@@ -1,6 +1,7 @@
 pub mod daemon;
 pub mod diff;
 pub mod gateway;
+pub mod generate;
 pub mod run_dir;
 
 use std::fmt::Write as _;

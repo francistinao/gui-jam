@@ -37,6 +37,10 @@ export type GuijamMessage =
   | ChangesetDiscardedMessage
   | JournalUndoMessage
   | UndoDoneMessage
+  | GenerateRequestMessage
+  | GenerateDoneMessage
+  | GenerateCancelMessage
+  | GenerateCancelledMessage
   | ErrorMessage;
 export type ErrorCode =
   | 'CONFLICT'
@@ -47,6 +51,13 @@ export type ErrorCode =
   | 'UNKNOWN_CHANGESET'
   | 'UNKNOWN_ENTRY'
   | 'ALREADY_UNDONE'
+  | 'CANCELLED'
+  | 'PROVIDER_NOT_INSTALLED'
+  | 'PROVIDER_NOT_AUTHENTICATED'
+  | 'PROVIDER_RATE_LIMITED'
+  | 'PROVIDER_INVALID_OUTPUT'
+  | 'PROVIDER_TIMEOUT'
+  | 'PROVIDER_FAILED'
   | 'PLUGIN_UNAVAILABLE'
   | 'DAEMON_UNAVAILABLE'
   | 'INTERNAL';
@@ -418,6 +429,64 @@ export interface UndoDoneMessage {
 export interface UndoDone {
   journalId: string;
   undoOf: string;
+}
+export interface GenerateRequestMessage {
+  type: 'generate.request';
+  /**
+   * Set on requests; a reply repeats its request's id.
+   */
+  id?: string;
+  payload: GenerateRequest;
+}
+/**
+ * Ask the developer's provider CLI for one variant of an element (route R1). runId names the run for generate.cancel.
+ */
+export interface GenerateRequest {
+  runId: string;
+  file: string;
+  line: number;
+  column: number;
+  prompt: string;
+}
+export interface GenerateDoneMessage {
+  type: 'generate.done';
+  /**
+   * Set on requests; a reply repeats its request's id.
+   */
+  id?: string;
+  payload: GenerateDone;
+}
+/**
+ * A variant previewed in the running app, not yet written; commit or discard it by changesetId.
+ */
+export interface GenerateDone {
+  runId: string;
+  changesetId: string;
+  label: string;
+  rationale: string;
+  provider: string;
+  elapsedMs: number;
+  update: UpdateResult;
+  changes: CodeChange[];
+}
+export interface GenerateCancelMessage {
+  type: 'generate.cancel';
+  /**
+   * Set on requests; a reply repeats its request's id.
+   */
+  id?: string;
+  payload: RunRef;
+}
+export interface RunRef {
+  runId: string;
+}
+export interface GenerateCancelledMessage {
+  type: 'generate.cancelled';
+  /**
+   * Set on requests; a reply repeats its request's id.
+   */
+  id?: string;
+  payload: RunRef;
 }
 export interface ErrorMessage {
   type: 'error';

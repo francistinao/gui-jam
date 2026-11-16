@@ -6,9 +6,21 @@ type HotContext = NonNullable<ImportMeta['hot']>;
 
 const WIDGET_URL = '/@guijam/widget.js';
 const REQUEST_TIMEOUT_MS = 20_000;
+/** A little over the plugin's own 90 s window for a generation. */
+const GENERATION_TIMEOUT_MS = 95_000;
 
-const SELECT_ICON =
-  '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M5 3l14 7-6.2 1.8L10.9 18z" fill="currentColor"/></svg>';
+const TOOLS: readonly { tool: Tool; label: string; icon: string }[] = [
+  {
+    tool: 'select',
+    label: 'Select',
+    icon: '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M5 3l14 7-6.2 1.8L10.9 18z" fill="currentColor"/></svg>',
+  },
+  {
+    tool: 'draw',
+    label: 'Draw',
+    icon: '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M4 20l1.2-4.6L15.6 5a2 2 0 0 1 2.8 0l.6.6a2 2 0 0 1 0 2.8L8.6 18.8z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>',
+  },
+];
 
 const TOOLBAR_CSS = `
 :host { all: initial; }
@@ -36,6 +48,10 @@ function isWidgetModule(value: unknown): value is WidgetModule {
   );
 }
 
+function timeoutFor(type: string): number {
+  return type === 'generate.request' ? GENERATION_TIMEOUT_MS : REQUEST_TIMEOUT_MS;
+}
+
 function createRequester(hot: HotContext): WidgetHost['request'] {
   let next = 1;
   const waiting = new Map<string, (reply: GuijamMessage) => void>();
@@ -60,7 +76,7 @@ function createRequester(hot: HotContext): WidgetHost['request'] {
             action: 'Check the dev server terminal, then retry.',
           },
         });
-      }, REQUEST_TIMEOUT_MS);
+      }, timeoutFor(message.type));
       waiting.set(id, (reply) => {
         clearTimeout(timer);
         resolve(reply);
@@ -90,13 +106,16 @@ export function bootToolbar(hot: HotContext): void {
   logo.className = 'logo';
   logo.src = LOGO_DATA_URL;
   logo.alt = 'GUIJam';
-  const select = document.createElement('button');
-  select.type = 'button';
-  select.className = 'tool';
-  select.setAttribute('aria-label', 'Select');
-  select.setAttribute('aria-pressed', 'false');
-  select.innerHTML = SELECT_ICON;
-  toolbar.append(logo, select);
+  const buttons = TOOLS.map(({ tool, label, icon }) => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'tool';
+    button.setAttribute('aria-label', label);
+    button.setAttribute('aria-pressed', 'false');
+    button.innerHTML = icon;
+    return { tool, button };
+  });
+  toolbar.append(logo, ...buttons.map(({ button }) => button));
   shadowRoot.append(toolbar);
 
   const request = createRequester(hot);
@@ -105,7 +124,9 @@ export function bootToolbar(hot: HotContext): void {
 
   const show = (tool: Tool | null) => {
     active = tool;
-    select.setAttribute('aria-pressed', String(tool === 'select'));
+    for (const { tool: own, button } of buttons) {
+      button.setAttribute('aria-pressed', String(own === tool));
+    }
   };
 
   const loadWidget = (): Promise<Widget> => {
@@ -116,20 +137,22 @@ export function bootToolbar(hot: HotContext): void {
     return widget;
   };
 
-  // The button only shows a tool as active once the widget is listening for it.
-  select.addEventListener('click', () => {
-    const next = active === 'select' ? null : 'select';
-    loadWidget().then(
-      (loaded) => {
-        loaded.setTool(next);
-        show(next);
-      },
-      (error: unknown) => {
-        widget = undefined;
-        console.error('[guijam] the widget failed to load', error);
-      },
-    );
-  });
+  // A button only shows its tool as active once the widget is listening for it.
+  for (const { tool, button } of buttons) {
+    button.addEventListener('click', () => {
+      const next = active === tool ? null : tool;
+      loadWidget().then(
+        (loaded) => {
+          loaded.setTool(next);
+          show(next);
+        },
+        (error: unknown) => {
+          widget = undefined;
+          console.error('[guijam] the widget failed to load', error);
+        },
+      );
+    });
+  }
 
   document.addEventListener('keydown', (event) => {
     if (event.altKey && event.shiftKey && event.code === 'KeyM')

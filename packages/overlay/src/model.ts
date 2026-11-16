@@ -155,3 +155,76 @@ export function placePopover(anchor: Rect, popover: Size, viewport: Size, gap = 
     side: 'below',
   };
 }
+
+export interface Point {
+  x: number;
+  y: number;
+}
+
+export function boundsOf(points: readonly Point[]): Rect {
+  const xs = points.map((point) => point.x);
+  const ys = points.map((point) => point.y);
+  const left = Math.min(...xs);
+  const top = Math.min(...ys);
+  return { left, top, width: Math.max(...xs) - left, height: Math.max(...ys) - top };
+}
+
+/** The centre of the stroke and four points around it, where elements are looked up. */
+export function samplePoints({ left, top, width, height }: Rect): Point[] {
+  const x = left + width / 2;
+  const y = top + height / 2;
+  return [
+    { x, y },
+    { x: x - width / 4, y },
+    { x: x + width / 4, y },
+    { x, y: y - height / 4 },
+    { x, y: y + height / 4 },
+  ];
+}
+
+const area = (rect: Rect) => Math.max(0, rect.width) * Math.max(0, rect.height);
+
+function overlap(a: Rect, b: Rect): number {
+  const width = Math.min(a.left + a.width, b.left + b.width) - Math.max(a.left, b.left);
+  const height = Math.min(a.top + a.height, b.top + b.height) - Math.max(a.top, b.top);
+  return width > 0 && height > 0 ? width * height : 0;
+}
+
+const DRAW_COVERAGE = 0.6;
+
+/**
+ * FR-030: which element a stroke means. A mark drawn around elements picks the largest
+ * one it mostly encloses; a mark drawn on an element picks the smallest one that mostly
+ * covers the mark. Returns the index into `candidates`, or null.
+ */
+export function chooseDrawTarget(stroke: Rect, candidates: readonly Rect[]): number | null {
+  const strokeArea = Math.max(area(stroke), 1);
+  let enclosed: number | null = null;
+  let covering: number | null = null;
+  candidates.forEach((rect, index) => {
+    const size = area(rect);
+    if (size === 0) return;
+    const shared = overlap(stroke, rect);
+    if (shared / size >= DRAW_COVERAGE) {
+      const best = enclosed === null ? undefined : candidates[enclosed];
+      if (!best || size > area(best)) enclosed = index;
+    }
+    // A tap has no area; it means the element under it.
+    const covers =
+      area(stroke) === 0 ? isInside(stroke, rect) : shared / strokeArea >= DRAW_COVERAGE;
+    if (covers) {
+      const best = covering === null ? undefined : candidates[covering];
+      if (!best || size < area(best)) covering = index;
+    }
+  });
+  return enclosed ?? covering;
+}
+
+function isInside(point: Rect, rect: Rect): boolean {
+  return (
+    point.left >= rect.left &&
+    point.left <= rect.left + rect.width &&
+    point.top >= rect.top &&
+    point.top <= rect.top + rect.height
+  );
+}

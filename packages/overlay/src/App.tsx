@@ -2,6 +2,7 @@ import type { Controller, WidgetState } from './controller';
 import { FinetunePanel } from './FinetunePanel';
 import { Button } from './figui/button';
 import type { Rect } from './model';
+import { PromptPanel } from './PromptPanel';
 import { type Store, useStore } from './store';
 
 function Outline({ rect, dashed }: { rect: Rect; dashed?: boolean }) {
@@ -49,11 +50,16 @@ export function App({ store, controller }: { store: Store<WidgetState>; controll
   const tool = useStore(store, (state) => state.tool);
   const hovered = useStore(store, (state) => state.hovered);
   const anchor = useStore(store, (state) => state.anchor);
+  const mode = useStore(store, (state) => state.mode);
   return (
     <>
       {tool === 'select' && hovered ? <Outline rect={hovered} /> : null}
       {anchor ? <Outline rect={anchor} dashed /> : null}
-      <FinetunePanel store={store} controller={controller} />
+      {mode === 'prompt' ? (
+        <PromptPanel store={store} controller={controller} />
+      ) : (
+        <FinetunePanel store={store} controller={controller} />
+      )}
       <Notice store={store} controller={controller} />
     </>
   );

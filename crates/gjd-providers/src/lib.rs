@@ -30,6 +30,23 @@ impl ProviderId {
             Self::Codex => "codex",
         }
     }
+
+    /// The product name, for messages to the developer.
+    #[must_use]
+    pub fn display_name(self) -> &'static str {
+        match self {
+            Self::ClaudeCode => "Claude Code",
+            Self::Codex => "Codex",
+        }
+    }
+
+    #[must_use]
+    pub fn install_command(self) -> &'static str {
+        match self {
+            Self::ClaudeCode => "npm install -g @anthropic-ai/claude-code",
+            Self::Codex => "npm install -g @openai/codex",
+        }
+    }
 }
 
 impl fmt::Display for ProviderId {

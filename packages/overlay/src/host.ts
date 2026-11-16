@@ -1,6 +1,6 @@
 import type { GuijamMessage } from '@guijam/contracts-ts';
 
-export type Tool = 'select';
+export type Tool = 'select' | 'draw';
 
 /** What the plugin's browser client gives the widget when it loads it. */
 export interface WidgetHost {

@@ -1,6 +1,8 @@
 import type { ElementStyle, StyleToken } from '@guijam/contracts-ts';
 import { describe, expect, it } from 'vitest';
 import {
+  boundsOf,
+  chooseDrawTarget,
   clamp,
   cssColor,
   fillOfToken,
@@ -167,5 +169,42 @@ describe('placePopover', () => {
       top: 82,
       side: 'below',
     });
+  });
+});
+
+describe('chooseDrawTarget', () => {
+  const button = { left: 48, top: 276, width: 140, height: 48 };
+  const row = { left: 48, top: 276, width: 400, height: 48 };
+  const section = { left: 0, top: 100, width: 1280, height: 400 };
+
+  it('picks the element a loose circle encloses, not its container', () => {
+    const circle = boundsOf([
+      { x: 30, y: 300 },
+      { x: 118, y: 255 },
+      { x: 210, y: 300 },
+      { x: 118, y: 345 },
+    ]);
+
+    expect(chooseDrawTarget(circle, [button, row, section])).toBe(0);
+  });
+
+  it('picks the largest element a mark encloses', () => {
+    const aroundRow = { left: 40, top: 268, width: 420, height: 64 };
+
+    expect(chooseDrawTarget(aroundRow, [button, row, section])).toBe(1);
+  });
+
+  it('picks the smallest element under a scribble or a tap', () => {
+    const scribble = { left: 80, top: 290, width: 40, height: 20 };
+    const tap = { left: 100, top: 300, width: 0, height: 0 };
+
+    expect(chooseDrawTarget(scribble, [section, row, button])).toBe(2);
+    expect(chooseDrawTarget(tap, [section, row, button])).toBe(2);
+  });
+
+  it('finds nothing when the mark is mostly outside every element', () => {
+    const offToTheSide = { left: 1000, top: 600, width: 200, height: 100 };
+
+    expect(chooseDrawTarget(offToTheSide, [button, row, section])).toBeNull();
   });
 });

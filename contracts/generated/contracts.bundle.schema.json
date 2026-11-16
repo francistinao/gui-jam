@@ -1048,6 +1048,94 @@
           }
         },
         {
+          "title": "GenerateRequestMessage",
+          "type": "object",
+          "required": [
+            "type",
+            "payload"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "generate.request"
+            },
+            "id": {
+              "type": "string",
+              "description": "Set on requests; a reply repeats its request's id."
+            },
+            "payload": {
+              "$ref": "#/$defs/GenerateRequest"
+            }
+          }
+        },
+        {
+          "title": "GenerateDoneMessage",
+          "type": "object",
+          "required": [
+            "type",
+            "payload"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "generate.done"
+            },
+            "id": {
+              "type": "string",
+              "description": "Set on requests; a reply repeats its request's id."
+            },
+            "payload": {
+              "$ref": "#/$defs/GenerateDone"
+            }
+          }
+        },
+        {
+          "title": "GenerateCancelMessage",
+          "type": "object",
+          "required": [
+            "type",
+            "payload"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "generate.cancel"
+            },
+            "id": {
+              "type": "string",
+              "description": "Set on requests; a reply repeats its request's id."
+            },
+            "payload": {
+              "$ref": "#/$defs/RunRef"
+            }
+          }
+        },
+        {
+          "title": "GenerateCancelledMessage",
+          "type": "object",
+          "required": [
+            "type",
+            "payload"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "generate.cancelled"
+            },
+            "id": {
+              "type": "string",
+              "description": "Set on requests; a reply repeats its request's id."
+            },
+            "payload": {
+              "$ref": "#/$defs/RunRef"
+            }
+          }
+        },
+        {
           "title": "ErrorMessage",
           "type": "object",
           "required": [
@@ -1322,6 +1410,95 @@
         }
       }
     },
+    "GenerateRequest": {
+      "description": "Ask the developer's provider CLI for one variant of an element (route R1). runId names the run for generate.cancel.",
+      "type": "object",
+      "required": [
+        "runId",
+        "file",
+        "line",
+        "column",
+        "prompt"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "runId": {
+          "type": "string"
+        },
+        "file": {
+          "type": "string"
+        },
+        "line": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "column": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "prompt": {
+          "type": "string",
+          "maxLength": 4000
+        }
+      }
+    },
+    "GenerateDone": {
+      "description": "A variant previewed in the running app, not yet written; commit or discard it by changesetId.",
+      "type": "object",
+      "required": [
+        "runId",
+        "changesetId",
+        "label",
+        "rationale",
+        "provider",
+        "elapsedMs",
+        "update",
+        "changes"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "runId": {
+          "type": "string"
+        },
+        "changesetId": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "rationale": {
+          "type": "string"
+        },
+        "provider": {
+          "type": "string"
+        },
+        "elapsedMs": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "update": {
+          "$ref": "#/$defs/UpdateResult"
+        },
+        "changes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/CodeChange"
+          }
+        }
+      }
+    },
+    "RunRef": {
+      "type": "object",
+      "required": [
+        "runId"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "runId": {
+          "type": "string"
+        }
+      }
+    },
     "ErrorCode": {
       "enum": [
         "CONFLICT",
@@ -1332,6 +1509,13 @@
         "UNKNOWN_CHANGESET",
         "UNKNOWN_ENTRY",
         "ALREADY_UNDONE",
+        "CANCELLED",
+        "PROVIDER_NOT_INSTALLED",
+        "PROVIDER_NOT_AUTHENTICATED",
+        "PROVIDER_RATE_LIMITED",
+        "PROVIDER_INVALID_OUTPUT",
+        "PROVIDER_TIMEOUT",
+        "PROVIDER_FAILED",
         "PLUGIN_UNAVAILABLE",
         "DAEMON_UNAVAILABLE",
         "INTERNAL"

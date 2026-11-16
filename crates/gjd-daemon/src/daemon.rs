@@ -1,5 +1,6 @@
-//! Request handling: element inspection for the fine-tune panel, previews served as
-//! in-memory overlays through the Vite plugin, and journaled commits and undos.
+//! Request handling: element inspection for the fine-tune panel, fine-tune and
+//! generated previews served as in-memory overlays through the Vite plugin, and
+//! journaled commits and undos.
 
 use std::collections::{BTreeMap, HashMap};
 use std::num::NonZeroU64;
@@ -12,8 +13,8 @@ use gjd_core::codemod::{CodemodError, finetune_op};
 use gjd_core::content_hash;
 use gjd_core::contracts::{
     CodeChange, CommitDone, EditOp, ErrorCode, ErrorPayload, FinetunePreview, FinetunePreviewed,
-    GuijamMessage, HelloOk, OverlayClear, OverlaySet, SourceRef, UndoDone, UpdateResult,
-    UpdateResultStatus, UpdateResultUpdateId,
+    GenerateDone, GenerateRequest, GuijamMessage, HelloOk, OverlayClear, OverlaySet, RunRef,
+    SourceRef, UndoDone, UpdateResult, UpdateResultStatus, UpdateResultUpdateId,
 };
 use gjd_core::journal::{CommitError, FileChange, Journal};
 use gjd_core::jsx::JsxError;
@@ -21,11 +22,21 @@ use gjd_core::patch::{self, PatchError};
 use gjd_core::policy::{PolicyError, ProjectRoot};
 use gjd_core::style::inspect;
 use gjd_core::theme::Theme;
+use gjd_providers::{
+    AuthStatus, Discovery, GenerationRequest, ProviderAdapter, ProviderError, ProviderId,
+    ToolPolicy, adapter,
+};
 use tokio::sync::{mpsc, oneshot};
+use tokio_util::sync::CancellationToken;
 
 use crate::diff::code_changes;
+use crate::generate;
 
 const UPDATE_TIMEOUT: Duration = Duration::from_secs(5);
+/// PRD §8: a login seen within this window is not asked for again.
+const AUTH_CACHE: Duration = Duration::from_mins(5);
+/// Only Claude Code has an adapter so far; Codex follows its S-3 spike.
+const PROVIDER: ProviderId = ProviderId::ClaudeCode;
 
 fn locked<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     // Every critical section only swaps plain data, so a panic elsewhere cannot leave
@@ -168,6 +179,101 @@ impl From<std::io::Error> for Failure {
     }
 }
 
+impl From<ProviderError> for Failure {
+    fn from(error: ProviderError) -> Self {
+        let retry = "Retry, or simplify the prompt.";
+        match error {
+            ProviderError::NotInstalled(provider) => Self::new(
+                ErrorCode::ProviderNotInstalled,
+                format!("{} is not installed.", provider.display_name()),
+            )
+            .with_action(format!("Install with: {}", provider.install_command())),
+            ProviderError::NotAuthenticated {
+                provider,
+                login_command,
+            } => not_authenticated(provider, login_command),
+            ProviderError::RateLimited => Self::new(
+                ErrorCode::ProviderRateLimited,
+                format!("{} is rate limited.", PROVIDER.display_name()),
+            )
+            .with_action("Retry in a minute."),
+            ProviderError::Overloaded => Self::new(
+                ErrorCode::ProviderFailed,
+                format!("{} is overloaded.", PROVIDER.display_name()),
+            )
+            .with_action("Retry in a minute."),
+            ProviderError::Timeout(limit) => Self::new(
+                ErrorCode::ProviderTimeout,
+                format!("No answer within {} s.", limit.as_secs()),
+            )
+            .with_action(retry),
+            ProviderError::Cancelled => Self::new(ErrorCode::Cancelled, "Generation cancelled."),
+            ProviderError::InvalidOutput(detail) => invalid_output(&detail),
+            ProviderError::Crashed { .. } | ProviderError::Failed(_) | ProviderError::Io(_) => {
+                Self::new(ErrorCode::ProviderFailed, error.to_string()).with_action(retry)
+            }
+        }
+    }
+}
+
+fn not_authenticated(provider: ProviderId, login_command: &str) -> Failure {
+    Failure::new(
+        ErrorCode::ProviderNotAuthenticated,
+        format!("{} isn't logged in.", provider.display_name()),
+    )
+    .with_action(format!("Run `{login_command}` in a terminal, then retry."))
+}
+
+fn invalid_output(detail: &str) -> Failure {
+    Failure::new(
+        ErrorCode::ProviderInvalidOutput,
+        format!("The model's answer wasn't valid edits: {detail}"),
+    )
+    .with_action("Retry, or simplify the prompt.")
+}
+
+/// The content of `file` after a variant's ops, which may only touch that file.
+fn apply_variant(ops: &[EditOp], file: &str, current: &str) -> Result<String, Failure> {
+    if ops.is_empty() || ops.len() > generate::MAX_OPS {
+        return Err(invalid_output(&format!(
+            "it proposed {} edits; 1 to {} are allowed",
+            ops.len(),
+            generate::MAX_OPS
+        )));
+    }
+    if let Some(other) = ops
+        .iter()
+        .map(generate::op_file)
+        .find(|op_file| *op_file != file)
+    {
+        return Err(invalid_output(&format!(
+            "it edits {other}, which it was not shown"
+        )));
+    }
+    let sources = BTreeMap::from([(file.to_owned(), current.to_owned())]);
+    let content = patch::apply(&sources, ops)
+        .map_err(model_patch_failure)?
+        .remove(file)
+        .unwrap_or_else(|| current.to_owned());
+    if content == current {
+        return Err(invalid_output("it changed nothing"));
+    }
+    Ok(content)
+}
+
+/// A patch error in edits the model proposed is the model's mistake, except that the
+/// file may have changed while it was thinking.
+fn model_patch_failure(error: PatchError) -> Failure {
+    match error {
+        PatchError::StaleBase { file, .. } => Failure::new(
+            ErrorCode::StaleBase,
+            format!("{file} changed since the AI read it."),
+        )
+        .with_action("Generate again."),
+        other => invalid_output(&other.to_string()),
+    }
+}
+
 struct Version {
     base: String,
     content: String,
@@ -187,6 +293,8 @@ pub struct Daemon {
     changesets: Mutex<HashMap<String, Changeset>>,
     overlays: Mutex<BTreeMap<String, String>>,
     plugin: Mutex<Option<PluginLink>>,
+    runs: Mutex<HashMap<String, CancellationToken>>,
+    provider: tokio::sync::Mutex<Option<(Discovery, Instant)>>,
     next_id: AtomicU64,
     connections: AtomicUsize,
     last_disconnect: Mutex<Instant>,
@@ -203,6 +311,8 @@ impl Daemon {
             changesets: Mutex::default(),
             overlays: Mutex::default(),
             plugin: Mutex::default(),
+            runs: Mutex::default(),
+            provider: tokio::sync::Mutex::default(),
             next_id: AtomicU64::new(1),
             connections: AtomicUsize::new(0),
             last_disconnect: Mutex::new(Instant::now()),
@@ -304,7 +414,19 @@ impl Daemon {
                         payload: done,
                     }),
             )),
+            GuijamMessage::GenerateRequest { id, payload } => Some(reply(
+                id,
+                self.generate(payload)
+                    .await
+                    .map(|done| GuijamMessage::GenerateDone {
+                        id: None,
+                        payload: done,
+                    }),
+            )),
+            GuijamMessage::GenerateCancel { id, payload } => Some(self.cancel_run(id, payload)),
             GuijamMessage::HelloOk { id, .. }
+            | GuijamMessage::GenerateDone { id, .. }
+            | GuijamMessage::GenerateCancelled { id, .. }
             | GuijamMessage::OverlaySet { id, .. }
             | GuijamMessage::OverlayClear { id, .. }
             | GuijamMessage::ElementStyle { id, .. }
@@ -398,6 +520,140 @@ impl Daemon {
             update,
             changes,
         })
+    }
+
+    /// Stops a generation if it is still running; cancelling a finished run is a no-op.
+    fn cancel_run(&self, id: Option<String>, run: RunRef) -> GuijamMessage {
+        if let Some(cancel) = locked(&self.runs).get(&run.run_id) {
+            cancel.cancel();
+        }
+        GuijamMessage::GenerateCancelled { id, payload: run }
+    }
+
+    /// Runs `request` under a cancellation token that `generate.cancel` can reach.
+    async fn generate(&self, request: GenerateRequest) -> Result<GenerateDone, Failure> {
+        let run_id = request.run_id.clone();
+        let cancel = CancellationToken::new();
+        {
+            let mut runs = locked(&self.runs);
+            if runs.contains_key(&run_id) {
+                return Err(Failure::invalid_request(format!(
+                    "run {run_id} is already in progress"
+                )));
+            }
+            runs.insert(run_id.clone(), cancel.clone());
+        }
+        let result = self.run_generation(request, &cancel).await;
+        locked(&self.runs).remove(&run_id);
+        result
+    }
+
+    async fn run_generation(
+        &self,
+        request: GenerateRequest,
+        cancel: &CancellationToken,
+    ) -> Result<GenerateDone, Failure> {
+        let started = Instant::now();
+        let prompt = request.prompt.trim();
+        if prompt.is_empty() {
+            return Err(Failure::invalid_request("describe the change first"));
+        }
+        let file = request.file;
+        let source = self.read_project_file(&file).await?;
+        let theme = self.theme().await;
+        let style = inspect(&file, &source, request.line, request.column, &theme)?;
+        let (provider, discovery) = self.provider().await?;
+
+        let output = provider
+            .generate(
+                &discovery,
+                GenerationRequest {
+                    model: Some(generate::MODEL.to_owned()),
+                    system_prompt: generate::SYSTEM_PROMPT.to_owned(),
+                    user_prompt: generate::user_prompt(&style, &source, prompt),
+                    images: Vec::new(),
+                    tools: ToolPolicy::None,
+                    timeout: generate::TIMEOUT,
+                    cwd: self.project.path().to_path_buf(),
+                },
+                cancel.clone(),
+            )
+            .await;
+        let output = match output {
+            Err(error @ ProviderError::NotAuthenticated { .. }) => {
+                *self.provider.lock().await = None;
+                return Err(error.into());
+            }
+            other => other?,
+        };
+
+        let variant = output
+            .variant_set
+            .variants
+            .into_iter()
+            .next()
+            .ok_or_else(|| invalid_output("it proposed no variant"))?;
+        // Read again: the developer may have saved the file while the model was working.
+        let current = self.read_project_file(&file).await?;
+        let content = apply_variant(&variant.ops, &file, &current)?;
+        if cancel.is_cancelled() {
+            return Err(ProviderError::Cancelled.into());
+        }
+
+        let changes = code_changes(&file, &current, &content);
+        let label = String::from(variant.label);
+        let summary = format!("{file}:{} — {label}", request.line);
+        let changeset_id = self.store_changeset(
+            None,
+            BTreeMap::from([(
+                file.clone(),
+                Version {
+                    base: current,
+                    content: content.clone(),
+                },
+            )]),
+            summary,
+        );
+        let update = self.show(&file, Some(&content)).await?;
+        Ok(GenerateDone {
+            run_id: request.run_id,
+            changeset_id,
+            label,
+            rationale: variant.rationale.into(),
+            provider: provider.id().to_string(),
+            elapsed_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+            update,
+            changes,
+        })
+    }
+
+    /// The provider CLI and its discovery, with the login checked at most every
+    /// `AUTH_CACHE` (and again after any authentication failure).
+    async fn provider(&self) -> Result<(Box<dyn ProviderAdapter>, Discovery), Failure> {
+        let provider = adapter(PROVIDER).ok_or_else(|| {
+            Failure::new(
+                ErrorCode::ProviderNotInstalled,
+                format!("{} is not supported yet.", PROVIDER.display_name()),
+            )
+        })?;
+        let mut ready = self.provider.lock().await;
+        if let Some((discovery, checked)) = ready.as_ref()
+            && checked.elapsed() < AUTH_CACHE
+        {
+            return Ok((provider, discovery.clone()));
+        }
+        let discovery = provider.discover().await?;
+        match provider.check_auth(&discovery).await {
+            AuthStatus::LoggedIn => *ready = Some((discovery.clone(), Instant::now())),
+            AuthStatus::NotLoggedIn { login_command } => {
+                return Err(not_authenticated(provider.id(), login_command));
+            }
+            // A run that is not logged in still fails with a clear error of its own.
+            AuthStatus::Unknown { reason } => {
+                tracing::warn!(%reason, "could not read the provider's login status");
+            }
+        }
+        Ok((provider, discovery))
     }
 
     /// Keeps one fine-tune changeset per element, so each preview replaces the last.
@@ -580,6 +836,10 @@ fn with_id(mut message: GuijamMessage, reply_to: Option<String>) -> GuijamMessag
         | GuijamMessage::ChangesetDiscarded { id, .. }
         | GuijamMessage::JournalUndo { id, .. }
         | GuijamMessage::UndoDone { id, .. }
+        | GuijamMessage::GenerateRequest { id, .. }
+        | GuijamMessage::GenerateDone { id, .. }
+        | GuijamMessage::GenerateCancel { id, .. }
+        | GuijamMessage::GenerateCancelled { id, .. }
         | GuijamMessage::Error { id, .. } => *id = reply_to,
     }
     message
@@ -612,4 +872,55 @@ fn summarize(file: &str, line: NonZeroU64, op: &EditOp) -> String {
         (true, true) => "no change".to_owned(),
     };
     format!("{file}:{line} — {change}")
+}
+
+#[cfg(test)]
+mod tests {
+    use gjd_core::content_hash;
+    use gjd_core::contracts::{EditOp, ErrorCode};
+    use serde_json::json;
+
+    use super::apply_variant;
+
+    const FILE: &str = "src/B.tsx";
+    const SOURCE: &str = "export const B = () => <b className=\"bg-brand p-2\" />;\n";
+
+    fn snippet(file: &str, base: &str, find: &str, replace: &str) -> EditOp {
+        serde_json::from_value(json!({
+            "kind": "replace_snippet", "file": file,
+            "base_hash": content_hash(base.as_bytes()).as_str(), "find": find, "replace": replace,
+        }))
+        .expect("valid op")
+    }
+
+    #[test]
+    fn applies_a_variant_to_the_file_it_was_shown() {
+        let ops = [snippet(FILE, SOURCE, "bg-brand", "bg-sea")];
+
+        let content = apply_variant(&ops, FILE, SOURCE).expect("applied");
+
+        assert_eq!(content, SOURCE.replace("bg-brand", "bg-sea"));
+    }
+
+    #[test]
+    fn rejects_edits_to_other_files_no_edits_and_no_change() {
+        let elsewhere = [snippet("src/Other.tsx", SOURCE, "bg-brand", "bg-sea")];
+        let unchanged = [snippet(FILE, SOURCE, "bg-brand", "bg-brand")];
+
+        for ops in [&elsewhere[..], &[], &unchanged[..]] {
+            let failure = apply_variant(ops, FILE, SOURCE).expect_err("rejected");
+            assert_eq!(failure.code, ErrorCode::ProviderInvalidOutput);
+        }
+    }
+
+    #[test]
+    fn reports_a_file_saved_while_the_model_worked_as_stale() {
+        let ops = [snippet(FILE, SOURCE, "bg-brand", "bg-sea")];
+        let saved = SOURCE.replace("p-2", "p-4");
+
+        let failure = apply_variant(&ops, FILE, &saved).expect_err("stale");
+
+        assert_eq!(failure.code, ErrorCode::StaleBase);
+        assert_eq!(failure.message, "src/B.tsx changed since the AI read it.");
+    }
 }
