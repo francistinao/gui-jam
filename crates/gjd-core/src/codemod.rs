@@ -523,4 +523,66 @@ mod tests {
             ]
         );
     }
+
+    fn template_result(
+        path: &str,
+        source: &str,
+        needle: &str,
+        tailwind: bool,
+        props: &FinetuneProps,
+    ) -> Result<String, CodemodError> {
+        let at = |value| NonZeroU64::new(value).expect("1-based");
+        let offset = source.find(needle).expect("element");
+        let line = u64::try_from(source[..offset].matches('\n').count() + 1).expect("line");
+        let column = u64::try_from(
+            offset
+                - source[..offset]
+                    .rfind('\n')
+                    .map_or(0, |newline| newline + 1)
+                + 1,
+        )
+        .expect("column");
+        let style = inspect_with(path, source, at(line), at(column), &theme(), tailwind)
+            .expect("inspected");
+        let ops = finetune_ops(&style, props, &theme())?;
+        let sources = BTreeMap::from([(path.to_owned(), source.to_owned())]);
+        Ok(crate::patch::apply(&sources, &ops)
+            .expect("applies")
+            .remove(path)
+            .unwrap_or_else(|| source.to_owned()))
+    }
+
+    #[test]
+    fn edits_classes_and_inline_css_in_vue_and_svelte_templates() {
+        let blue = FinetuneProps {
+            fill: Some(fill(
+                serde_json::json!({ "kind": "hex", "hex": "#1d4ed8", "opacity": 100 }),
+            )),
+            radius: Some(radius(serde_json::json!({ "kind": "px", "px": 12 }))),
+        };
+        let vue = "<template>\n  <button class=\"rounded-lg bg-brand px-6\" :class=\"{ on }\">Go</button>\n  <p>Hi</p>\n</template>\n";
+        assert_eq!(
+            template_result("src/App.vue", vue, "<button", true, &blue).expect("edits"),
+            "<template>\n  <button class=\"bg-sea rounded-xl px-6\" :class=\"{ on }\">Go</button>\n  <p>Hi</p>\n</template>\n"
+        );
+        assert_eq!(
+            template_result("src/App.vue", vue, "<p>", true, &blue).expect("adds a class"),
+            "<template>\n  <button class=\"rounded-lg bg-brand px-6\" :class=\"{ on }\">Go</button>\n  <p class=\"bg-sea rounded-xl\">Hi</p>\n</template>\n"
+        );
+        let svelte = "<div class=\"card\" style=\"background-color: #fde68a; border-radius: 8px; padding: 16px\">Gift</div>\n";
+        assert_eq!(
+            template_result("src/Gift.svelte", svelte, "<div", true, &blue).expect("edits css"),
+            "<div class=\"card\" style=\"background-color: #1D4ED8; border-radius: 12px; padding: 16px\">Gift</div>\n"
+        );
+        let plain = "<section class=\"hero\">\n  <h1>Hello</h1>\n</section>\n";
+        assert_eq!(
+            template_result("index.html", plain, "<h1", false, &blue).expect("adds a style"),
+            "<section class=\"hero\">\n  <h1 style=\"background-color: #1D4ED8; border-radius: 12px\">Hello</h1>\n</section>\n"
+        );
+        let interpolated = "<b class=\"a\" style=\"color: {c}\">x</b>";
+        assert_eq!(
+            template_result("src/A.svelte", interpolated, "<b", false, &blue),
+            Err(CodemodError::StyleNotEditable)
+        );
+    }
 }

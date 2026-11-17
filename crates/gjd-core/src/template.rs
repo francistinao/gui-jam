@@ -1,0 +1,436 @@
+use std::ops::Range;
+
+use crate::jsx::{ClassLiteral, ClassSource, JsxElement, JsxError, StyleSource};
+use crate::srcloc::LineIndex;
+
+const EXTENSIONS: [&str; 4] = ["vue", "svelte", "astro", "html"];
+const UNITLESS: [&str; 6] = [
+    "opacity",
+    "font-weight",
+    "z-index",
+    "line-height",
+    "flex-grow",
+    "flex-shrink",
+];
+
+#[must_use]
+pub fn is_template(path: &str) -> bool {
+    path.rsplit_once('.')
+        .is_some_and(|(_, extension)| EXTENSIONS.contains(&extension.to_ascii_lowercase().as_str()))
+}
+
+struct Attribute {
+    name: String,
+    value: Option<Value>,
+}
+
+enum Value {
+    Quoted(Range<usize>),
+    Expression,
+    Bare,
+}
+
+fn skip_braces(bytes: &[u8], mut at: usize) -> usize {
+    let mut depth = 0usize;
+    let mut quote: Option<u8> = None;
+    while at < bytes.len() {
+        let byte = bytes[at];
+        match quote {
+            Some(_) if byte == b'\\' => at += 1,
+            Some(open) if byte == open => quote = None,
+            Some(_) => {}
+            None => match byte {
+                b'"' | b'\'' | b'`' => quote = Some(byte),
+                b'{' => depth += 1,
+                b'}' => {
+                    depth = depth.saturating_sub(1);
+                    if depth == 0 {
+                        return at + 1;
+                    }
+                }
+                _ => {}
+            },
+        }
+        at += 1;
+    }
+    bytes.len()
+}
+
+fn attributes(source: &str, mut at: usize) -> (Vec<Attribute>, bool) {
+    let bytes = source.as_bytes();
+    let mut found = Vec::new();
+    loop {
+        while bytes.get(at).is_some_and(u8::is_ascii_whitespace) {
+            at += 1;
+        }
+        match bytes.get(at) {
+            None => return (found, false),
+            Some(b'>') => return (found, true),
+            Some(b'/') if bytes.get(at + 1) == Some(&b'>') => return (found, true),
+            Some(b'{') => {
+                let end = skip_braces(bytes, at);
+                let inner = source[at + 1..end.saturating_sub(1).max(at + 1)].trim();
+                let name = inner
+                    .strip_prefix("...")
+                    .map_or_else(|| inner.to_owned(), |_| "{...}".to_owned());
+                found.push(Attribute {
+                    name,
+                    value: Some(Value::Expression),
+                });
+                at = end;
+                continue;
+            }
+            Some(_) => {}
+        }
+        let start = at;
+        while bytes
+            .get(at)
+            .is_some_and(|b| !b.is_ascii_whitespace() && !matches!(b, b'=' | b'>'))
+            && !(bytes[at] == b'/' && bytes.get(at + 1) == Some(&b'>'))
+        {
+            at += 1;
+        }
+        let name = source[start..at].to_owned();
+        while bytes.get(at).is_some_and(u8::is_ascii_whitespace) {
+            at += 1;
+        }
+        if bytes.get(at) != Some(&b'=') {
+            found.push(Attribute { name, value: None });
+            if at == start {
+                at += 1;
+            }
+            continue;
+        }
+        at += 1;
+        while bytes.get(at).is_some_and(u8::is_ascii_whitespace) {
+            at += 1;
+        }
+        let value = match bytes.get(at) {
+            Some(quote @ (b'"' | b'\'')) => {
+                let inner = at + 1;
+                let end = source[inner..]
+                    .find(char::from(*quote))
+                    .map_or(source.len(), |end| inner + end);
+                at = (end + 1).min(source.len());
+                Value::Quoted(inner..end)
+            }
+            Some(b'{') => {
+                at = skip_braces(bytes, at);
+                Value::Expression
+            }
+            _ => {
+                while bytes
+                    .get(at)
+                    .is_some_and(|b| !b.is_ascii_whitespace() && *b != b'>')
+                {
+                    at += 1;
+                }
+                Value::Bare
+            }
+        };
+        found.push(Attribute {
+            name,
+            value: Some(value),
+        });
+    }
+}
+
+fn interpolated(text: &str) -> bool {
+    text.contains('{')
+}
+
+fn read(source: &str, attribute: &Attribute) -> Option<ClassLiteral> {
+    match &attribute.value {
+        Some(Value::Quoted(range)) if !interpolated(&source[range.clone()]) => Some(ClassLiteral {
+            value: source[range.clone()].to_owned(),
+            range: range.clone(),
+        }),
+        _ => None,
+    }
+}
+
+pub fn find_element(source: &str, line: u64, column: u64) -> Result<JsxElement, JsxError> {
+    let not_found = JsxError::ElementNotFound { line, column };
+    let offset = LineIndex::new(source)
+        .offset(line, column)
+        .ok_or_else(|| not_found.clone())?;
+    let bytes = source.as_bytes();
+    if bytes.get(offset) != Some(&b'<')
+        || !bytes.get(offset + 1).is_some_and(u8::is_ascii_alphabetic)
+    {
+        return Err(not_found);
+    }
+    let name_start = offset + 1;
+    let mut name_end = name_start;
+    while bytes
+        .get(name_end)
+        .is_some_and(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b':' | b'.' | b'_'))
+    {
+        name_end += 1;
+    }
+    let (found, closed) = attributes(source, name_end);
+    if !closed {
+        return Err(JsxError::Syntax(format!(
+            "the <{}> tag at {line}:{column} never closes",
+            &source[name_start..name_end]
+        )));
+    }
+    let position = |name: &str| found.iter().rposition(|attribute| attribute.name == name);
+    let last_spread = found.iter().rposition(|attribute| {
+        attribute.name == "{...}"
+            || attribute.name == "v-bind"
+            || attribute.name.starts_with("{...")
+    });
+    let after_spread = |at: Option<usize>| match (at, last_spread) {
+        (Some(at), Some(spread)) => spread > at,
+        (None, Some(_)) => true,
+        _ => false,
+    };
+    let class_at = position("class");
+    let class = match class_at.map(|at| &found[at]) {
+        _ if after_spread(class_at) => ClassSource::Dynamic,
+        None => ClassSource::None,
+        Some(attribute) => {
+            read(source, attribute).map_or(ClassSource::Dynamic, ClassSource::Static)
+        }
+    };
+    let style_at = position("style");
+    let style = match style_at.map(|at| &found[at]) {
+        _ if after_spread(style_at) => StyleSource::Dynamic,
+        None => StyleSource::None,
+        Some(attribute) => read(source, attribute).map_or(StyleSource::Dynamic, StyleSource::Css),
+    };
+    Ok(JsxElement {
+        tag: source[name_start..name_end].to_owned(),
+        insert_at: name_end,
+        class,
+        style,
+    })
+}
+
+#[must_use]
+pub fn kebab(prop: &str) -> String {
+    if prop.starts_with("--") {
+        return prop.to_owned();
+    }
+    let mut out = String::with_capacity(prop.len() + 4);
+    for c in prop.chars() {
+        if c.is_ascii_uppercase() {
+            out.push('-');
+            out.push(c.to_ascii_lowercase());
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+#[must_use]
+pub fn camel(property: &str) -> String {
+    if property.starts_with("--") {
+        return property.to_owned();
+    }
+    let mut out = String::with_capacity(property.len());
+    let mut upper = false;
+    for c in property.chars() {
+        if c == '-' {
+            upper = true;
+        } else if upper {
+            out.push(c.to_ascii_uppercase());
+            upper = false;
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+#[must_use]
+pub fn css_number(property: &str, number: f64) -> String {
+    let text = if number.fract() == 0.0 && number.abs() < 1e15 {
+        format!("{number:.0}")
+    } else {
+        number.to_string()
+    };
+    if UNITLESS.contains(&property) || property.starts_with("--") || number == 0.0 {
+        text
+    } else {
+        format!("{text}px")
+    }
+}
+
+#[must_use]
+pub fn declarations(text: &str) -> Vec<(String, String)> {
+    text.split(';')
+        .filter_map(|declaration| {
+            let (property, value) = declaration.split_once(':')?;
+            let property = property.trim();
+            let value = value.trim();
+            (!property.is_empty() && !value.is_empty())
+                .then(|| (property.to_ascii_lowercase(), value.to_owned()))
+        })
+        .collect()
+}
+
+#[must_use]
+pub fn merged_css(text: &str, changes: &[(String, Option<String>)]) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    for (property, value) in declarations(text) {
+        match changes.iter().find(|(name, _)| *name == property) {
+            Some((_, None)) => {}
+            Some((_, Some(next))) => parts.push(format!("{property}: {next}")),
+            None => parts.push(format!("{property}: {value}")),
+        }
+    }
+    let existing = declarations(text);
+    for (property, value) in changes {
+        if let Some(value) = value
+            && !existing.iter().any(|(name, _)| name == property)
+        {
+            parts.push(format!("{property}: {value}"));
+        }
+    }
+    parts.join("; ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{camel, css_number, declarations, find_element, is_template, kebab, merged_css};
+    use crate::jsx::{ClassSource, StyleSource};
+
+    fn at(source: &str, needle: &str) -> (u64, u64) {
+        let offset = source.find(needle).expect("needle");
+        let line = source[..offset].matches('\n').count() + 1;
+        let column = offset
+            - source[..offset]
+                .rfind('\n')
+                .map_or(0, |newline| newline + 1)
+            + 1;
+        (
+            u64::try_from(line).expect("line"),
+            u64::try_from(column).expect("column"),
+        )
+    }
+
+    fn element(source: &str, needle: &str) -> crate::jsx::JsxElement {
+        let (line, column) = at(source, needle);
+        find_element(source, line, column).expect("element")
+    }
+
+    #[test]
+    fn knows_template_files() {
+        for path in [
+            "src/App.vue",
+            "src/routes/+page.svelte",
+            "src/pages/index.astro",
+            "index.html",
+            "A.VUE",
+        ] {
+            assert!(is_template(path), "{path}");
+        }
+        for path in ["src/App.tsx", "src/main.ts", "vue", "README.md"] {
+            assert!(!is_template(path), "{path}");
+        }
+    }
+
+    #[test]
+    fn reads_static_class_and_style_from_vue_and_svelte_tags() {
+        let vue = "<template>\n  <div>\n    <button\n      type=\"button\"\n      class=\"rounded-lg bg-brand px-6\"\n      :class=\"{ active }\"\n      @click=\"order(a > b)\"\n      style=\"background-color: #fde68a; border-radius: 8px\"\n    >Order</button>\n  </div>\n</template>\n";
+        let button = element(vue, "<button");
+        assert_eq!(button.tag, "button");
+        let ClassSource::Static(class) = &button.class else {
+            panic!("static class expected, got {:?}", button.class);
+        };
+        assert_eq!(class.value, "rounded-lg bg-brand px-6");
+        assert_eq!(&vue[class.range.clone()], "rounded-lg bg-brand px-6");
+        let StyleSource::Css(style) = &button.style else {
+            panic!("css style expected");
+        };
+        assert_eq!(style.value, "background-color: #fde68a; border-radius: 8px");
+        assert_eq!(vue.as_bytes()[button.insert_at], b'\n');
+
+        let svelte = "<script>let open = false;</script>\n<a href=\"/\" class=\"text-sm\" on:click={() => (open = !open && 1 > 0)}>Home</a>\n";
+        let link = element(svelte, "<a ");
+        assert!(matches!(link.class, ClassSource::Static(ref class) if class.value == "text-sm"));
+        assert_eq!(link.style, StyleSource::None);
+    }
+
+    #[test]
+    fn interpolation_bindings_and_later_spreads_make_class_or_style_dynamic() {
+        let cases = [
+            ("<b class=\"a {b}\">x</b>", true, false),
+            ("<b class={cls}>x</b>", true, false),
+            ("<b {...props} class=\"a\">x</b>", false, true),
+            ("<b class=\"a\" {...props}>x</b>", true, true),
+            ("<b class=\"a\" v-bind=\"attrs\">x</b>", true, true),
+            ("<b style={`color: ${c}`}>x</b>", false, true),
+            ("<b style=\"color: {c}\">x</b>", false, true),
+            ("<b {class}>x</b>", true, false),
+        ];
+        for (source, class_dynamic, style_dynamic) in cases {
+            let found = element(source, "<b");
+            assert_eq!(
+                matches!(found.class, ClassSource::Dynamic),
+                class_dynamic,
+                "{source}: {:?}",
+                found.class
+            );
+            assert_eq!(
+                matches!(found.style, StyleSource::Dynamic),
+                style_dynamic,
+                "{source}: {:?}",
+                found.style
+            );
+        }
+    }
+
+    #[test]
+    fn refuses_positions_that_are_not_a_start_tag() {
+        let source = "<template>\n  <p>Hi</p>\n</template>\n";
+        assert!(find_element(source, 2, 4).is_err());
+        assert!(find_element(source, 9, 1).is_err());
+        assert!(find_element("<p class=\"a\"", 1, 1).is_err());
+        assert!(find_element("</p>", 1, 1).is_err());
+        assert!(find_element("< p>", 1, 1).is_err());
+    }
+
+    #[test]
+    fn converts_property_names_and_numbers() {
+        assert_eq!(kebab("backgroundColor"), "background-color");
+        assert_eq!(kebab("--brand"), "--brand");
+        assert_eq!(camel("border-top-left-radius"), "borderTopLeftRadius");
+        assert_eq!(camel("--brand"), "--brand");
+        assert_eq!(css_number("border-radius", 12.0), "12px");
+        assert_eq!(css_number("border-radius", 0.0), "0");
+        assert_eq!(css_number("opacity", 0.5), "0.5");
+        assert_eq!(css_number("font-weight", 600.0), "600");
+    }
+
+    #[test]
+    fn merges_css_declarations() {
+        assert_eq!(
+            declarations(" background-color: #fde68a ; border-radius:8px;; padding: 16px; broken "),
+            [
+                ("background-color".to_owned(), "#fde68a".to_owned()),
+                ("border-radius".to_owned(), "8px".to_owned()),
+                ("padding".to_owned(), "16px".to_owned()),
+            ]
+        );
+        let text = "background-color: #fde68a; border-radius: 8px; padding: 16px";
+        assert_eq!(
+            merged_css(
+                text,
+                &[
+                    ("background-color".to_owned(), Some("#1D4ED8".to_owned())),
+                    ("border-radius".to_owned(), None),
+                    ("opacity".to_owned(), Some("0.5".to_owned())),
+                ]
+            ),
+            "background-color: #1D4ED8; padding: 16px; opacity: 0.5"
+        );
+        assert_eq!(
+            merged_css("", &[("color".to_owned(), Some("red".to_owned()))]),
+            "color: red"
+        );
+    }
+}

@@ -262,7 +262,12 @@ pub fn user_prompt(style: &ElementStyle, source: &str, request: &str, tier: &Tie
         ElementStyleClassSource::None => "absent; class_tokens adds one",
         ElementStyleClassSource::Dynamic => "computed at runtime; use replace_snippet",
     };
-    let _ = writeln!(prompt, "className: {class_note}");
+    let attribute = if gjd_core::template::is_template(&style.file) {
+        "class"
+    } else {
+        "className"
+    };
+    let _ = writeln!(prompt, "{attribute}: {class_note}");
     if style.adapter == ElementStyleAdapter::Inline {
         let _ = writeln!(
             prompt,

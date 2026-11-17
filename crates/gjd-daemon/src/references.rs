@@ -8,7 +8,9 @@ const MAX_MENTIONED: usize = 3;
 const ASSET_EXTENSIONS: [&str; 12] = [
     "png", "jpg", "jpeg", "gif", "webp", "avif", "svg", "ico", "woff", "woff2", "ttf", "otf",
 ];
-const SOURCE_EXTENSIONS: [&str; 7] = ["tsx", "jsx", "ts", "js", "mjs", "css", "vue"];
+const SOURCE_EXTENSIONS: [&str; 10] = [
+    "tsx", "jsx", "ts", "js", "mjs", "css", "vue", "svelte", "astro", "html",
+];
 const STOP_WORDS: [&str; 16] = [
     "the", "and", "this", "that", "with", "from", "here", "there", "into", "make", "use", "please",
     "for", "its", "same", "like",

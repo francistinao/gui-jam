@@ -7,6 +7,7 @@ use crate::contracts::{
 };
 use crate::jsx::{ClassSource, JsxError, StyleObject, StyleSource, find_element};
 use crate::tailwind::{classify, parse_token};
+use crate::template;
 use crate::theme::Theme;
 
 pub fn inspect(
@@ -65,6 +66,25 @@ fn inline_tokens(object: &StyleObject) -> Vec<StyleToken> {
         .collect()
 }
 
+fn css_tokens(text: &str) -> Vec<StyleToken> {
+    template::declarations(text)
+        .into_iter()
+        .filter_map(|(property, value)| {
+            let key = template::camel(&property);
+            let (_, group, _) = INLINE_GROUPS.iter().find(|(name, _, _)| *name == key)?;
+            Some(StyleToken {
+                token: format!("{property}: {value}"),
+                group: *group,
+                property,
+                theme_token: None,
+                editable: true,
+                value: Some(value),
+                variants: Vec::new(),
+            })
+        })
+        .collect()
+}
+
 pub fn inspect_with(
     file: &str,
     source: &str,
@@ -75,12 +95,14 @@ pub fn inspect_with(
 ) -> Result<ElementStyle, JsxError> {
     let element = find_element(file, source, line.get(), column.get())?;
     let adapter = match (&element.style, tailwind) {
-        (StyleSource::Object(_), _) | (_, false) => ElementStyleAdapter::Inline,
+        (StyleSource::Object(_) | StyleSource::Css(_), _) | (_, false) => {
+            ElementStyleAdapter::Inline
+        }
         _ => ElementStyleAdapter::Tailwind,
     };
     let style_source = match &element.style {
         StyleSource::None => ElementStyleStyleSource::None,
-        StyleSource::Object(_) => ElementStyleStyleSource::Object,
+        StyleSource::Object(_) | StyleSource::Css(_) => ElementStyleStyleSource::Object,
         StyleSource::Dynamic => ElementStyleStyleSource::Dynamic,
     };
     let (class_source, tokens) = match &element.class {
@@ -102,8 +124,10 @@ pub fn inspect_with(
         ClassSource::Dynamic => (ElementStyleClassSource::Dynamic, Vec::new()),
     };
     let mut tokens = tokens;
-    if let StyleSource::Object(object) = &element.style {
-        tokens.extend(inline_tokens(object));
+    match &element.style {
+        StyleSource::Object(object) => tokens.extend(inline_tokens(object)),
+        StyleSource::Css(literal) => tokens.extend(css_tokens(&literal.value)),
+        StyleSource::None | StyleSource::Dynamic => {}
     }
     Ok(ElementStyle {
         file: file.to_owned(),

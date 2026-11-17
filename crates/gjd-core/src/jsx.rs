@@ -10,6 +10,7 @@ use oxc_parser::Parser;
 use oxc_span::{GetSpan, SourceType, Span};
 
 use crate::srcloc::LineIndex;
+use crate::template;
 
 const CLASS_HELPERS: [&str; 5] = ["cn", "clsx", "classnames", "classNames", "cx"];
 
@@ -58,6 +59,7 @@ pub struct StyleObject {
 pub enum StyleSource {
     None,
     Object(StyleObject),
+    Css(ClassLiteral),
     Dynamic,
 }
 
@@ -74,12 +76,18 @@ fn source_type(path: &str) -> Result<SourceType, JsxError> {
 }
 
 pub fn check_syntax(path: &str, source: &str) -> Result<(), JsxError> {
+    if template::is_template(path) {
+        return Ok(());
+    }
     let allocator = Allocator::default();
     let parsed = Parser::new(&allocator, source, source_type(path)?).parse();
     first_error(&parsed.diagnostics, parsed.fatal_error)
 }
 
 pub fn imports(path: &str, source: &str) -> Result<Vec<String>, JsxError> {
+    if template::is_template(path) {
+        return Ok(Vec::new());
+    }
     let allocator = Allocator::default();
     let parsed = Parser::new(&allocator, source, source_type(path)?).parse();
     first_error(&parsed.diagnostics, parsed.fatal_error)?;
@@ -111,6 +119,9 @@ pub fn find_element(
     line: u64,
     column: u64,
 ) -> Result<JsxElement, JsxError> {
+    if template::is_template(path) {
+        return template::find_element(source, line, column);
+    }
     let not_found = JsxError::ElementNotFound { line, column };
     let offset = LineIndex::new(source)
         .offset(line, column)

@@ -6,6 +6,7 @@ use crate::contracts::{
     ContentHash, EditOp, EditOpAddItem, EditOpRemoveItem, EditOpValue, ProjectPath,
 };
 use crate::jsx::{ClassSource, JsxError, StyleObject, StyleSource, check_syntax, find_element};
+use crate::template;
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum PatchError {
@@ -147,13 +148,18 @@ fn resolve<'s>(
                 },
                 ClassSource::None => {
                     let classes = merge_tokens("", add, remove);
+                    let attribute = if template::is_template(path) {
+                        "class"
+                    } else {
+                        "className"
+                    };
                     TextEdit {
                         op,
                         range: element.insert_at..element.insert_at,
                         text: if classes.is_empty() {
                             String::new()
                         } else {
-                            format!(" className=\"{classes}\"")
+                            format!(" {attribute}=\"{classes}\"")
                         },
                     }
                 }
@@ -228,6 +234,14 @@ fn style_value(value: &EditOpValue) -> Option<String> {
     }
 }
 
+fn css_value(property: &str, value: &EditOpValue) -> Option<String> {
+    match value {
+        EditOpValue::String(text) => Some(text.clone()),
+        EditOpValue::Number(number) => Some(template::css_number(property, *number)),
+        EditOpValue::Null => None,
+    }
+}
+
 fn merged_style(
     source: &str,
     object: &StyleObject,
@@ -287,15 +301,47 @@ fn resolve_style<'s>(
     let (path, source) = current(op, file, base_hash, sources)?;
     let element = find_element(path, source, at.line.get(), at.column.get())
         .map_err(|source| PatchError::Element { op, source })?;
+    let css = template::is_template(path);
     let mut changes: Vec<(String, Option<String>)> = Vec::new();
     for member in members {
         if let EditOp::StyleProp { prop, value, .. } = &ops[*member] {
-            let value = style_value(value);
-            match changes.iter_mut().find(|(name, _)| name == prop.as_str()) {
+            let (name, value) = if css {
+                let property = template::kebab(prop.as_str());
+                let value = css_value(&property, value);
+                (property, value)
+            } else {
+                (prop.to_string(), style_value(value))
+            };
+            match changes.iter_mut().find(|(seen, _)| *seen == name) {
                 Some(entry) => entry.1 = value,
-                None => changes.push((prop.to_string(), value)),
+                None => changes.push((name, value)),
             }
         }
+    }
+    if css {
+        let edit = match &element.style {
+            StyleSource::Css(literal) => TextEdit {
+                op,
+                range: literal.range.clone(),
+                text: template::merged_css(&literal.value, &changes),
+            },
+            StyleSource::None => {
+                let text = template::merged_css("", &changes);
+                TextEdit {
+                    op,
+                    range: element.insert_at..element.insert_at,
+                    text: if text.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" style=\"{text}\"")
+                    },
+                }
+            }
+            StyleSource::Object(_) | StyleSource::Dynamic => {
+                return Err(PatchError::StyleNotEditable { op });
+            }
+        };
+        return Ok((path, edit));
     }
     let edit = match &element.style {
         StyleSource::Object(object) => TextEdit {
@@ -319,7 +365,9 @@ fn resolve_style<'s>(
                 },
             }
         }
-        StyleSource::Dynamic => return Err(PatchError::StyleNotEditable { op }),
+        StyleSource::Css(_) | StyleSource::Dynamic => {
+            return Err(PatchError::StyleNotEditable { op });
+        }
     };
     Ok((path, edit))
 }
