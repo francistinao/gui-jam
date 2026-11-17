@@ -1,8 +1,13 @@
+use std::ffi::{OsStr, OsString};
 use std::io;
 use std::path::{Component, Path, PathBuf};
 
 const DENIED_DIRS: [&str; 5] = [".git", "node_modules", "dist", "build", ".guijam"];
 const DENIED_EXTENSIONS: [&str; 2] = ["pem", "key"];
+const RESERVED_NAMES: [&str; 22] = [
+    "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8",
+    "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+];
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum PolicyError {
@@ -12,6 +17,8 @@ pub enum PolicyError {
     Denied(String),
     #[error("{0} is not a regular file")]
     NotAFile(String),
+    #[error("{0} can't be a file name on Windows")]
+    NotPortable(String),
 }
 
 #[derive(Debug, Clone)]
@@ -22,7 +29,7 @@ pub struct ProjectRoot {
 impl ProjectRoot {
     pub fn new(root: &Path) -> io::Result<Self> {
         Ok(Self {
-            root: root.canonicalize()?,
+            root: dunce::canonicalize(root)?,
         })
     }
 
@@ -46,14 +53,19 @@ impl ProjectRoot {
         }
 
         let joined = self.root.join(candidate);
-        let resolved = match joined.canonicalize() {
+        let resolved = match dunce::canonicalize(&joined) {
             Ok(existing) => existing,
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
                 let mut existing = joined.as_path();
-                let mut missing = Vec::new();
+                let mut missing: Vec<OsString> = Vec::new();
                 loop {
-                    match existing.canonicalize() {
+                    match dunce::canonicalize(existing) {
                         Ok(found) => {
+                            if let Some(name) = missing.iter().find(|name| !portable_name(name)) {
+                                return Err(PolicyError::NotPortable(
+                                    name.to_string_lossy().into_owned(),
+                                ));
+                            }
                             break missing
                                 .iter()
                                 .rev()
@@ -78,6 +90,22 @@ impl ProjectRoot {
         }
         Ok(resolved)
     }
+}
+
+#[must_use]
+pub fn portable_name(name: &OsStr) -> bool {
+    let Some(name) = name.to_str() else {
+        return false;
+    };
+    let stem = name.split('.').next().unwrap_or_default();
+    !name.is_empty()
+        && !name.ends_with(['.', ' '])
+        && !name
+            .chars()
+            .any(|c| c.is_control() || matches!(c, '<' | '>' | ':' | '"' | '|' | '?' | '*' | '\\'))
+        && !RESERVED_NAMES
+            .iter()
+            .any(|reserved| reserved.eq_ignore_ascii_case(stem.trim_end()))
 }
 
 #[must_use]
@@ -112,7 +140,7 @@ mod tests {
     #[cfg(unix)]
     use std::os::unix::fs::symlink;
 
-    use super::{PolicyError, ProjectRoot};
+    use super::{PolicyError, ProjectRoot, portable_name};
 
     fn project() -> (tempfile::TempDir, ProjectRoot) {
         let dir = tempfile::tempdir().expect("temp dir");
@@ -120,6 +148,43 @@ mod tests {
         fs::write(dir.path().join("src/components/A.tsx"), "x").expect("file");
         let root = ProjectRoot::new(dir.path()).expect("root");
         (dir, root)
+    }
+
+    #[test]
+    fn new_files_need_names_that_also_work_on_windows() {
+        let (_dir, root) = project();
+
+        for name in [
+            "Aux.tsx",
+            "con",
+            "nul.tsx",
+            "COM1.ts",
+            "lpt9.js",
+            "Card.",
+            "Card ",
+            "a:b.tsx",
+            "what?.tsx",
+            "pipe|.tsx",
+        ] {
+            assert_eq!(
+                root.resolve(&format!("src/components/{name}")),
+                Err(PolicyError::NotPortable(name.to_owned())),
+                "{name}"
+            );
+        }
+        assert_eq!(
+            root.resolve("src/Lpt1/New.tsx"),
+            Err(PolicyError::NotPortable("Lpt1".to_owned()))
+        );
+        for name in [
+            "Auxiliary.tsx",
+            "Console.tsx",
+            "COM10.ts",
+            "PriceTag.tsx",
+            ".prettierrc",
+        ] {
+            assert!(portable_name(name.as_ref()), "{name}");
+        }
     }
 
     #[test]

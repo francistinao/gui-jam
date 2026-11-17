@@ -1,5 +1,7 @@
 use std::ffi::OsStr;
 use std::io;
+#[cfg(windows)]
+use std::path::Path;
 use std::process::ExitStatus;
 #[cfg(unix)]
 use std::time::Duration;
@@ -19,18 +21,36 @@ const TERMINATE_GRACE: Duration = Duration::from_secs(3);
 
 #[must_use]
 pub fn command(program: impl AsRef<OsStr>) -> Command {
-    without_window(Command::new(program))
+    platform_command(program.as_ref())
 }
 
 #[cfg(windows)]
-fn without_window(mut command: Command) -> Command {
+fn platform_command(program: &OsStr) -> Command {
+    let mut command = match crate::shim::batch_shim(Path::new(program)) {
+        Some(shim) => {
+            let mut command = Command::new(&shim.program);
+            command.args(&shim.args);
+            if let Some(node_path) = shim.node_path {
+                let inherited = std::env::var("NODE_PATH")
+                    .ok()
+                    .filter(|path| !path.is_empty());
+                command.env(
+                    "NODE_PATH",
+                    inherited
+                        .map_or_else(|| node_path.clone(), |path| format!("{node_path};{path}")),
+                );
+            }
+            command
+        }
+        None => Command::new(program),
+    };
     command.creation_flags(windows::Win32::System::Threading::CREATE_NO_WINDOW.0);
     command
 }
 
 #[cfg(not(windows))]
-fn without_window(command: Command) -> Command {
-    command
+fn platform_command(program: &OsStr) -> Command {
+    Command::new(program)
 }
 
 pub struct ProcessTree {

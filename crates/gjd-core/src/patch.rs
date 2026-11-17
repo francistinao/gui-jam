@@ -194,6 +194,12 @@ fn resolve<'s>(
             replace,
         } => {
             let (path, source) = current(op, file, base_hash, sources)?;
+            let crlf = uses_crlf(source);
+            let find = if crlf && !source.contains(find.as_str()) {
+                to_crlf(find.as_str())
+            } else {
+                find.as_str().to_owned()
+            };
             let mut matches = source.match_indices(find.as_str());
             let (Some((start, _)), None) = (matches.next(), matches.next()) else {
                 return Err(PatchError::SnippetNotUnique {
@@ -207,7 +213,11 @@ fn resolve<'s>(
                 TextEdit {
                     op,
                     range: start..start + find.len(),
-                    text: replace.clone(),
+                    text: if crlf {
+                        to_crlf(replace)
+                    } else {
+                        replace.clone()
+                    },
                 },
             ))
         }
@@ -232,6 +242,16 @@ fn resolve<'s>(
             kind: "rewrite_file",
         }),
     }
+}
+
+fn uses_crlf(source: &str) -> bool {
+    source
+        .find('\n')
+        .is_some_and(|end| source[..end].ends_with('\r'))
+}
+
+fn to_crlf(text: &str) -> String {
+    text.replace("\r\n", "\n").replace('\n', "\r\n")
 }
 
 fn resolve_attribute(
@@ -660,6 +680,30 @@ mod tests {
             styled(variable, &[("padding", json!(8))]).expect("literal props stay editable"),
             "export const B = (p) => <b style={{ color: p.color, padding: 8 }} />;\n"
         );
+    }
+
+    #[test]
+    fn snippet_edits_keep_a_crlf_file_in_crlf() {
+        let lf = "export const A = () => (\n  <div>\n    <b>old</b>\n  </div>\n);\n";
+        let crlf = lf.replace('\n', "\r\n");
+        let edit = snippet(
+            &crlf,
+            "<div>\n    <b>old</b>",
+            "<div>\n    <b>new</b>\n    <i>more</i>",
+        );
+
+        let changed = apply(&sources(&crlf), &[edit]).expect("applies");
+
+        assert_eq!(
+            changed[FILE],
+            "export const A = () => (\r\n  <div>\r\n    <b>new</b>\r\n    <i>more</i>\r\n  </div>\r\n);\r\n"
+        );
+        let unchanged_lf = apply(
+            &sources(lf),
+            &[snippet(lf, "<b>old</b>", "<b>a</b>\n<b>b</b>")],
+        )
+        .expect("applies");
+        assert!(!unchanged_lf[FILE].contains('\r'));
     }
 
     #[test]

@@ -4,13 +4,18 @@ use std::io::{self, BufRead, BufReader, Write};
 use std::os::unix::fs::DirBuilderExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, PoisonError};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
 use crate::content_hash;
 use crate::contracts::ContentHash;
 use crate::policy::{PolicyError, ProjectRoot};
+
+const BUSY_RETRIES: u32 = 5;
+const ERROR_ACCESS_DENIED: i32 = 5;
+const ERROR_SHARING_VIOLATION: i32 = 32;
+const ERROR_LOCK_VIOLATION: i32 = 33;
 
 const MS_PER_DAY: u64 = 86_400_000;
 
@@ -320,7 +325,7 @@ impl Journal {
             return Ok(());
         }
         let temp = write_temp(&path, bytes, "blob")?;
-        fs::rename(temp, &path)
+        replace(&temp, &path)
     }
 
     fn read_optional_blob(&self, hash: &str) -> Result<Option<Vec<u8>>, CommitError> {
@@ -384,9 +389,9 @@ fn restore(target: &Path, content: Option<&[u8]>, id: &str) -> io::Result<()> {
                 fs::create_dir_all(parent)?;
             }
             let temp = write_temp(target, bytes, id)?;
-            fs::rename(temp, target)
+            replace(&temp, target)
         }
-        None => match fs::remove_file(target) {
+        None => match retrying(|| fs::remove_file(target)) {
             Err(error) if error.kind() != io::ErrorKind::NotFound => Err(error),
             _ => Ok(()),
         },
@@ -417,7 +422,7 @@ fn write_all_or_none(id: &str, planned: &[Planned]) -> io::Result<()> {
     }
     for (index, (plan, temp)) in planned.iter().zip(&temps).enumerate() {
         let applied = match temp {
-            Some(temp) => fs::rename(temp, &plan.target),
+            Some(temp) => replace(temp, &plan.target),
             None => restore(&plan.target, None, id),
         };
         if let Err(error) = applied {
@@ -449,17 +454,50 @@ fn write_temp(target: &Path, bytes: &[u8], id: &str) -> io::Result<PathBuf> {
         .open(&temp)?;
     let written = file
         .write_all(bytes)
-        .and_then(|()| match fs::metadata(target) {
-            Ok(metadata) => file.set_permissions(metadata.permissions()),
-            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
-            Err(error) => Err(error),
-        })
+        .and_then(|()| keep_permissions(&file, target))
         .and_then(|()| file.sync_all());
     if let Err(error) = written {
         remove_quietly(&temp);
         return Err(error);
     }
     Ok(temp)
+}
+
+fn keep_permissions(file: &File, target: &Path) -> io::Result<()> {
+    if !cfg!(unix) {
+        return Ok(());
+    }
+    match fs::metadata(target) {
+        Ok(metadata) => file.set_permissions(metadata.permissions()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error),
+    }
+}
+
+fn replace(temp: &Path, target: &Path) -> io::Result<()> {
+    retrying(|| fs::rename(temp, target))
+}
+
+fn retrying(mut action: impl FnMut() -> io::Result<()>) -> io::Result<()> {
+    let mut wait = Duration::from_millis(10);
+    for _ in 0..BUSY_RETRIES {
+        match action() {
+            Err(error) if held_by_another_process(&error) => {
+                std::thread::sleep(wait);
+                wait *= 2;
+            }
+            done => return done,
+        }
+    }
+    action()
+}
+
+fn held_by_another_process(error: &io::Error) -> bool {
+    cfg!(windows)
+        && matches!(
+            error.raw_os_error(),
+            Some(ERROR_ACCESS_DENIED | ERROR_SHARING_VIOLATION | ERROR_LOCK_VIOLATION)
+        )
 }
 
 fn sync_parents<'p>(targets: impl Iterator<Item = &'p Path>) -> io::Result<()> {

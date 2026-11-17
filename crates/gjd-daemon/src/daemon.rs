@@ -903,7 +903,7 @@ impl Daemon {
     fn set_tailwind_roots(&self, files: &[String]) {
         let inside: Vec<PathBuf> = files
             .iter()
-            .map(PathBuf::from)
+            .filter_map(|file| dunce::canonicalize(file).ok())
             .filter(|path| path.starts_with(self.project.path()))
             .collect();
         *locked(&self.tailwind_roots) = inside;

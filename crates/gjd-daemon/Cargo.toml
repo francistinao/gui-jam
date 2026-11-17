@@ -15,6 +15,7 @@ path = "src/main.rs"
 axum.workspace = true
 base64.workspace = true
 clap.workspace = true
+dunce.workspace = true
 futures-util.workspace = true
 getrandom.workspace = true
 gjd-core = { path = "../gjd-core" }

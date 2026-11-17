@@ -34,16 +34,36 @@ fn words(prompt: &str) -> Vec<String> {
         .collect()
 }
 
+fn slashed(path: &str) -> String {
+    let path = path.replace('\\', "/");
+    match path.as_bytes() {
+        [b'/', drive, b':', ..] if drive.is_ascii_alphabetic() => path[1..].to_owned(),
+        _ => path,
+    }
+}
+
+fn inside(root: &str, absolute: &str) -> Option<String> {
+    let root = slashed(root);
+    let root = root.trim_end_matches('/');
+    let absolute = slashed(absolute);
+    let start = absolute.get(..root.len())?;
+    let same = if root.as_bytes().get(1) == Some(&b':') {
+        start.eq_ignore_ascii_case(root)
+    } else {
+        start == root
+    };
+    let rest = absolute[root.len()..].strip_prefix('/').filter(|_| same)?;
+    Some(rest.trim_start_matches('/').to_owned())
+}
+
 #[must_use]
 pub fn resolve_url(files: &[String], root: &str, url: &str) -> Option<String> {
     let path = url.split(['?', '#']).next().unwrap_or(url);
     let relative = match path.strip_prefix("/@fs") {
-        Some(absolute) => absolute
-            .strip_prefix(root.trim_end_matches('/'))?
-            .trim_start_matches('/'),
-        None => path.trim_start_matches('/'),
+        Some(absolute) => inside(root, absolute)?,
+        None => path.trim_start_matches('/').to_owned(),
     };
-    [relative.to_owned(), format!("public/{relative}")]
+    [relative.clone(), format!("public/{relative}")]
         .into_iter()
         .find(|candidate| files.iter().any(|file| file == candidate))
 }
@@ -153,7 +173,11 @@ pub fn section(
         out.push_str("</assets>\n");
     }
     for (path, content) in mentioned {
-        let lines: Vec<&str> = content.split('\n').take(MENTIONED_LINES).collect();
+        let lines: Vec<&str> = content
+            .split('\n')
+            .take(MENTIONED_LINES)
+            .map(|line| line.strip_suffix('\r').unwrap_or(line))
+            .collect();
         let _ = writeln!(out, "\n<file path=\"{path}\" lines=\"1-{}\">", lines.len());
         for (number, text) in lines.iter().enumerate() {
             let _ = writeln!(out, "{:>4} | {text}", number + 1);
@@ -253,6 +277,26 @@ mod tests {
         );
         assert_eq!(
             resolve_url(&files, "/repo/app", "/@fs/elsewhere/x.png"),
+            None
+        );
+        assert_eq!(
+            resolve_url(&files, "/repo/app", "/@fs/repo/app2/src/assets/beans.jpg"),
+            None
+        );
+        assert_eq!(
+            resolve_url(
+                &files,
+                "C:\\Repo\\app",
+                "/@fs/c:/repo/app/src/assets/beans.jpg"
+            ),
+            Some("src/assets/beans.jpg".to_owned())
+        );
+        assert_eq!(
+            resolve_url(
+                &files,
+                "C:\\repo\\app",
+                "/@fs/D:/repo/app/src/assets/beans.jpg"
+            ),
             None
         );
         assert_eq!(resolve_url(&files, "/repo/app", "/missing.png"), None);

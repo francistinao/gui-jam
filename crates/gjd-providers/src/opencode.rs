@@ -245,7 +245,6 @@ fn isolated_env(config_home: &Path) -> Vec<(String, String)> {
 fn args(request: &GenerationRequest, images: &[PathBuf]) -> Vec<String> {
     let mut args: Vec<String> = [
         "run",
-        request.user_prompt.as_str(),
         "--format",
         "json",
         "--pure",
@@ -431,7 +430,7 @@ impl OpenCode {
             &binary,
             args(&request, &images),
             &request.cwd,
-            b"",
+            request.user_prompt.as_bytes(),
             SpawnOptions {
                 env,
                 watch_stderr: true,
@@ -667,11 +666,12 @@ mod tests {
     }
 
     #[test]
-    fn widget_runs_use_the_locked_agent_and_put_files_after_the_message() {
+    fn widget_runs_use_the_locked_agent_keep_the_message_off_the_command_line_and_put_files_last() {
         let images = [PathBuf::from("/tmp/image-0.png")];
         let run = args(&request(ToolPolicy::None), &images);
 
-        assert_eq!(run[..2], ["run", "Element: <button>"]);
+        assert_eq!(run[0], "run");
+        assert!(!run.iter().any(|arg| arg.contains("Element:")));
         for flag in ["--pure", "--print-logs"] {
             assert!(run.iter().any(|arg| arg == flag), "{flag} missing");
         }

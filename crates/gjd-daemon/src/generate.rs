@@ -244,7 +244,10 @@ impl Progress {
 #[must_use]
 pub fn user_prompt(style: &ElementStyle, source: &str, request: &str, tier: &TierConfig) -> String {
     let line = usize::try_from(style.line.get()).unwrap_or(usize::MAX);
-    let lines: Vec<&str> = source.split('\n').collect();
+    let lines: Vec<&str> = source
+        .split('\n')
+        .map(|line| line.strip_suffix('\r').unwrap_or(line))
+        .collect();
     let first = line.saturating_sub(tier.context_lines).max(1);
     let last = line.saturating_add(tier.context_lines).min(lines.len());
 
@@ -573,6 +576,14 @@ mod tests {
             "   3 |     <button type=\"button\" className=\"rounded-lg bg-brand px-6\">\n"
         ));
         assert!(prompt.ends_with("   8 | \n</source>\n"));
+
+        let crlf = BUTTON.replace('\n', "\r\n");
+        let style = inspect("src/OrderButton.tsx", &crlf, 3, 5, &theme);
+        let from_crlf = user_prompt(&style, &crlf, "  make it blue ", &R1);
+        assert!(!from_crlf.contains('\r'));
+        assert!(from_crlf.contains(
+            "   3 |     <button type=\"button\" className=\"rounded-lg bg-brand px-6\">\n"
+        ));
     }
 
     #[test]

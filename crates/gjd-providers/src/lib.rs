@@ -6,6 +6,8 @@ mod opencode;
 mod process;
 mod qwen_code;
 mod schema;
+#[cfg(any(windows, test))]
+mod shim;
 pub mod spawn;
 mod text_answer;
 

@@ -282,6 +282,11 @@ pub fn check_new_path(project: &Project, path: &str) -> Result<(), String> {
             "It creates {level}/{name}; component files are named in PascalCase, like PriceTag.{extension}."
         ));
     }
+    if !gjd_core::policy::portable_name(name.as_ref()) {
+        return Err(format!(
+            "It creates {level}/{name}, a name Windows reserves; components need another name."
+        ));
+    }
     Ok(())
 }
 
@@ -443,6 +448,8 @@ mod tests {
             ("src/components/atoms/price.tsx", "PascalCase"),
             ("src/components/atoms/Price-Tag.tsx", "PascalCase"),
             ("src/components/atoms/.tsx", "PascalCase"),
+            ("src/components/atoms/Aux.tsx", "Windows reserves"),
+            ("src/components/molecules/Com1.tsx", "Windows reserves"),
         ];
         for (path, reason) in refused {
             let error = check_new_path(&project, path).expect_err(path);

@@ -28,14 +28,25 @@ const MAC_APPS: [&str; 4] = [
     "Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
     "Chromium.app/Contents/MacOS/Chromium",
 ];
-const PATH_NAMES: [&str; 6] = [
+const WINDOWS_ROOTS: [&str; 3] = ["ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA"];
+const WINDOWS_APPS: [&str; 4] = [
+    "Google/Chrome/Application/chrome.exe",
+    "BraveSoftware/Brave-Browser/Application/brave.exe",
+    "Microsoft/Edge/Application/msedge.exe",
+    "Chromium/Application/chrome.exe",
+];
+const PATH_NAMES: [&str; 9] = [
     "google-chrome",
     "google-chrome-stable",
     "chromium",
     "chromium-browser",
     "brave-browser",
     "microsoft-edge",
+    "chrome",
+    "brave",
+    "msedge",
 ];
+const EXIT_WAIT: Duration = Duration::from_secs(2);
 const FLAGS: [&str; 13] = [
     "--headless=new",
     "--use-mock-keychain",
@@ -79,18 +90,35 @@ fn protocol(error: impl std::fmt::Display) -> ShotError {
 
 #[must_use]
 pub fn find_browser() -> Browser {
-    let mut roots = vec![PathBuf::from("/Applications")];
-    if let Some(home) = std::env::var_os("HOME") {
-        roots.push(PathBuf::from(home).join("Applications"));
-    }
-    find_browser_with(std::env::var_os(BROWSER_ENV), &roots, |name| {
+    let installed = installed_apps(|name| std::env::var_os(name), cfg!(windows));
+    find_browser_with(std::env::var_os(BROWSER_ENV), &installed, |name| {
         which::which(name).ok()
     })
 }
 
+fn installed_apps(var: impl Fn(&str) -> Option<OsString>, windows: bool) -> Vec<PathBuf> {
+    let (roots, apps): (Vec<PathBuf>, &[&str]) = if windows {
+        let roots = WINDOWS_ROOTS
+            .iter()
+            .filter_map(|name| var(name))
+            .filter(|root| !root.is_empty())
+            .map(PathBuf::from)
+            .collect();
+        (roots, &WINDOWS_APPS)
+    } else {
+        let mut roots = vec![PathBuf::from("/Applications")];
+        roots.extend(var("HOME").map(|home| PathBuf::from(home).join("Applications")));
+        (roots, &MAC_APPS)
+    };
+    roots
+        .iter()
+        .flat_map(|root| apps.iter().map(move |app| root.join(app)))
+        .collect()
+}
+
 fn find_browser_with(
     chosen: Option<OsString>,
-    roots: &[PathBuf],
+    installed: &[PathBuf],
     lookup: impl Fn(&str) -> Option<PathBuf>,
 ) -> Browser {
     if let Some(chosen) = chosen {
@@ -105,10 +133,10 @@ fn find_browser_with(
             lookup(&text).map_or(Browser::Missing, Browser::Path)
         };
     }
-    roots
+    installed
         .iter()
-        .flat_map(|root| MAC_APPS.iter().map(move |app| root.join(app)))
         .find(|path| path.is_file())
+        .cloned()
         .or_else(|| PATH_NAMES.iter().find_map(|name| lookup(name)))
         .map_or(Browser::Missing, Browser::Path)
 }
@@ -116,6 +144,13 @@ fn find_browser_with(
 struct Running {
     browser: ProcessTree,
     profile: tempfile::TempDir,
+}
+
+impl Running {
+    async fn stop(mut self) {
+        self.browser.kill();
+        let _ = tokio::time::timeout(EXIT_WAIT, self.browser.wait()).await;
+    }
 }
 
 impl Drop for Running {
@@ -317,7 +352,7 @@ pub async fn capture(binary: &Path, url: &Url, limit: Duration) -> Result<ImageI
     let deadline = Instant::now() + limit;
     let mut running = launch(binary)?;
     let result = timeout_at(deadline, shoot(&mut running, url, deadline)).await;
-    drop(running);
+    running.stop().await;
     result.map_err(|_| ShotError::Timeout)?
 }
 
@@ -329,7 +364,7 @@ mod tests {
 
     use url::Url;
 
-    use super::{Browser, capture, find_browser, find_browser_with};
+    use super::{Browser, MAC_APPS, capture, find_browser, find_browser_with, installed_apps};
 
     fn executable(dir: &Path, name: &str, body: &str) -> PathBuf {
         let path = dir.join(name);
@@ -352,6 +387,10 @@ mod tests {
             "",
         );
         let roots = [dir.path().join("missing"), dir.path().to_path_buf()];
+        let roots: Vec<PathBuf> = roots
+            .iter()
+            .flat_map(|root| MAC_APPS.iter().map(move |app| root.join(app)))
+            .collect();
         let on_path = |name: &str| (name == "chromium").then(|| PathBuf::from("/usr/bin/chromium"));
         let nothing = |_: &str| None;
 
@@ -379,10 +418,49 @@ mod tests {
             Browser::Path(brave)
         );
         assert_eq!(
-            find_browser_with(None, &[dir.path().join("missing")], on_path),
+            find_browser_with(None, &roots[..MAC_APPS.len()], on_path),
             Browser::Path(PathBuf::from("/usr/bin/chromium"))
         );
         assert_eq!(find_browser_with(None, &[], nothing), Browser::Missing);
+    }
+
+    #[test]
+    fn looks_for_installed_browsers_where_each_platform_puts_them() {
+        let env = |pairs: &'static [(&'static str, &'static str)]| {
+            move |name: &str| {
+                pairs
+                    .iter()
+                    .find(|(key, _)| *key == name)
+                    .map(|(_, value)| OsString::from(value))
+            }
+        };
+        let windows = installed_apps(
+            env(&[
+                ("ProgramFiles", "C:/Program Files"),
+                ("ProgramFiles(x86)", ""),
+                ("LOCALAPPDATA", "C:/Users/me/AppData/Local"),
+                ("HOME", "/home/me"),
+            ]),
+            true,
+        );
+        let mac = installed_apps(env(&[("HOME", "/Users/me")]), false);
+
+        assert_eq!(windows.len(), 8);
+        assert_eq!(
+            windows[0],
+            PathBuf::from("C:/Program Files/Google/Chrome/Application/chrome.exe")
+        );
+        assert!(windows.contains(&PathBuf::from(
+            "C:/Program Files/Microsoft/Edge/Application/msedge.exe"
+        )));
+        assert!(windows.contains(&PathBuf::from(
+            "C:/Users/me/AppData/Local/Google/Chrome/Application/chrome.exe"
+        )));
+        assert_eq!(mac.len(), 2 * MAC_APPS.len());
+        assert_eq!(
+            mac[MAC_APPS.len()],
+            PathBuf::from("/Users/me/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")
+        );
     }
 
     #[cfg(unix)]

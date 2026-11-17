@@ -1,4 +1,4 @@
-import { appendFileSync } from 'node:fs';
+import { appendFileSync, readFileSync } from 'node:fs';
 
 const log = (entry) => {
   const file = process.env.GUIJAM_FAKE_OPENCODE_LOG;
@@ -38,7 +38,11 @@ if (args[0] === 'models') {
 }
 if (args[0] !== 'run') process.exit(2);
 
-const message = args[1] ?? '';
+const message = process.stdin.isTTY ? '' : readFileSync(0, 'utf8');
+if (message.trim() === '') {
+  process.stderr.write('Error: You must provide a message or a command\n');
+  process.exit(1);
+}
 const flag = (name) => {
   const index = args.indexOf(name);
   return index === -1 ? undefined : args[index + 1];
