@@ -16,6 +16,10 @@
       "types": "./dist/nuxt.d.ts",
       "default": "./dist/nuxt.js"
     },
+    "./astro": {
+      "types": "./dist/astro.d.ts",
+      "default": "./dist/astro.js"
+    },
     "./package.json": "./package.json"
   },
   "files": [

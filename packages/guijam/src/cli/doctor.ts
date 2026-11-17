@@ -1,5 +1,11 @@
 import { intro, log, outro } from '@clack/prompts';
-import { describeProject, detectProject, type Project, VITE_FRAMEWORKS } from './detect.js';
+import {
+  describeProject,
+  detectProject,
+  type Project,
+  SUPPORTED_FRAMEWORKS,
+  VITE_FRAMEWORKS,
+} from './detect.js';
 import { gjdVersion, listProviders } from './gjd.js';
 import { PWA_HINT, projectRunsDevServiceWorker } from './pwa.js';
 import { isWired } from './wire.js';
@@ -35,9 +41,14 @@ function nodeCheck(): Check {
     : { level: 'fail', message: `Node ${version} is too old. GUIJam needs ^20.19.0 or >=22.12.0.` };
 }
 
-async function projectChecks(project: Project): Promise<Check[]> {
+const CONFIG_NAMES: Partial<Record<Project['framework'], string>> = {
+  nuxt: 'nuxt.config',
+  astro: 'astro.config',
+};
+
+export async function projectChecks(project: Project): Promise<Check[]> {
   const checks: Check[] = [{ level: 'ok', message: describeProject(project) }];
-  if (!VITE_FRAMEWORKS.has(project.framework)) {
+  if (!SUPPORTED_FRAMEWORKS.has(project.framework)) {
     checks.push({
       level: 'fail',
       message: `GUIJam doesn't plug into ${project.frameworkLabel} yet.`,
@@ -45,7 +56,7 @@ async function projectChecks(project: Project): Promise<Check[]> {
     return checks;
   }
   const major = Number.parseInt(project.viteVersion ?? '', 10);
-  if (!SUPPORTED_VITE.has(major)) {
+  if (VITE_FRAMEWORKS.has(project.framework) && !SUPPORTED_VITE.has(major)) {
     checks.push({
       level: 'warn',
       message: `Vite ${project.viteVersion ?? 'is not installed'}. GUIJam supports Vite 6, 7 and 8.`,
@@ -56,10 +67,11 @@ async function projectChecks(project: Project): Promise<Check[]> {
       ? { level: 'ok', message: 'guijam is a dependency' }
       : { level: 'fail', message: 'guijam is not in package.json. Run npx guijam init.' },
   );
+  const config = CONFIG_NAMES[project.framework] ?? 'The Vite config';
   checks.push(
     (await isWired(project))
-      ? { level: 'ok', message: 'The Vite config loads guijam()' }
-      : { level: 'fail', message: 'The Vite config does not load guijam(). Run npx guijam init.' },
+      ? { level: 'ok', message: `${config} loads guijam` }
+      : { level: 'fail', message: `${config} does not load guijam. Run npx guijam init.` },
   );
   if (await projectRunsDevServiceWorker(project)) checks.push({ level: 'warn', message: PWA_HINT });
   return checks;

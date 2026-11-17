@@ -1,5 +1,6 @@
 use std::ops::Range;
 
+use crate::contracts::{DomPatch, DomPatchSetStylesItem};
 use crate::jsx::{ClassLiteral, ClassSource, JsxElement, JsxError, StyleSource};
 use crate::srcloc::LineIndex;
 
@@ -12,6 +13,15 @@ const UNITLESS: [&str; 6] = [
     "flex-grow",
     "flex-shrink",
 ];
+
+const SERVER_RENDERED: [&str; 1] = ["astro"];
+
+#[must_use]
+pub fn is_server_rendered(path: &str) -> bool {
+    path.rsplit_once('.').is_some_and(|(_, extension)| {
+        SERVER_RENDERED.contains(&extension.to_ascii_lowercase().as_str())
+    })
+}
 
 #[must_use]
 pub fn is_template(path: &str) -> bool {
@@ -358,11 +368,78 @@ pub fn merged_css(text: &str, changes: &[(String, Option<String>)]) -> String {
     parts.join("; ")
 }
 
+enum Seen {
+    Text(String),
+    Bound,
+}
+
+fn seen(source: &str, line: u64, column: u64, name: &str) -> Option<Seen> {
+    match attribute(source, line, column, name).ok()? {
+        AttributeSlot::Missing { .. } => Some(Seen::Text(String::new())),
+        AttributeSlot::Static { text, .. } => Some(Seen::Text(text)),
+        AttributeSlot::Bound => Some(Seen::Bound),
+    }
+}
+
+fn texts(base: &str, next: &str, line: u64, column: u64, name: &str) -> Option<(String, String)> {
+    match (
+        seen(base, line, column, name)?,
+        seen(next, line, column, name)?,
+    ) {
+        (Seen::Text(from), Seen::Text(to)) => Some((from, to)),
+        (Seen::Bound, Seen::Bound) => Some((String::new(), String::new())),
+        _ => None,
+    }
+}
+
+fn missing_from(tokens: &[&str], other: &[&str]) -> Vec<String> {
+    tokens
+        .iter()
+        .filter(|token| !other.contains(token))
+        .map(|token| (*token).to_owned())
+        .collect()
+}
+
+#[must_use]
+pub fn dom_patch(path: &str, base: &str, next: &str, line: u64, column: u64) -> Option<DomPatch> {
+    let (class_from, class_to) = texts(base, next, line, column, "class")?;
+    let (style_from, style_to) = texts(base, next, line, column, "style")?;
+    let from_tokens: Vec<&str> = class_from.split_whitespace().collect();
+    let to_tokens: Vec<&str> = class_to.split_whitespace().collect();
+    let from_css = declarations(&style_from);
+    let to_css = declarations(&style_to);
+    let set_styles = to_css
+        .iter()
+        .filter(|(property, value)| {
+            from_css
+                .iter()
+                .find(|(known, _)| known == property)
+                .is_none_or(|(_, before)| before != value)
+        })
+        .map(|(property, value)| DomPatchSetStylesItem {
+            property: property.clone(),
+            value: value.clone(),
+        })
+        .collect();
+    let remove_styles = from_css
+        .iter()
+        .filter(|(property, _)| !to_css.iter().any(|(known, _)| known == property))
+        .map(|(property, _)| property.clone())
+        .collect();
+    Some(DomPatch {
+        src: format!("{path}:{line}:{column}").parse().ok()?,
+        add_classes: missing_from(&to_tokens, &from_tokens),
+        remove_classes: missing_from(&from_tokens, &to_tokens),
+        set_styles,
+        remove_styles,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        AttributeSlot, attribute, camel, css_number, declarations, find_element, is_template,
-        kebab, merged_css,
+        AttributeSlot, attribute, camel, css_number, declarations, dom_patch, find_element,
+        is_server_rendered, is_template, kebab, merged_css,
     };
     use crate::jsx::{ClassSource, StyleSource};
 
@@ -538,5 +615,61 @@ mod tests {
             AttributeSlot::Bound
         );
         assert!(attribute("<VBtn", 1, 1, "color").is_err());
+    }
+
+    #[test]
+    fn only_astro_templates_are_server_rendered() {
+        assert!(is_server_rendered("src/pages/index.astro"));
+        assert!(is_server_rendered("src/Card.ASTRO"));
+        assert!(!is_server_rendered("src/App.vue"));
+        assert!(!is_server_rendered("src/App.tsx"));
+        assert!(!is_server_rendered("astro"));
+    }
+
+    #[test]
+    fn a_dom_patch_lists_the_class_and_style_changes_of_one_element() {
+        let base = "<div>\n  <p class=\"mt-6 bg-brand\" style=\"padding: 16px; color: red\">Gift</p>\n</div>\n";
+        let next = "<div>\n  <p class=\"mt-6 bg-[#1D4ED8] rounded-full\" style=\"padding: 16px; background-color: #1D4ED8\">Gift</p>\n</div>\n";
+
+        let patch = dom_patch("src/pages/index.astro", base, next, 2, 3).expect("both static");
+
+        assert_eq!(patch.src.as_str(), "src/pages/index.astro:2:3");
+        assert_eq!(patch.add_classes, ["bg-[#1D4ED8]", "rounded-full"]);
+        assert_eq!(patch.remove_classes, ["bg-brand"]);
+        let set: Vec<(&str, &str)> = patch
+            .set_styles
+            .iter()
+            .map(|item| (item.property.as_str(), item.value.as_str()))
+            .collect();
+        assert_eq!(set, [("background-color", "#1D4ED8")]);
+        assert_eq!(patch.remove_styles, ["color"]);
+    }
+
+    #[test]
+    fn added_and_removed_attributes_count_as_empty() {
+        let base = "<button type=\"button\">Order</button>\n";
+        let next =
+            "<button type=\"button\" class=\"rounded-lg\" style=\"color: red\">Order</button>\n";
+
+        let added = dom_patch("a.astro", base, next, 1, 1).expect("static");
+        let removed = dom_patch("a.astro", next, base, 1, 1).expect("static");
+
+        assert_eq!(added.add_classes, ["rounded-lg"]);
+        assert_eq!(added.set_styles.len(), 1);
+        assert_eq!(removed.remove_classes, ["rounded-lg"]);
+        assert_eq!(removed.remove_styles, ["color"]);
+    }
+
+    #[test]
+    fn a_bound_attribute_that_changes_cannot_be_patched_in_place() {
+        let bound = "<p class={tone} style=\"color: red\">x</p>\n";
+        let restyled = "<p class={tone} style=\"color: blue\">x</p>\n";
+        let unbound = "<p class=\"mt-6\" style=\"color: red\">x</p>\n";
+
+        let kept = dom_patch("a.astro", bound, restyled, 1, 1).expect("class unchanged");
+        assert!(kept.add_classes.is_empty() && kept.remove_classes.is_empty());
+        assert_eq!(kept.set_styles[0].value, "blue");
+        assert!(dom_patch("a.astro", bound, unbound, 1, 1).is_none());
+        assert!(dom_patch("a.astro", bound, bound, 9, 1).is_none());
     }
 }

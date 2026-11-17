@@ -76,13 +76,20 @@ const widget = new URL('./widget.js', import.meta.resolve('guijam/vite'));
 if (!existsSync(widget)) {
   throw new Error('browser widget not found next to guijam/vite: ' + widget);
 }
+const { default: astro } = await import('guijam/astro');
+const integration = astro();
+if (integration.name !== 'guijam' || typeof integration.hooks['astro:config:setup'] !== 'function') {
+  throw new Error('guijam/astro is not an Astro integration');
+}
 "
 
 cat > check.ts <<'TS'
+import guijamAstro from 'guijam/astro';
 import { type GuijamApi, guijam, type UpdateResult } from 'guijam/vite';
 import type { Plugin } from 'vite';
 
 export const plugin: Plugin<GuijamApi> = guijam();
+export const integration: { name: string } = guijamAstro({ root: '.' });
 export const ok: UpdateResult['status'] = 'timeout';
 // @ts-expect-error not a status
 export const bad: UpdateResult['status'] = 'not-a-status';

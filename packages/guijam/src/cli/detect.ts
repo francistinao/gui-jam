@@ -22,6 +22,12 @@ export const VITE_FRAMEWORKS: ReadonlySet<FrameworkId> = new Set([
   'solid-start',
 ]);
 
+export const SUPPORTED_FRAMEWORKS: ReadonlySet<FrameworkId> = new Set([
+  ...VITE_FRAMEWORKS,
+  'nuxt',
+  'astro',
+]);
+
 export interface Project {
   root: string;
   packageManager: PackageManager;

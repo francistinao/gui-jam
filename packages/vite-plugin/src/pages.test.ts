@@ -1,6 +1,6 @@
 import type { GuijamMessage } from '@guijam/contracts-ts';
 import { describe, expect, it } from 'vitest';
-import { GRACE_MS, KEEP_FINISHED_MS, Pages } from './pages.js';
+import { GRACE_MS, KEEP_FINISHED_MS, Pages, RELOAD_WINDOW_MS } from './pages.js';
 
 function fakeTimers() {
   let now = 0;
@@ -153,5 +153,46 @@ describe('Pages', () => {
 
     expect(await pages.attach('run-1')).toBeUndefined();
     expect(dropped).toEqual([]);
+  });
+
+  it('keeps the previews of pages that GUIJam itself reloads, then releases again', () => {
+    const dropped: string[] = [];
+    const released: string[] = [];
+    const clock = fakeTimers();
+    const pages = new Pages<string>(
+      (runId) => dropped.push(runId),
+      (runId) => released.push(runId),
+      clock.timers,
+    );
+    pages.seen('socket-a', 'page-1');
+    pages.started('page-1', 'run-1', new Promise(() => {}));
+
+    pages.reloading();
+    pages.left('socket-a');
+    pages.seen('socket-b', 'page-1');
+    expect(released).toEqual([]);
+
+    clock.advance(RELOAD_WINDOW_MS);
+    pages.left('socket-b');
+    expect(released).toEqual(['run-1']);
+    expect(dropped).toEqual([]);
+  });
+
+  it('still drops the runs of a reloaded page that never comes back', () => {
+    const dropped: string[] = [];
+    const clock = fakeTimers();
+    const pages = new Pages<string>(
+      (runId) => dropped.push(runId),
+      () => undefined,
+      clock.timers,
+    );
+    pages.seen('socket-a', 'page-1');
+    pages.started('page-1', 'run-1', new Promise(() => {}));
+
+    pages.reloading();
+    pages.left('socket-a');
+    clock.advance(GRACE_MS);
+
+    expect(dropped).toEqual(['run-1']);
   });
 });

@@ -19,6 +19,16 @@ import { type Project, VITE_FRAMEWORKS } from './detect.js';
 
 export const PLUGIN_SOURCE = 'guijam/vite';
 export const NUXT_MODULE = 'guijam/nuxt';
+export const ASTRO_INTEGRATION = 'guijam/astro';
+
+interface Hook {
+  source: string;
+  imported: 'guijam' | 'default';
+  key: 'plugins' | 'integrations';
+}
+
+const VITE_HOOK: Hook = { source: PLUGIN_SOURCE, imported: 'guijam', key: 'plugins' };
+const ASTRO_HOOK: Hook = { source: ASTRO_INTEGRATION, imported: 'default', key: 'integrations' };
 
 const MAX_HOPS = 8;
 
@@ -48,20 +58,22 @@ interface Bodies {
 
 const COMING_SOON: Record<string, string> = {
   next: 'Next.js support is on the roadmap.',
-  astro: 'Astro support is on the roadmap.',
   angular: 'Angular support is on the roadmap.',
   'solid-start-vinxi': 'SolidStart 1 runs on vinxi; upgrade to SolidStart 2, which runs on Vite.',
 };
 
-function guijamImportOf(program: Program): string | undefined {
+function guijamImportOf(program: Program, hook: Hook): string | undefined {
   for (const statement of program.body) {
-    if (statement.type !== 'ImportDeclaration' || statement.source.value !== PLUGIN_SOURCE)
-      continue;
+    if (statement.type !== 'ImportDeclaration' || statement.source.value !== hook.source) continue;
     for (const specifier of statement.specifiers) {
+      if (specifier.type === 'ImportDefaultSpecifier') {
+        if (hook.imported === 'default') return specifier.local.name;
+        continue;
+      }
       if (specifier.type !== 'ImportSpecifier') continue;
       const imported =
         specifier.imported.type === 'Literal' ? specifier.imported.value : specifier.imported.name;
-      if (imported === 'guijam') return specifier.local.name;
+      if (imported === hook.imported) return specifier.local.name;
     }
   }
   return undefined;
@@ -207,10 +219,6 @@ function isKey(property: ObjectProperty, name: string): boolean {
   );
 }
 
-function isPluginsKey(property: ObjectProperty): boolean {
-  return isKey(property, 'plugins');
-}
-
 function insertFirst(
   output: MagicString,
   code: string,
@@ -226,23 +234,24 @@ function insertFirst(
   );
 }
 
-function addToPlugins(
+function addToList(
   output: MagicString,
   code: string,
   config: ObjectExpression,
   call: string,
+  key: Hook['key'],
 ): string | undefined {
   const property = config.properties.find(
-    (entry): entry is ObjectProperty => entry.type === 'Property' && isPluginsKey(entry),
+    (entry): entry is ObjectProperty => entry.type === 'Property' && isKey(entry, key),
   );
   if (property === undefined) {
     const [first] = config.properties;
-    if (first === undefined) output.appendLeft(config.start + 1, ` plugins: [${call}] `);
-    else insertFirst(output, code, config.start + 1, first.start, `plugins: [${call}]`);
+    if (first === undefined) output.appendLeft(config.start + 1, ` ${key}: [${call}] `);
+    else insertFirst(output, code, config.start + 1, first.start, `${key}: [${call}]`);
     return undefined;
   }
   const value = unwrap(property.value);
-  if (value.type !== 'ArrayExpression') return 'its plugins are not a plain array';
+  if (value.type !== 'ArrayExpression') return `its ${key} are not a plain array`;
   const plugins: ArrayExpression = value;
   const first = plugins.elements.find((element) => element !== null);
   if (first === undefined || first === null) output.appendLeft(plugins.start + 1, call);
@@ -250,44 +259,98 @@ function addToPlugins(
   return undefined;
 }
 
-function addImport(output: MagicString, code: string, program: Program): void {
+function addImport(output: MagicString, code: string, program: Program, hook: Hook): void {
   const imports = program.body.filter((statement) => statement.type === 'ImportDeclaration');
   const [first] = imports;
   const last = imports.at(-1);
   const quote = first === undefined ? "'" : (code[first.source.start] ?? "'");
   const semicolon = last === undefined || code[last.end - 1] === ';' ? ';' : '';
-  const line = `import { guijam } from ${quote}${PLUGIN_SOURCE}${quote}${semicolon}`;
+  const binding = hook.imported === 'default' ? 'guijam' : '{ guijam }';
+  const line = `import ${binding} from ${quote}${hook.source}${quote}${semicolon}`;
   if (last === undefined) output.prepend(`${line}\n\n`);
   else output.appendLeft(last.end, `\n${line}`);
 }
 
-export function callsGuijam(code: string, filename = 'vite.config.ts'): boolean {
+export function callsGuijam(
+  code: string,
+  filename = 'vite.config.ts',
+  hook: Hook = VITE_HOOK,
+): boolean {
   const parsed = parseSync(filename, code);
   if (parsed.errors.length > 0) return false;
-  const local = guijamImportOf(parsed.program);
+  const local = guijamImportOf(parsed.program, hook);
   return local !== undefined && calls(parsed.program, local);
 }
 
-export function addGuijamPlugin(code: string, filename = 'vite.config.ts'): EditOutcome {
+export function addGuijamPlugin(
+  code: string,
+  filename = 'vite.config.ts',
+  hook: Hook = VITE_HOOK,
+): EditOutcome {
   const parsed = parseSync(filename, code);
   const [error] = parsed.errors;
   if (error !== undefined)
     return { kind: 'manual', reason: `it could not be parsed (${error.message})` };
   const { program } = parsed;
-  const local = guijamImportOf(program);
+  const local = guijamImportOf(program, hook);
   if (local !== undefined && calls(program, local)) return { kind: 'present' };
 
   const config = exportedConfig(program);
   if ('problem' in config) return { kind: 'manual', reason: config.problem };
   const output = new MagicString(code);
-  const problem = addToPlugins(output, code, config.node, `${local ?? 'guijam'}()`);
+  const problem = addToList(output, code, config.node, `${local ?? 'guijam'}()`, hook.key);
   if (problem !== undefined) return { kind: 'manual', reason: problem };
-  if (local === undefined) addImport(output, code, program);
+  if (local === undefined) addImport(output, code, program, hook);
 
   const next = output.toString();
-  if (!callsGuijam(next, filename))
+  if (!callsGuijam(next, filename, hook))
     return { kind: 'manual', reason: 'the edit could not be verified' };
   return { kind: 'added', code: next };
+}
+
+export function addAstroIntegration(code: string, filename = 'astro.config.mjs'): EditOutcome {
+  return addGuijamPlugin(code, filename, ASTRO_HOOK);
+}
+
+export function astroConfigSnippet(): string {
+  return [
+    `import guijam from '${ASTRO_INTEGRATION}';`,
+    '',
+    'export default defineConfig({',
+    '  integrations: [guijam(), ...yourIntegrations],',
+    '});',
+  ].join('\n');
+}
+
+async function wireAstro(project: Project): Promise<WireResult> {
+  const file = project.configFile ?? join(project.root, 'astro.config.mjs');
+  if (project.configFile === undefined) {
+    await writeFile(
+      file,
+      [
+        "import { defineConfig } from 'astro/config';",
+        `import guijam from '${ASTRO_INTEGRATION}';`,
+        '',
+        'export default defineConfig({',
+        '  integrations: [guijam()],',
+        '});',
+        '',
+      ].join('\n'),
+      { flag: 'wx' },
+    );
+    return { status: 'created', file };
+  }
+  const outcome = addAstroIntegration(await readFile(file, 'utf8'), basename(file));
+  if (outcome.kind === 'manual') {
+    return {
+      status: 'manual',
+      file,
+      reason: `${basename(file)} can't be edited safely: ${outcome.reason}.`,
+      snippet: astroConfigSnippet(),
+    };
+  }
+  if (outcome.kind === 'added') await writeFile(file, outcome.code);
+  return { status: outcome.kind, file };
 }
 
 function modulesOf(config: ObjectExpression): Found<ArrayExpression> | undefined {
@@ -416,6 +479,7 @@ export async function wireProject(project: Project): Promise<WireResult> {
     };
   }
   if (project.framework === 'nuxt') return wireNuxt(project);
+  if (project.framework === 'astro') return wireAstro(project);
   if (!VITE_FRAMEWORKS.has(project.framework)) {
     return {
       status: 'unsupported',
@@ -454,6 +518,9 @@ export async function isWired(project: Project): Promise<boolean> {
   try {
     const code = await readFile(project.configFile, 'utf8');
     if (project.framework === 'nuxt') return hasNuxtModule(code, basename(project.configFile));
+    if (project.framework === 'astro') {
+      return callsGuijam(code, basename(project.configFile), ASTRO_HOOK);
+    }
     return callsGuijam(code, basename(project.configFile));
   } catch {
     return false;

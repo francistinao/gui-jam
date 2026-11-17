@@ -19,3 +19,4 @@ packages/guijam/assets/
 .output/
 .svelte-kit/
 .react-router/
+.astro/

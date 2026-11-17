@@ -29,6 +29,7 @@ import {
   splitPage,
   terminalLine,
 } from './relay.js';
+import { type AstroCompiler, injectAstroSourceLocations } from './transform-astro-srcloc.js';
 import { injectSourceLocations } from './transform-srcloc.js';
 import { injectSvelteSourceLocations, type SvelteCompiler } from './transform-svelte-srcloc.js';
 import { injectVueSourceLocations, type VueSfcCompiler } from './transform-vue-srcloc.js';
@@ -41,9 +42,13 @@ export interface GuijamOptions {
   root?: string;
 }
 
+export interface OverlayOptions {
+  pageReload?: boolean;
+}
+
 export interface GuijamApi {
-  setOverlay(file: string, content: string): Promise<UpdateResult>;
-  clearOverlay(file: string): Promise<UpdateResult>;
+  setOverlay(file: string, content: string, options?: OverlayOptions): Promise<UpdateResult>;
+  clearOverlay(file: string, options?: OverlayOptions): Promise<UpdateResult>;
   request(message: unknown): Promise<GuijamMessage>;
 }
 
@@ -55,13 +60,16 @@ const UPDATE_TIMEOUT_MS = 3000;
 const JSX_MODULE = /\.[jt]sx$/;
 const VUE_MODULE = /\.vue$/;
 const SVELTE_MODULE = /\.svelte$/;
-const FRAMEWORK_CLIENT_ENTRIES: readonly { plugin: string; entry: RegExp }[] = [
+const ASTRO_MODULE = /\.astro$/;
+const SERVER_RENDERED = ASTRO_MODULE;
+const FRAMEWORKS: readonly { plugin: string; entry?: RegExp }[] = [
   {
     plugin: 'vite-plugin-sveltekit',
     entry: /\/@sveltejs\/kit\/src\/runtime\/client\/entry\.js$/,
   },
   { plugin: 'react-router', entry: /\/entry\.client\.[cm]?[jt]sx?$/ },
   { plugin: 'solid-start', entry: /\/entry-client\.[cm]?[jt]sx?$/ },
+  { plugin: 'astro:' },
 ];
 const ASSET_FILE = /\.(?:svg|webp|png|jpe?g|gif|avif|ico)$/i;
 const SCRIPT_MODULE = /\.[cm]?[jt]sx?$/;
@@ -88,6 +96,15 @@ function scriptEntriesOf(config: ResolvedConfig): Set<string> {
   );
 }
 
+function overlayOptions(pageReload: boolean | undefined): OverlayOptions {
+  return pageReload === undefined ? {} : { pageReload };
+}
+
+interface RunnerModules {
+  getModuleById(id: string): object | undefined;
+  invalidateModule(node: object): void;
+}
+
 function toUpdateError(error: unknown, file: string): UpdateError {
   const result: UpdateError = {
     message: error instanceof Error ? error.message : String(error),
@@ -109,6 +126,7 @@ interface PageClient {
 export function guijam(options: GuijamOptions = {}): Plugin<GuijamApi> {
   const overlays = new Map<string, string>();
   const settled = new Map<string, string>();
+  const serverSettled = new Map<string, string>();
   const tailwindRootIds = new Set<string>();
   const tracker = createUpdateTracker(UPDATE_TIMEOUT_MS);
   let devServer: ViteDevServer | undefined;
@@ -143,12 +161,18 @@ export function guijam(options: GuijamOptions = {}): Plugin<GuijamApi> {
 
   const compilers = new Map<string, Promise<((...args: never[]) => unknown) | null>>();
 
-  function loadParser(specifier: string): Promise<((...args: never[]) => unknown) | null> {
+  function loadParser(
+    specifier: string,
+    via?: string,
+  ): Promise<((...args: never[]) => unknown) | null> {
     let loading = compilers.get(specifier);
     if (!loading) {
       loading = (async () => {
         try {
-          const entry = createRequire(join(root, 'package.json')).resolve(specifier);
+          const project = createRequire(join(root, 'package.json'));
+          const from =
+            via === undefined ? project : createRequire(project.resolve(`${via}/package.json`));
+          const entry = from.resolve(specifier);
           const loaded = (await import(pathToFileURL(entry).href)) as {
             parse?: (...args: never[]) => unknown;
             default?: { parse?: (...args: never[]) => unknown };
@@ -183,12 +207,20 @@ export function guijam(options: GuijamOptions = {}): Plugin<GuijamApi> {
       case 'overlay.set':
         return {
           type: 'update.result',
-          payload: await applyOverlay(message.payload.file, message.payload.content),
+          payload: await applyOverlay(
+            message.payload.file,
+            message.payload.content,
+            overlayOptions(message.payload.pageReload),
+          ),
         };
       case 'overlay.clear':
         return {
           type: 'update.result',
-          payload: await applyOverlay(message.payload.file, undefined),
+          payload: await applyOverlay(
+            message.payload.file,
+            undefined,
+            overlayOptions(message.payload.pageReload),
+          ),
         };
       case 'generate.progress':
         pages.client(message.payload.runId)?.send('gj:event', message);
@@ -275,7 +307,76 @@ export function guijam(options: GuijamOptions = {}): Plugin<GuijamApi> {
     return [...tailwindRootIds].flatMap((id) => client.moduleGraph.getModuleById(id) ?? []);
   }
 
-  async function applyOverlay(file: string, content: string | undefined): Promise<UpdateResult> {
+  function serverEnvironments(): DevEnvironment[] {
+    return Object.values(devServer?.environments ?? {}).filter(
+      (environment) => environment.name !== 'client',
+    );
+  }
+
+  function invalidateServerModules(environment: DevEnvironment, id: string): void {
+    const invalidated = new Set<EnvironmentModuleNode>();
+    for (const mod of environment.moduleGraph.getModulesByFile(id) ?? []) {
+      environment.moduleGraph.invalidateModule(mod, invalidated, Date.now(), true);
+    }
+    const evaluated = (environment as { runner?: { evaluatedModules?: RunnerModules } }).runner
+      ?.evaluatedModules;
+    if (!evaluated) return;
+    for (const mod of invalidated) {
+      const node = mod.id === null ? undefined : evaluated.getModuleById(mod.id);
+      if (node) evaluated.invalidateModule(node);
+    }
+  }
+
+  async function reloadTracked(
+    client: DevEnvironment,
+    reloads: readonly EnvironmentModuleNode[],
+    updateId: string,
+  ): Promise<UpdateResult> {
+    const result = tracker.begin(updateId);
+    client.hot.send('gj:update-start', {
+      updateId,
+      urls: reloads.map((mod) => mod.url),
+      expectedUpdates: reloads.length,
+    });
+    for (const mod of reloads) await client.reloadModule(mod);
+    return result;
+  }
+
+  async function showServerRendered(
+    id: string,
+    content: string | undefined,
+    previous: string | undefined,
+    onDisk: string | undefined,
+    pageReload: boolean,
+    updateId: string,
+  ): Promise<UpdateResult> {
+    const client = devServer?.environments.client;
+    const ok: UpdateResult = { updateId, status: 'ok', latencyMs: 0, errors: [] };
+    if (!client) return ok;
+    if (content === undefined && previous !== undefined && previous === onDisk) {
+      serverSettled.set(id, previous);
+    } else {
+      serverSettled.delete(id);
+    }
+    for (const environment of serverEnvironments()) invalidateServerModules(environment, id);
+    await syncCandidates(id, content);
+    if ((previous ?? onDisk) === (content ?? onDisk)) return ok;
+    const styles = tailwindRootModules(client);
+    if (pageReload) {
+      for (const mod of styles) client.moduleGraph.invalidateModule(mod);
+      pages.reloading();
+      client.hot.send({ type: 'full-reload', path: '*' });
+      return { ...ok, status: 'full_reload' };
+    }
+    if (content === undefined || styles.length === 0) return ok;
+    return reloadTracked(client, styles, updateId);
+  }
+
+  async function applyOverlay(
+    file: string,
+    content: string | undefined,
+    options: OverlayOptions = {},
+  ): Promise<UpdateResult> {
     if (!devServer) throw new Error('guijam: the Vite dev server has not started');
     const client = devServer.environments.client;
     const id = normalizePath(resolve(root, file));
@@ -290,6 +391,16 @@ export function guijam(options: GuijamOptions = {}): Plugin<GuijamApi> {
     const onDisk = !ASSET_FILE.test(id) && existsSync(id) ? await readFile(id, 'utf8') : undefined;
     const unchanged = content === undefined && previous !== undefined && previous === onDisk;
     if (unchanged) settled.set(id, previous);
+    if (SERVER_RENDERED.test(id)) {
+      return showServerRendered(
+        id,
+        content,
+        previous,
+        onDisk,
+        options.pageReload ?? true,
+        updateId,
+      );
+    }
 
     if (ASSET_FILE.test(id) || (content === undefined && onDisk === undefined) || unchanged) {
       for (const mod of modules) client.moduleGraph.invalidateModule(mod);
@@ -320,14 +431,7 @@ export function guijam(options: GuijamOptions = {}): Plugin<GuijamApi> {
       ...(content === undefined ? [] : tailwindRootModules(client)),
       ...modules.filter((mod) => hotReloadable(mod.url)),
     ];
-    const result = tracker.begin(updateId);
-    client.hot.send('gj:update-start', {
-      updateId,
-      urls: reloads.map((mod) => mod.url),
-      expectedUpdates: reloads.length,
-    });
-    for (const mod of reloads) await client.reloadModule(mod);
-    return result;
+    return reloadTracked(client, reloads, updateId);
   }
 
   const plugin: Plugin<GuijamApi> = {
@@ -336,14 +440,25 @@ export function guijam(options: GuijamOptions = {}): Plugin<GuijamApi> {
     enforce: 'pre',
 
     api: {
-      setOverlay: (file, content) => applyOverlay(file, content),
-      clearOverlay: (file) => applyOverlay(file, undefined),
+      setOverlay: (file, content, options) => applyOverlay(file, content, options),
+      clearOverlay: (file, options) => applyOverlay(file, undefined, options),
       request: (message) => relay(message),
     },
 
     async hotUpdate({ type, file, read, modules }) {
-      if (this.environment.name !== 'client') return;
       const id = normalizePath(file);
+      if (this.environment.name !== 'client') {
+        if (!SERVER_RENDERED.test(id)) return;
+        if (overlays.has(id)) return [];
+        const shown = serverSettled.get(id);
+        if (shown === undefined || type !== 'update') return;
+        if ((await read()) !== shown) {
+          serverSettled.delete(id);
+          return;
+        }
+        invalidateServerModules(this.environment, id);
+        return [];
+      }
       if (overlays.has(id)) return [];
       const shown = settled.get(id);
       if (shown === undefined) return;
@@ -361,10 +476,11 @@ export function guijam(options: GuijamOptions = {}): Plugin<GuijamApi> {
     },
 
     configResolved(config) {
-      frameworkClientEntry = FRAMEWORK_CLIENT_ENTRIES.find(({ plugin: name }) =>
+      const framework = FRAMEWORKS.find(({ plugin: name }) =>
         config.plugins.some((entry) => entry.name.startsWith(name)),
-      )?.entry;
-      if (frameworkClientEntry) delete plugin.transformIndexHtml;
+      );
+      frameworkClientEntry = framework?.entry;
+      if (framework) delete plugin.transformIndexHtml;
       viteRoot = config.root;
       root = options.root === undefined ? config.root : normalizePath(resolve(options.root));
       publicDir = config.publicDir || join(viteRoot, 'public');
@@ -475,6 +591,16 @@ export function guijam(options: GuijamOptions = {}): Plugin<GuijamApi> {
             ? injectSvelteSourceLocations(code, id, projectPath, {
                 parse,
               } as unknown as SvelteCompiler)
+            : null;
+        }
+        if (ASTRO_MODULE.test(id)) {
+          const projectPath = normalizePath(relative(root, id));
+          if (projectPath.startsWith('..') || id.includes('/node_modules/')) return null;
+          const parse = await loadParser('@astrojs/compiler-rs', 'astro');
+          return parse
+            ? injectAstroSourceLocations(code, id, projectPath, {
+                parse,
+              } as unknown as AstroCompiler)
             : null;
         }
         if (JSX_MODULE.test(id)) {

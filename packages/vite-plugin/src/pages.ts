@@ -2,6 +2,7 @@ import type { GuijamMessage } from '@guijam/contracts-ts';
 
 export const GRACE_MS = 20_000;
 export const KEEP_FINISHED_MS = 120_000;
+export const RELOAD_WINDOW_MS = 10_000;
 
 export interface Timers {
   set: (run: () => void, ms: number) => unknown;
@@ -21,6 +22,7 @@ export class Pages<Client> {
   private readonly leaving = new Map<string, unknown>();
   private readonly pending = new Map<string, Promise<GuijamMessage>>();
   private readonly finished = new Map<string, { reply: GuijamMessage; timer: unknown }>();
+  private reloadTimer: unknown;
 
   constructor(
     private readonly drop: (runId: string) => void,
@@ -67,12 +69,21 @@ export class Pages<Client> {
     return this.pending.get(runId);
   }
 
+  reloading(): void {
+    if (this.reloadTimer !== undefined) this.timers.clear(this.reloadTimer);
+    this.reloadTimer = this.timers.set(() => {
+      this.reloadTimer = undefined;
+    }, RELOAD_WINDOW_MS);
+  }
+
   left(client: Client): void {
     const pageId = this.pageOf.get(client);
     this.pageOf.delete(client);
     if (pageId === undefined || this.clientOf.get(pageId) !== client) return;
     this.clientOf.delete(pageId);
-    for (const runId of this.runsOf.get(pageId) ?? []) this.release(runId);
+    if (this.reloadTimer === undefined) {
+      for (const runId of this.runsOf.get(pageId) ?? []) this.release(runId);
+    }
     this.leaving.set(
       pageId,
       this.timers.set(() => this.forget(pageId), GRACE_MS),

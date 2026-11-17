@@ -18,6 +18,7 @@ import {
   prepareImage,
   roomFor,
 } from './attachments';
+import { DomPreview } from './dom-preview';
 import type { WidgetHost } from './host';
 import {
   changesIn,
@@ -171,6 +172,8 @@ export function parseSrc(src: string): Omit<Selection, 'instances'> | null {
   return { src, file: match[1], line: Number(match[2]), column: Number(match[3]) };
 }
 
+const SERVER_RENDERED = /\.astro$/;
+
 function elementsAt(src: string): HTMLElement[] {
   return [...document.querySelectorAll<HTMLElement>(`[${SRC_ATTRIBUTE}="${CSS.escape(src)}"]`)];
 }
@@ -247,6 +250,7 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
   const runs = new Map<string, string>();
   const committed = new Map<string, CodeChange[]>();
   const styled = new Set<HTMLElement>();
+  const domPreview = new DomPreview<HTMLElement>();
 
   host.onEvent((message) => {
     if (message.type !== 'generate.progress') return;
@@ -341,6 +345,7 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
     const fill = optimisticFill(draft.fill, style);
     const radius = optimisticRadius(draft.radius, style);
     for (const element of elementsAt(selection.src)) {
+      if (SERVER_RENDERED.test(selection.file)) domPreview.remember(element);
       if (fill !== null) element.style.backgroundColor = fill;
       if (radius !== null) element.style.borderRadius = radius;
       styled.add(element);
@@ -375,6 +380,7 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
     previewTimer = undefined;
     editSequence += 1;
     clearOptimistic();
+    domPreview.revert();
     const { preview } = store.get();
     store.set({ draft: {}, preview: null });
     if (preview) {
@@ -401,11 +407,15 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
     if (sequence !== editSequence) return;
     if (reply.type !== 'finetune.previewed') {
       clearOptimistic();
+      domPreview.revert();
       store.set({ preview: null });
       notify(failure(reply));
       return;
     }
     clearOptimistic();
+    const { dom } = reply.payload;
+    if (dom) domPreview.apply(dom, elementsAt(dom.src));
+    else domPreview.revert();
     store.set({
       preview: { changesetId: reply.payload.changesetId, changes: reply.payload.changes },
     });
@@ -950,10 +960,12 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
       });
       store.set({ busy: false, draft: {}, preview: null });
       if (reply.type !== 'commit.done') {
+        domPreview.revert();
         notify(failure(reply), UNDO_WINDOW_MS);
         await inspect(selection);
         return;
       }
+      domPreview.keep();
       notify(
         { kind: 'info', message: appliedTo(selection), undoJournalId: reply.payload.journalId },
         UNDO_WINDOW_MS,

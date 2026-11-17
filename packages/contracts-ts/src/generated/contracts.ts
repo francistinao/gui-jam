@@ -341,6 +341,7 @@ export interface OverlaySetMessage {
 export interface OverlaySet {
   file: string;
   content: string;
+  pageReload?: boolean;
 }
 export interface OverlayClearMessage {
   type: 'overlay.clear';
@@ -349,6 +350,7 @@ export interface OverlayClearMessage {
 }
 export interface OverlayClear {
   file: string;
+  pageReload?: boolean;
 }
 export interface UpdateResultMessage {
   type: 'update.result';
@@ -390,12 +392,23 @@ export interface FinetunePreviewed {
   changesetId: string;
   update: UpdateResult;
   changes: CodeChange[];
+  dom?: DomPatch;
 }
 export interface CodeChange {
   file: string;
   line: number;
   before: string[];
   after: string[];
+}
+export interface DomPatch {
+  src: string;
+  addClasses: string[];
+  removeClasses: string[];
+  setStyles: {
+    property: string;
+    value: string;
+  }[];
+  removeStyles: string[];
 }
 export interface ChangesetCommitMessage {
   type: 'changeset.commit';

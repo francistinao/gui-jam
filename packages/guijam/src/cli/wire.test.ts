@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { detectProject } from './detect.js';
 import {
+  addAstroIntegration,
   addGuijamPlugin,
   addNuxtModule,
   callsGuijam,
@@ -186,6 +187,61 @@ export default defineConfig({
       status: 'unsupported',
       reason:
         "GUIJam doesn't plug into SolidStart 1 (vinxi) yet. SolidStart 1 runs on vinxi; upgrade to SolidStart 2, which runs on Vite.",
+    });
+  });
+
+  it('adds the Astro integration first and recognises it under any local name', async () => {
+    const config = `import react from '@astrojs/react';
+import { defineConfig } from 'astro/config';
+
+export default defineConfig({
+  integrations: [react()],
+});
+`;
+    const root = app({ 'astro.config.mjs': config }, { astro: '7.4.5' });
+    const project = detectProject(root, {});
+
+    expect(await wireProject(project)).toEqual({
+      status: 'added',
+      file: join(root, 'astro.config.mjs'),
+    });
+    const written = readFileSync(join(root, 'astro.config.mjs'), 'utf8');
+    expect(written).toContain("import guijam from 'guijam/astro';");
+    expect(written).toContain('integrations: [guijam(), react()]');
+    expect(await isWired(project)).toBe(true);
+    expect(await wireProject(project)).toEqual({
+      status: 'present',
+      file: join(root, 'astro.config.mjs'),
+    });
+    expect(
+      addAstroIntegration(
+        "import gj from 'guijam/astro';\nexport default { integrations: [gj()] };\n",
+      ),
+    ).toEqual({ kind: 'present' });
+  });
+
+  it('creates an Astro config with the integration when the app has none', async () => {
+    const root = app({}, { astro: '7.4.5' });
+
+    expect(await wireProject(detectProject(root, {}))).toEqual({
+      status: 'created',
+      file: join(root, 'astro.config.mjs'),
+    });
+    expect(readFileSync(join(root, 'astro.config.mjs'), 'utf8')).toContain(
+      'integrations: [guijam()]',
+    );
+  });
+
+  it('falls back to the Astro snippet when integrations are computed', async () => {
+    const root = app(
+      { 'astro.config.mjs': 'export default { integrations: list() };\n' },
+      { astro: '7.4.5' },
+    );
+
+    expect(await wireProject(detectProject(root, {}))).toMatchObject({
+      status: 'manual',
+      reason: "astro.config.mjs can't be edited safely: its integrations are not a plain array.",
+      snippet: expect.stringContaining("import guijam from 'guijam/astro';"),
     });
   });
 

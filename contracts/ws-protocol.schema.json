@@ -642,6 +642,10 @@
         },
         "content": {
           "type": "string"
+        },
+        "pageReload": {
+          "type": "boolean",
+          "description": "Server-rendered templates (.astro) can't be hot-reloaded. When true or absent, the plugin reloads the page to show the change; false leaves the page alone because the widget patches it in place."
         }
       }
     },
@@ -652,6 +656,10 @@
       "properties": {
         "file": {
           "type": "string"
+        },
+        "pageReload": {
+          "type": "boolean",
+          "description": "Server-rendered templates (.astro) can't be hot-reloaded. When true or absent, the plugin reloads the page to show the change; false leaves the page alone because the widget patches it in place."
         }
       }
     },
@@ -738,6 +746,9 @@
           "items": {
             "$ref": "#/$defs/CodeChange"
           }
+        },
+        "dom": {
+          "$ref": "#/$defs/DomPatch"
         }
       }
     },
@@ -1310,6 +1321,54 @@
       "properties": {
         "runId": {
           "type": "string"
+        }
+      }
+    },
+    "DomPatch": {
+      "description": "Shows a fine-tune preview of a server-rendered template in the page without reloading it: the widget changes the class and style attributes of every element with this source location.",
+      "type": "object",
+      "required": ["src", "addClasses", "removeClasses", "setStyles", "removeStyles"],
+      "additionalProperties": false,
+      "properties": {
+        "src": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The data-gj-src value of the elements to change."
+        },
+        "addClasses": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "removeClasses": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "setStyles": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["property", "value"],
+            "additionalProperties": false,
+            "properties": {
+              "property": {
+                "type": "string",
+                "description": "A CSS property name, kebab-case."
+              },
+              "value": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "removeStyles": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
         }
       }
     }

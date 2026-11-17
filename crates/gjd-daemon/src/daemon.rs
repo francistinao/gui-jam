@@ -20,6 +20,7 @@ use gjd_core::jsx::{JsxError, check_syntax, imports};
 use gjd_core::patch::{self, PatchError};
 use gjd_core::policy::{PolicyError, ProjectRoot};
 use gjd_core::style::{Styling, inspect_with};
+use gjd_core::template;
 use gjd_core::theme::Theme;
 use gjd_providers::{
     AuthStatus, Discovery, GenerationRequest, ImageInput, ProviderAdapter, ProviderError,
@@ -981,11 +982,24 @@ impl Daemon {
             Vec::new(),
         );
         let shown = (content != source).then_some(content.as_str());
-        let update = self.show(&file, shown).await?;
+        let dom = template::is_server_rendered(&file)
+            .then(|| {
+                template::dom_patch(
+                    &file,
+                    &source,
+                    &content,
+                    request.line.get(),
+                    request.column.get(),
+                )
+            })
+            .flatten();
+        let page_reload = dom.is_some().then_some(false);
+        let update = self.show_with(&file, shown, page_reload).await?;
         Ok(FinetunePreviewed {
             changeset_id,
             update,
             changes,
+            dom,
         })
     }
 
@@ -2024,8 +2038,10 @@ impl Daemon {
         let changeset = locked(&self.changesets)
             .remove(changeset_id)
             .ok_or_else(|| unknown_changeset(changeset_id))?;
+        let in_place = changeset.origin == "finetune";
         for file in changeset.files.keys() {
-            self.show(file, None).await?;
+            let page_reload = (in_place && template::is_server_rendered(file)).then_some(false);
+            self.show_with(file, None, page_reload).await?;
         }
         Ok(())
     }
@@ -2044,6 +2060,15 @@ impl Daemon {
     }
 
     async fn show(&self, file: &str, content: Option<&str>) -> Result<UpdateResult, Failure> {
+        self.show_with(file, content, None).await
+    }
+
+    async fn show_with(
+        &self,
+        file: &str,
+        content: Option<&str>,
+        page_reload: Option<bool>,
+    ) -> Result<UpdateResult, Failure> {
         let link = locked(&self.plugin)
             .clone()
             .ok_or_else(Failure::plugin_unavailable)?;
@@ -2057,7 +2082,7 @@ impl Daemon {
         let id = self.new_id("d");
         let (waiter, result) = oneshot::channel();
         locked(&link.pending).insert(id.clone(), waiter);
-        let message = overlay_message(Some(id.clone()), file, content);
+        let message = overlay_message(Some(id.clone()), file, content, page_reload);
         if link.send(message).is_err() {
             locked(&link.pending).remove(&id);
             return Err(Failure::plugin_unavailable());
@@ -2079,24 +2104,36 @@ impl Daemon {
         let overlays = locked(&self.overlays).clone();
         for (file, content) in overlays {
             let id = self.new_id("d");
-            let _ = link.send(overlay_message(Some(id), &file, Some(&content)));
+            let _ = link.send(overlay_message(
+                Some(id),
+                &file,
+                Some(&content),
+                Some(false),
+            ));
         }
     }
 }
 
-fn overlay_message(id: Option<String>, file: &str, content: Option<&str>) -> GuijamMessage {
+fn overlay_message(
+    id: Option<String>,
+    file: &str,
+    content: Option<&str>,
+    page_reload: Option<bool>,
+) -> GuijamMessage {
     match content {
         Some(content) => GuijamMessage::OverlaySet {
             id,
             payload: OverlaySet {
                 file: file.to_owned(),
                 content: content.to_owned(),
+                page_reload,
             },
         },
         None => GuijamMessage::OverlayClear {
             id,
             payload: OverlayClear {
                 file: file.to_owned(),
+                page_reload,
             },
         },
     }
