@@ -1,5 +1,5 @@
 import { intro, log, outro } from '@clack/prompts';
-import { describeProject, detectProject, type Project } from './detect.js';
+import { describeProject, detectProject, type Project, VITE_FRAMEWORKS } from './detect.js';
 import { gjdVersion, listProviders } from './gjd.js';
 import { PWA_HINT, projectRunsDevServiceWorker } from './pwa.js';
 import { isWired } from './wire.js';
@@ -37,7 +37,7 @@ function nodeCheck(): Check {
 
 async function projectChecks(project: Project): Promise<Check[]> {
   const checks: Check[] = [{ level: 'ok', message: describeProject(project) }];
-  if (project.framework !== 'vite' && project.framework !== 'sveltekit') {
+  if (!VITE_FRAMEWORKS.has(project.framework)) {
     checks.push({
       level: 'fail',
       message: `GUIJam doesn't plug into ${project.frameworkLabel} yet.`,

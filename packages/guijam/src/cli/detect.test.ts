@@ -68,6 +68,13 @@ describe('detectProject', () => {
       {},
       { devDependencies: { 'laravel-vite-plugin': '^2.0.0', vite: '^7.1.0' } },
     );
+    const router = project(
+      { 'vite.config.ts': '' },
+      {
+        dependencies: { 'react-router': '8.5.1', react: '19.3.1' },
+        devDependencies: { '@react-router/dev': '8.5.1', vite: '^8.3.0' },
+      },
+    );
     const next = project(
       { 'next.config.ts': '' },
       { dependencies: { next: '16.1.0', react: '19.2.0' } },
@@ -80,6 +87,13 @@ describe('detectProject', () => {
       viteVersion: '7.1.0',
     });
     expect(detectProject(laravel, {}).frameworkLabel).toBe('Laravel + Vite');
+    expect(detectProject(router, {})).toMatchObject({
+      framework: 'react-router',
+      frameworkLabel: 'React Router',
+      ui: 'React',
+      viteVersion: '8.3.0',
+      configFile: join(router, 'vite.config.ts'),
+    });
     expect(detectProject(next, {})).toMatchObject({
       framework: 'next',
       configFile: join(next, 'next.config.ts'),

@@ -55,7 +55,13 @@ const UPDATE_TIMEOUT_MS = 3000;
 const JSX_MODULE = /\.[jt]sx$/;
 const VUE_MODULE = /\.vue$/;
 const SVELTE_MODULE = /\.svelte$/;
-const SVELTEKIT_CLIENT_ENTRY = /\/@sveltejs\/kit\/src\/runtime\/client\/entry\.js$/;
+const FRAMEWORK_CLIENT_ENTRIES: readonly { plugin: string; entry: RegExp }[] = [
+  {
+    plugin: 'vite-plugin-sveltekit',
+    entry: /\/@sveltejs\/kit\/src\/runtime\/client\/entry\.js$/,
+  },
+  { plugin: 'react-router', entry: /\/entry\.client\.[cm]?[jt]sx?$/ },
+];
 const ASSET_FILE = /\.(?:svg|webp|png|jpe?g|gif|avif|ico)$/i;
 const SCRIPT_MODULE = /\.[cm]?[jt]sx?$/;
 const CLIENT_IMPORT = `import '${CLIENT_ID}';\n`;
@@ -108,7 +114,7 @@ export function guijam(options: GuijamOptions = {}): Plugin<GuijamApi> {
   let daemon: DaemonClient | undefined;
   let root = process.cwd();
   let viteRoot = process.cwd();
-  let sveltekit = false;
+  let frameworkClientEntry: RegExp | undefined;
   let publicDir = join(process.cwd(), 'public');
   let candidatesDir = '';
   let scriptEntries = new Set<string>();
@@ -353,8 +359,10 @@ export function guijam(options: GuijamOptions = {}): Plugin<GuijamApi> {
     },
 
     configResolved(config) {
-      sveltekit = config.plugins.some((entry) => entry.name.startsWith('vite-plugin-sveltekit'));
-      if (sveltekit) delete plugin.transformIndexHtml;
+      frameworkClientEntry = FRAMEWORK_CLIENT_ENTRIES.find(({ plugin: name }) =>
+        config.plugins.some((entry) => entry.name.startsWith(name)),
+      )?.entry;
+      if (frameworkClientEntry) delete plugin.transformIndexHtml;
       viteRoot = config.root;
       root = options.root === undefined ? config.root : normalizePath(resolve(options.root));
       publicDir = config.publicDir || join(viteRoot, 'public');
@@ -445,7 +453,7 @@ export function guijam(options: GuijamOptions = {}): Plugin<GuijamApi> {
       order: 'pre',
       async handler(code, id) {
         const file = id.split('?', 1)[0] ?? id;
-        const entry = scriptEntries.has(file) || (sveltekit && SVELTEKIT_CLIENT_ENTRY.test(file));
+        const entry = scriptEntries.has(file) || frameworkClientEntry?.test(file) === true;
         const prepend = this.environment.name === 'client' && entry ? CLIENT_IMPORT : '';
         if (VUE_MODULE.test(id)) {
           const projectPath = normalizePath(relative(root, id));
@@ -469,8 +477,9 @@ export function guijam(options: GuijamOptions = {}): Plugin<GuijamApi> {
         }
         if (JSX_MODULE.test(id)) {
           const projectPath = normalizePath(relative(root, id));
-          if (projectPath.startsWith('..') || id.includes('/node_modules/')) return null;
-          return injectSourceLocations(code, id, projectPath, prepend);
+          const inProject = !projectPath.startsWith('..') && !id.includes('/node_modules/');
+          if (inProject) return injectSourceLocations(code, id, projectPath, prepend);
+          if (prepend === '') return null;
         }
         if (prepend !== '') {
           const output = new MagicString(code).prepend(prepend);

@@ -3,7 +3,21 @@ import { dirname, join } from 'node:path';
 
 export type PackageManager = 'npm' | 'pnpm' | 'yarn' | 'bun';
 
-export type FrameworkId = 'vite' | 'sveltekit' | 'nuxt' | 'next' | 'astro' | 'angular' | 'unknown';
+export type FrameworkId =
+  | 'vite'
+  | 'sveltekit'
+  | 'react-router'
+  | 'nuxt'
+  | 'next'
+  | 'astro'
+  | 'angular'
+  | 'unknown';
+
+export const VITE_FRAMEWORKS: ReadonlySet<FrameworkId> = new Set([
+  'vite',
+  'sveltekit',
+  'react-router',
+]);
 
 export interface Project {
   root: string;
@@ -161,6 +175,9 @@ function frameworkOf(
   if ('@sveltejs/kit' in deps) {
     return { framework: 'sveltekit', label: 'SvelteKit', configFile: viteConfig };
   }
+  if ('@react-router/dev' in deps) {
+    return { framework: 'react-router', label: 'React Router', configFile: viteConfig };
+  }
   if ('laravel-vite-plugin' in deps) {
     return { framework: 'vite', label: 'Laravel + Vite', configFile: viteConfig };
   }
@@ -190,7 +207,6 @@ export function detectProject(root: string, env: NodeJS.ProcessEnv = process.env
   };
   const packageManager = packageManagerOf(root, manifest, env);
   const { framework, label, configFile } = frameworkOf(root, deps);
-  const usesVite = framework === 'vite' || framework === 'sveltekit';
   return {
     root,
     packageManager,
@@ -199,7 +215,9 @@ export function detectProject(root: string, env: NodeJS.ProcessEnv = process.env
     frameworkLabel: label,
     ui: UI_LIBRARIES.find(([name]) => name in deps)?.[1],
     styling: stylingOf(root, deps),
-    viteVersion: usesVite ? installedVersion(root, 'vite', deps.vite) : undefined,
+    viteVersion: VITE_FRAMEWORKS.has(framework)
+      ? installedVersion(root, 'vite', deps.vite)
+      : undefined,
     configFile,
     typescript: 'typescript' in deps,
     devScript: devScriptOf(stringRecord(manifest.scripts)),

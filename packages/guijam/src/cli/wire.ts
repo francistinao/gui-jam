@@ -15,7 +15,7 @@ import {
   type Statement,
   Visitor,
 } from 'oxc-parser';
-import type { Project } from './detect.js';
+import { type Project, VITE_FRAMEWORKS } from './detect.js';
 
 export const PLUGIN_SOURCE = 'guijam/vite';
 export const NUXT_MODULE = 'guijam/nuxt';
@@ -45,8 +45,6 @@ interface Bodies {
   returns: ReturnStatement[];
   functions: Range[];
 }
-
-const VITE_FRAMEWORKS = new Set(['vite', 'sveltekit']);
 
 const COMING_SOON: Record<string, string> = {
   next: 'Next.js support is on the roadmap.',
@@ -425,6 +423,14 @@ export async function wireProject(project: Project): Promise<WireResult> {
   }
   if (project.configFile === undefined) {
     const file = join(project.root, project.typescript ? 'vite.config.ts' : 'vite.config.mjs');
+    if (project.framework !== 'vite') {
+      return {
+        status: 'manual',
+        file,
+        reason: `${project.frameworkLabel} needs its own plugin in ${basename(file)}, and none was found.`,
+        snippet: viteConfigSnippet(),
+      };
+    }
     await writeFile(file, newViteConfig(), { flag: 'wx' });
     return { status: 'created', file };
   }

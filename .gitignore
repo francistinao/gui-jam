@@ -18,3 +18,4 @@ packages/guijam/assets/
 .nuxt/
 .output/
 .svelte-kit/
+.react-router/

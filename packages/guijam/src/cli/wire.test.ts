@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -136,6 +136,44 @@ describe('wireProject', () => {
       file: join(root, 'vite.config.ts'),
     });
     expect(callsGuijam(readFileSync(join(root, 'vite.config.ts'), 'utf8'))).toBe(true);
+  });
+
+  it('adds guijam() ahead of the React Router plugin', async () => {
+    const config = `import { reactRouter } from '@react-router/dev/vite';
+import { defineConfig } from 'vite';
+
+export default defineConfig({
+  plugins: [reactRouter()],
+});
+`;
+    const root = app(
+      { 'vite.config.ts': config },
+      { '@react-router/dev': '8.5.1', vite: '^8.3.0' },
+    );
+
+    expect(await wireProject(detectProject(root, {}))).toEqual({
+      status: 'added',
+      file: join(root, 'vite.config.ts'),
+    });
+    expect(readFileSync(join(root, 'vite.config.ts'), 'utf8')).toContain(
+      'plugins: [guijam(), reactRouter()]',
+    );
+  });
+
+  it('never writes a bare Vite config for a meta-framework that has none', async () => {
+    for (const devDependencies of [
+      { '@react-router/dev': '8.5.1', vite: '^8.3.0' },
+      { '@sveltejs/kit': '^3.1.0', vite: '^8.3.0' },
+    ]) {
+      const root = app({}, devDependencies);
+
+      expect(await wireProject(detectProject(root, {}))).toMatchObject({
+        status: 'manual',
+        file: join(root, 'vite.config.mjs'),
+        reason: expect.stringMatching(/needs its own plugin in vite\.config\.mjs/),
+      });
+      expect(existsSync(join(root, 'vite.config.mjs'))).toBe(false);
+    }
   });
 
   it('leaves frameworks without an adapter untouched', async () => {
