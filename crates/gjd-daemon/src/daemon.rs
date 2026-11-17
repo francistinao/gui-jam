@@ -5,21 +5,21 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
-use gjd_core::codemod::{CodemodError, finetune_op};
+use gjd_core::codemod::{CodemodError, finetune_ops};
 use gjd_core::content_hash;
 use gjd_core::contracts::{
     CodeChange, CommitDone, DependenciesInstall, DependenciesInstalled, DependencyNeeds, EditOp,
-    ElementStyle, ErrorCode, ErrorPayload, FinetunePreview, FinetunePreviewed, GenerateDone,
-    GenerateDoneDroppedItem, GenerateDoneNotesItem, GenerateRequest, GuijamMessage, HelloOk,
-    OverlayClear, OverlaySet, Package, Route, RouteTier, RunRef, SourceRef, UndoDone, UpdateResult,
-    UpdateResultStatus, UpdateResultUpdateId, Variant, VariantAssetsItemFormat, VariantPreview,
-    VariantSelect, VariantSelected, VariantSet,
+    EditOpValue, ElementStyle, ErrorCode, ErrorPayload, FinetunePreview, FinetunePreviewed,
+    GenerateDone, GenerateDoneDroppedItem, GenerateDoneNotesItem, GenerateRequest, GuijamMessage,
+    HelloOk, OverlayClear, OverlaySet, Package, Route, RouteTier, RunRef, SourceRef, UndoDone,
+    UpdateResult, UpdateResultStatus, UpdateResultUpdateId, Variant, VariantAssetsItemFormat,
+    VariantPreview, VariantSelect, VariantSelected, VariantSet,
 };
 use gjd_core::journal::{CommitError, FileChange, Journal};
 use gjd_core::jsx::{JsxError, check_syntax, imports};
 use gjd_core::patch::{self, PatchError};
 use gjd_core::policy::{PolicyError, ProjectRoot};
-use gjd_core::style::inspect;
+use gjd_core::style::inspect_with;
 use gjd_core::theme::Theme;
 use gjd_providers::{
     AuthStatus, Discovery, GenerationRequest, ImageInput, ProviderAdapter, ProviderError,
@@ -888,6 +888,14 @@ impl Daemon {
         }
     }
 
+    fn uses_tailwind(&self, project: &Project) -> bool {
+        !locked(&self.tailwind_roots).is_empty()
+            || project
+                .dependencies
+                .keys()
+                .any(|name| name == "tailwindcss" || name.starts_with("@tailwindcss/"))
+    }
+
     fn set_tailwind_roots(&self, files: &[String]) {
         let inside: Vec<PathBuf> = files
             .iter()
@@ -919,12 +927,14 @@ impl Daemon {
     ) -> Result<gjd_core::contracts::ElementStyle, Failure> {
         let source = self.read_project_file(&source_ref.file).await?;
         let theme = self.theme().await;
-        Ok(inspect(
+        let project = project::detect(self.project.path(), &self.index.files().await);
+        Ok(inspect_with(
             &source_ref.file,
             &source,
             source_ref.line,
             source_ref.column,
             &theme,
+            self.uses_tailwind(&project),
         )?)
     }
 
@@ -935,11 +945,19 @@ impl Daemon {
         let file = request.file;
         let source = self.read_project_file(&file).await?;
         let theme = self.theme().await;
-        let style = inspect(&file, &source, request.line, request.column, &theme)?;
-        let op = finetune_op(&style, &request.props, &theme)?;
-        let summary = summarize(&file, request.line, &op);
+        let project = project::detect(self.project.path(), &self.index.files().await);
+        let style = inspect_with(
+            &file,
+            &source,
+            request.line,
+            request.column,
+            &theme,
+            self.uses_tailwind(&project),
+        )?;
+        let ops = finetune_ops(&style, &request.props, &theme)?;
+        let summary = summarize(&file, request.line, &ops);
         let sources = BTreeMap::from([(file.clone(), source.clone())]);
-        let content = patch::apply(&sources, std::slice::from_ref(&op))?
+        let content = patch::apply(&sources, &ops)?
             .remove(&file)
             .unwrap_or_else(|| source.clone());
 
@@ -1184,13 +1202,21 @@ impl Daemon {
         }
         let source = self.read_project_file(&request.file).await?;
         let theme = self.theme().await;
-        let style = inspect(&request.file, &source, request.line, request.column, &theme)?;
-        let exact = r0::parse_property_edits(&prompt, &style)
-            .and_then(|props| finetune_op(&style, &props, &theme).ok());
-        let force_ai = request.force_ai.unwrap_or(false);
-        let found = links::find(&prompt);
         let files = self.index.files().await;
         let project = project::detect(self.project.path(), &files);
+        let style = inspect_with(
+            &request.file,
+            &source,
+            request.line,
+            request.column,
+            &theme,
+            self.uses_tailwind(&project),
+        )?;
+        let exact = r0::parse_property_edits(&prompt, &style)
+            .and_then(|props| finetune_ops(&style, &props, &theme).ok())
+            .filter(|ops| !ops.is_empty());
+        let force_ai = request.force_ai.unwrap_or(false);
+        let found = links::find(&prompt);
         let decision = route::classify(
             &prompt,
             exact.is_some(),
@@ -1208,7 +1234,7 @@ impl Daemon {
             cancel,
         };
         match (decision.tier, exact) {
-            (Tier::R0, Some(op)) => self.exact_edit(&job, &op).await,
+            (Tier::R0, Some(ops)) => self.exact_edit(&job, &ops).await,
             (Tier::R2, _) => {
                 self.generate_with(&job, &generate::R2, decision.notice)
                     .await
@@ -1220,10 +1246,10 @@ impl Daemon {
         }
     }
 
-    async fn exact_edit(&self, job: &Job<'_>, op: &EditOp) -> Result<GenerateDone, Failure> {
+    async fn exact_edit(&self, job: &Job<'_>, ops: &[EditOp]) -> Result<GenerateDone, Failure> {
         let file = job.request.file.as_str();
         let sources = BTreeMap::from([(file.to_owned(), job.source.to_owned())]);
-        let content = patch::apply(&sources, std::slice::from_ref(op))?
+        let content = patch::apply(&sources, ops)?
             .remove(file)
             .unwrap_or_else(|| job.source.to_owned());
         if content == job.source {
@@ -1232,7 +1258,7 @@ impl Daemon {
                 "The element already looks like that.",
             ));
         }
-        let change = summarize(file, job.request.line, op);
+        let change = summarize(file, job.request.line, ops);
         let label = change
             .split_once(" — ")
             .map_or(change.as_str(), |(_, change)| change)
@@ -1248,7 +1274,7 @@ impl Daemon {
         let (variants, first) = self.hold_variants(
             job.request,
             job.source,
-            vec![(held, content, vec![op.clone()])],
+            vec![(held, content, ops.to_vec())],
             "R0",
             job.project.package_manager,
         );
@@ -2157,8 +2183,26 @@ fn duration_ms(duration: Duration) -> f64 {
     f64::from(u32::try_from(duration.as_millis()).unwrap_or(u32::MAX))
 }
 
-fn summarize(file: &str, line: NonZeroU64, op: &EditOp) -> String {
-    let EditOp::ClassTokens { add, remove, .. } = op else {
+fn style_change(ops: &[EditOp]) -> Option<String> {
+    let parts: Vec<String> = ops
+        .iter()
+        .filter_map(|op| match op {
+            EditOp::StyleProp { prop, value, .. } => Some(match value {
+                EditOpValue::String(text) => format!("{} {text}", prop.as_str()),
+                EditOpValue::Number(number) => format!("{} {number}", prop.as_str()),
+                EditOpValue::Null => format!("− {}", prop.as_str()),
+            }),
+            _ => None,
+        })
+        .collect();
+    (!parts.is_empty()).then(|| parts.join(" · "))
+}
+
+fn summarize(file: &str, line: NonZeroU64, ops: &[EditOp]) -> String {
+    if let Some(change) = style_change(ops) {
+        return format!("{file}:{line} — {change}");
+    }
+    let Some(EditOp::ClassTokens { add, remove, .. }) = ops.first() else {
         return format!("{file}:{line}");
     };
     let join = |tokens: Vec<&str>| tokens.join(" ");

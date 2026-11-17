@@ -44,6 +44,8 @@ const style = (overrides: Partial<ElementStyle>): ElementStyle => ({
   tag: 'button',
   baseHash: '0'.repeat(64),
   classSource: 'static',
+  adapter: 'tailwind',
+  styleSource: 'none',
   tokens: [],
   theme: { colors: [], radii: [] },
   ...overrides,
@@ -147,6 +149,19 @@ describe('panelSections', () => {
     const dynamic = style({ classSource: 'dynamic', tokens: [] });
 
     expect(summary(dynamic)).toEqual([]);
+  });
+
+  it('follows the style object, not the className, for inline styles', () => {
+    const inline = style({
+      classSource: 'dynamic',
+      adapter: 'inline',
+      styleSource: 'object',
+      tokens: [token("backgroundColor: '#fde68a'", 'fill')],
+    });
+    expect(summary(inline)).toEqual(['radius:add', 'fill:edit']);
+
+    const computed = style({ adapter: 'inline', styleSource: 'dynamic', tokens: [] });
+    expect(summary(computed)).toEqual([]);
   });
 
   it('leaves text out for elements that cannot hold text', () => {

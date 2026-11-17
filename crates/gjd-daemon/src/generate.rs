@@ -2,8 +2,9 @@ use std::fmt::Write as _;
 use std::time::Duration;
 
 use gjd_core::contracts::{
-    EditOp, ElementStyle, ElementStyleClassSource, GenerateProgress, GenerateProgressStepsItem,
-    GenerateProgressStepsItemDetail, GenerateProgressStepsItemState, RouteTier,
+    EditOp, ElementStyle, ElementStyleAdapter, ElementStyleClassSource, GenerateProgress,
+    GenerateProgressStepsItem, GenerateProgressStepsItemDetail, GenerateProgressStepsItemState,
+    RouteTier,
 };
 use gjd_providers::{ProviderEvent, ProviderId};
 
@@ -262,6 +263,12 @@ pub fn user_prompt(style: &ElementStyle, source: &str, request: &str, tier: &Tie
         ElementStyleClassSource::Dynamic => "computed at runtime; use replace_snippet",
     };
     let _ = writeln!(prompt, "className: {class_note}");
+    if style.adapter == ElementStyleAdapter::Inline {
+        let _ = writeln!(
+            prompt,
+            "Styling: inline style objects (style={{{{…}}}}), not Tailwind; change styles in the style object with replace_snippet."
+        );
+    }
     let colors: Vec<String> = style
         .theme
         .colors

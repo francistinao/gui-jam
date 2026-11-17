@@ -18,8 +18,10 @@ import {
 } from './support/fixture.js';
 
 const ORDER_BUTTON = fixturePath('src/components/OrderButton.tsx');
+const APP = fixturePath('src/App.tsx');
 const TOUCHED = [
   ORDER_BUTTON,
+  APP,
   fixturePath('src/components/Counter.tsx'),
   fixturePath('src/components/MenuCard.tsx'),
 ];
@@ -202,4 +204,39 @@ test('refuses to apply over a developer edit made after the preview', async ({ p
   await expect(alert).toContainText('Review them, then preview again.');
   expect(await readFile(ORDER_BUTTON, 'utf8')).toBe(developerVersion);
   await expect(button).toHaveCSS('background-color', BRAND_RGB);
+});
+
+test('an element with an inline style is fine-tuned in its style object', async ({ page }) => {
+  await startSelecting(page);
+  const gift = page.getByText('Gift cards for every occasion');
+  const panel = await pick(page, gift, 'src/App.tsx');
+  const fill = panel.getByRole('region', { name: 'Fill' });
+  await expect(fill.getByRole('textbox', { name: 'Fill hex' })).toHaveValue('FDE68A');
+  const before = await readFile(APP, 'utf8');
+
+  await fill.getByRole('textbox', { name: 'Fill hex' }).fill('1d4ed8');
+  await panel
+    .getByRole('region', { name: 'Radius' })
+    .getByRole('button', { name: 'Radius full' })
+    .click();
+
+  await expect(gift).toHaveCSS('background-color', BLUE_RGB);
+  await expect(gift).toHaveCSS('border-top-left-radius', '9999px');
+  await panel.getByRole('tab', { name: 'Code' }).click();
+  const code = panel.getByRole('tabpanel', { name: 'Code' });
+  await expect(code).toContainText(
+    '48 + <p className="mt-6" style={{ backgroundColor: \'#1D4ED8\', borderRadius: 9999, padding: 16 }}>',
+  );
+  expect(await readFile(APP, 'utf8')).toBe(before);
+
+  await panel.getByRole('button', { name: 'Apply' }).click();
+
+  const toast = page.getByRole('status');
+  await expect(toast).toContainText('Applied to App.tsx.');
+  expect(changedLines(before, await readFile(APP, 'utf8'))).toEqual([
+    expect.stringContaining("backgroundColor: '#1D4ED8', borderRadius: 9999, padding: 16 }}>"),
+  ]);
+  await toast.getByRole('button', { name: 'Undo' }).click();
+  await expect(toast).toContainText('Change undone.');
+  expect(await readFile(APP, 'utf8')).toBe(before);
 });

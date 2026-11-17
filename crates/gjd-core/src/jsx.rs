@@ -3,7 +3,7 @@ use std::ops::Range;
 use oxc_allocator::Allocator;
 use oxc_ast::ast::{
     Expression, JSXAttributeItem, JSXAttributeName, JSXAttributeValue, JSXOpeningElement,
-    StringLiteral,
+    ObjectPropertyKind, PropertyKey, StringLiteral,
 };
 use oxc_ast_visit::{Visit, walk};
 use oxc_parser::Parser;
@@ -41,10 +41,32 @@ pub enum ClassSource {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StyleProp {
+    pub key: String,
+    pub value: Option<String>,
+    pub range: Range<usize>,
+    pub value_range: Range<usize>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StyleObject {
+    pub props: Vec<StyleProp>,
+    pub inner: Range<usize>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StyleSource {
+    None,
+    Object(StyleObject),
+    Dynamic,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct JsxElement {
     pub tag: String,
     pub insert_at: usize,
     pub class: ClassSource,
+    pub style: StyleSource,
 }
 
 fn source_type(path: &str) -> Result<SourceType, JsxError> {
@@ -135,9 +157,19 @@ fn span_range(span: Span) -> Range<usize> {
     span.start as usize..span.end as usize
 }
 
+fn overridden(at: Option<usize>, last_spread: Option<usize>) -> bool {
+    match (at, last_spread) {
+        (Some(at), Some(spread_at)) => spread_at > at,
+        (None, Some(_)) => true,
+        _ => false,
+    }
+}
+
 fn describe(source: &str, element: &JSXOpeningElement<'_>) -> JsxElement {
     let mut class = ClassSource::None;
+    let mut style = StyleSource::None;
     let mut class_index = None;
+    let mut style_index = None;
     let mut last_spread = None;
     for (index, item) in element.attributes.iter().enumerate() {
         match item {
@@ -145,24 +177,78 @@ fn describe(source: &str, element: &JSXOpeningElement<'_>) -> JsxElement {
                 class = read_class(source, attribute.value.as_ref());
                 class_index = Some(index);
             }
+            JSXAttributeItem::Attribute(attribute) if is_named(&attribute.name, "style") => {
+                style = read_style(source, attribute.value.as_ref());
+                style_index = Some(index);
+            }
             JSXAttributeItem::SpreadAttribute(_) => last_spread = Some(index),
             JSXAttributeItem::Attribute(_) => {}
         }
     }
-    let overridable = match (class_index, last_spread) {
-        (Some(class_at), Some(spread_at)) => spread_at > class_at,
-        (None, Some(_)) => true,
-        _ => false,
-    };
     JsxElement {
         tag: element.name.to_string(),
         insert_at: span_range(element.name.span()).end,
-        class: if overridable {
+        class: if overridden(class_index, last_spread) {
             ClassSource::Dynamic
         } else {
             class
         },
+        style: if overridden(style_index, last_spread) {
+            StyleSource::Dynamic
+        } else {
+            style
+        },
     }
+}
+
+fn is_named(name: &JSXAttributeName<'_>, wanted: &str) -> bool {
+    matches!(name, JSXAttributeName::Identifier(identifier) if identifier.name == wanted)
+}
+
+fn read_style(source: &str, value: Option<&JSXAttributeValue<'_>>) -> StyleSource {
+    let Some(JSXAttributeValue::ExpressionContainer(container)) = value else {
+        return StyleSource::Dynamic;
+    };
+    let Some(Expression::ObjectExpression(object)) = container.expression.as_expression() else {
+        return StyleSource::Dynamic;
+    };
+    let mut props = Vec::new();
+    for property in &object.properties {
+        let ObjectPropertyKind::ObjectProperty(property) = property else {
+            return StyleSource::Dynamic;
+        };
+        if property.computed || property.method {
+            return StyleSource::Dynamic;
+        }
+        let key = match &property.key {
+            PropertyKey::StaticIdentifier(identifier) => identifier.name.to_string(),
+            PropertyKey::StringLiteral(literal) => match literal.value.as_str() {
+                Some(value) => value.to_owned(),
+                None => return StyleSource::Dynamic,
+            },
+            _ => return StyleSource::Dynamic,
+        };
+        let value = match &property.value {
+            Expression::StringLiteral(literal) if !property.shorthand => {
+                plain_js_string(source, literal).map(|inner| inner.value)
+            }
+            Expression::NumericLiteral(literal) if !property.shorthand => {
+                Some(source[span_range(literal.span)].to_owned())
+            }
+            _ => None,
+        };
+        props.push(StyleProp {
+            key,
+            value,
+            range: span_range(property.span),
+            value_range: span_range(property.value.span()),
+        });
+    }
+    let outer = span_range(object.span);
+    StyleSource::Object(StyleObject {
+        props,
+        inner: outer.start + 1..outer.end - 1,
+    })
 }
 
 fn is_class_name(name: &JSXAttributeName<'_>) -> bool {

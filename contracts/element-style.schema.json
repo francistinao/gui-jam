@@ -2,9 +2,20 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "element-style.schema.json",
   "title": "ElementStyle",
-  "description": "What the fine-tune panel knows about one JSX element, read from its source. classSource says how className is written: none (no className, one can be added), static (a literal), call (cn()/clsx(); the first literal is editable) or dynamic (not editable; use Ask AI).",
+  "description": "What the fine-tune panel knows about one JSX element, read from its source. classSource says how className is written: none (no className, one can be added), static (a literal), call (cn()/clsx(); the first literal is editable) or dynamic (not editable; use Ask AI). adapter says how fine-tune writes the change: tailwind edits className tokens, inline edits the style={{…}} object (elements that already use one, and projects without Tailwind). styleSource says how style is written: none, object (a static object literal) or dynamic (not editable).",
   "type": "object",
-  "required": ["file", "line", "column", "tag", "baseHash", "classSource", "tokens", "theme"],
+  "required": [
+    "file",
+    "line",
+    "column",
+    "tag",
+    "baseHash",
+    "classSource",
+    "tokens",
+    "theme",
+    "adapter",
+    "styleSource"
+  ],
   "additionalProperties": false,
   "properties": {
     "file": {
@@ -35,6 +46,12 @@
     },
     "theme": {
       "$ref": "#/$defs/ThemeTokens"
+    },
+    "adapter": {
+      "enum": ["tailwind", "inline"]
+    },
+    "styleSource": {
+      "enum": ["none", "object", "dynamic"]
     }
   },
   "$defs": {

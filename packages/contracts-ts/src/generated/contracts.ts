@@ -255,6 +255,8 @@ export interface ElementStyle {
   classSource: 'none' | 'static' | 'call' | 'dynamic';
   tokens: StyleToken[];
   theme: ThemeTokens;
+  adapter: 'tailwind' | 'inline';
+  styleSource: 'none' | 'object' | 'dynamic';
 }
 export interface StyleToken {
   token: string;

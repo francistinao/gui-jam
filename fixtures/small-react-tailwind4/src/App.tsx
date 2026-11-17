@@ -45,6 +45,9 @@ export function App() {
               <MenuCard key={item.name} {...item} />
             ))}
           </div>
+          <p className="mt-6" style={{ backgroundColor: '#fde68a', borderRadius: 8, padding: 16 }}>
+            Gift cards for every occasion
+          </p>
         </section>
       </main>
     </div>

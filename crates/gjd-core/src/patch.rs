@@ -2,8 +2,10 @@ use std::collections::BTreeMap;
 use std::ops::Range;
 
 use crate::content_hash;
-use crate::contracts::{ContentHash, EditOp, EditOpAddItem, EditOpRemoveItem, ProjectPath};
-use crate::jsx::{ClassSource, JsxError, check_syntax, find_element};
+use crate::contracts::{
+    ContentHash, EditOp, EditOpAddItem, EditOpRemoveItem, EditOpValue, ProjectPath,
+};
+use crate::jsx::{ClassSource, JsxError, StyleObject, StyleSource, check_syntax, find_element};
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum PatchError {
@@ -15,6 +17,8 @@ pub enum PatchError {
     Element { op: usize, source: JsxError },
     #[error("op {op}: className is computed at runtime and can't be edited directly")]
     NotEditable { op: usize },
+    #[error("op {op}: the style is computed at runtime and can't be edited directly")]
+    StyleNotEditable { op: usize },
     #[error("op {op}: the snippet occurs {count} times in {file}; it must occur exactly once")]
     SnippetNotUnique {
         op: usize,
@@ -33,6 +37,8 @@ pub enum PatchError {
     Syntax { file: String, source: JsxError },
 }
 
+type StyleKey<'a> = (&'a str, u64, u64);
+
 struct TextEdit {
     op: usize,
     range: Range<usize>,
@@ -44,8 +50,21 @@ pub fn apply(
     ops: &[EditOp],
 ) -> Result<BTreeMap<String, String>, PatchError> {
     let mut edits: BTreeMap<&str, Vec<TextEdit>> = BTreeMap::new();
+    let mut styles: Vec<(StyleKey<'_>, Vec<usize>)> = Vec::new();
     for (op, edit_op) in ops.iter().enumerate() {
+        if let EditOp::StyleProp { file, at, .. } = edit_op {
+            let key = (file.as_str(), at.line.get(), at.column.get());
+            match styles.iter_mut().find(|(seen, _)| *seen == key) {
+                Some((_, members)) => members.push(op),
+                None => styles.push((key, vec![op])),
+            }
+            continue;
+        }
         let (file, edit) = resolve(op, edit_op, sources)?;
+        edits.entry(file).or_default().push(edit);
+    }
+    for (_, members) in styles {
+        let (file, edit) = resolve_style(&members, ops, sources)?;
         edits.entry(file).or_default().push(edit);
     }
 
@@ -170,10 +189,7 @@ fn resolve<'s>(
             op,
             kind: "jsx_attr",
         }),
-        EditOp::StyleProp { .. } => Err(PatchError::Unsupported {
-            op,
-            kind: "style_prop",
-        }),
+        EditOp::StyleProp { .. } => unreachable!("style_prop ops are grouped by element"),
         EditOp::CreateFile { .. } => Err(PatchError::Unsupported {
             op,
             kind: "create_file",
@@ -183,6 +199,129 @@ fn resolve<'s>(
             kind: "rewrite_file",
         }),
     }
+}
+
+fn style_key(key: &str) -> String {
+    let mut chars = key.chars();
+    let identifier = chars
+        .next()
+        .is_some_and(|first| first.is_ascii_alphabetic() || first == '_' || first == '$')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '$');
+    if identifier {
+        key.to_owned()
+    } else {
+        format!("'{}'", key.replace('\\', "\\\\").replace('\'', "\\'"))
+    }
+}
+
+fn style_value(value: &EditOpValue) -> Option<String> {
+    match value {
+        EditOpValue::String(text) => Some(format!(
+            "'{}'",
+            text.replace('\\', "\\\\").replace('\'', "\\'")
+        )),
+        EditOpValue::Number(number) if number.fract() == 0.0 && number.abs() < 1e15 => {
+            Some(format!("{number:.0}"))
+        }
+        EditOpValue::Number(number) => Some(number.to_string()),
+        EditOpValue::Null => None,
+    }
+}
+
+fn merged_style(
+    source: &str,
+    object: &StyleObject,
+    changes: &[(String, Option<String>)],
+) -> String {
+    let change_for = |key: &str| changes.iter().find(|(name, _)| name == key);
+    let mut parts: Vec<String> = Vec::new();
+    for prop in &object.props {
+        match change_for(&prop.key) {
+            Some((_, None)) => {}
+            Some((_, Some(value))) => parts.push(format!(
+                "{}{value}{}",
+                &source[prop.range.start..prop.value_range.start],
+                &source[prop.value_range.end..prop.range.end]
+            )),
+            None => parts.push(source[prop.range.clone()].to_owned()),
+        }
+    }
+    for (key, value) in changes {
+        if let Some(value) = value
+            && !object.props.iter().any(|prop| &prop.key == key)
+        {
+            parts.push(format!("{}: {value}", style_key(key)));
+        }
+    }
+    if parts.is_empty() {
+        return String::new();
+    }
+    let (Some(first), Some(last)) = (object.props.first(), object.props.last()) else {
+        return format!(" {} ", parts.join(", "));
+    };
+    let leading = &source[object.inner.start..first.range.start];
+    let trailing = &source[last.range.end..object.inner.end];
+    let separator = if leading.contains('\n') {
+        format!(",{leading}")
+    } else {
+        ", ".to_owned()
+    };
+    format!("{leading}{}{trailing}", parts.join(&separator))
+}
+
+fn resolve_style<'s>(
+    members: &[usize],
+    ops: &[EditOp],
+    sources: &'s BTreeMap<String, String>,
+) -> Result<(&'s str, TextEdit), PatchError> {
+    let op = members[0];
+    let EditOp::StyleProp {
+        file,
+        base_hash,
+        at,
+        ..
+    } = &ops[op]
+    else {
+        unreachable!("only style_prop ops are grouped");
+    };
+    let (path, source) = current(op, file, base_hash, sources)?;
+    let element = find_element(path, source, at.line.get(), at.column.get())
+        .map_err(|source| PatchError::Element { op, source })?;
+    let mut changes: Vec<(String, Option<String>)> = Vec::new();
+    for member in members {
+        if let EditOp::StyleProp { prop, value, .. } = &ops[*member] {
+            let value = style_value(value);
+            match changes.iter_mut().find(|(name, _)| name == prop.as_str()) {
+                Some(entry) => entry.1 = value,
+                None => changes.push((prop.to_string(), value)),
+            }
+        }
+    }
+    let edit = match &element.style {
+        StyleSource::Object(object) => TextEdit {
+            op,
+            range: object.inner.clone(),
+            text: merged_style(source, object, &changes),
+        },
+        StyleSource::None => {
+            let empty = StyleObject {
+                props: Vec::new(),
+                inner: 0..0,
+            };
+            let inner = merged_style(source, &empty, &changes);
+            TextEdit {
+                op,
+                range: element.insert_at..element.insert_at,
+                text: if inner.is_empty() {
+                    String::new()
+                } else {
+                    format!(" style={{{{{inner}}}}}")
+                },
+            }
+        }
+        StyleSource::Dynamic => return Err(PatchError::StyleNotEditable { op }),
+    };
+    Ok((path, edit))
 }
 
 fn current<'s>(
@@ -269,6 +408,125 @@ mod tests {
     }
 
     const CARD: &str = "export const B = () => (\n  <div>\n    <b />\n  </div>\n);\n";
+
+    fn style(
+        content: &str,
+        line: u64,
+        column: u64,
+        prop: &str,
+        value: &serde_json::Value,
+    ) -> EditOp {
+        op(json!({
+            "kind": "style_prop", "file": FILE, "base_hash": content_hash(content.as_bytes()).as_str(),
+            "at": { "line": line, "column": column }, "prop": prop, "value": value,
+        }))
+    }
+
+    fn styled(content: &str, changes: &[(&str, serde_json::Value)]) -> Result<String, PatchError> {
+        let column = u64::try_from(content.find("<b").expect("an element") + 1).expect("column");
+        let ops: Vec<EditOp> = changes
+            .iter()
+            .map(|(prop, value)| style(content, 1, column, prop, value))
+            .collect();
+        Ok(apply(&sources(content), &ops)?
+            .remove(FILE)
+            .expect("changed"))
+    }
+
+    #[test]
+    fn edits_an_inline_style_object_keeping_its_layout() {
+        let one_line = "export const B = () => <b style={{ backgroundColor: '#fde68a', borderRadius: 8, padding: 16 }} />;\n";
+        assert_eq!(
+            styled(
+                one_line,
+                &[
+                    ("backgroundColor", json!("#1D4ED8")),
+                    ("borderRadius", json!(12))
+                ]
+            )
+            .expect("edits"),
+            "export const B = () => <b style={{ backgroundColor: '#1D4ED8', borderRadius: 12, padding: 16 }} />;\n"
+        );
+        assert_eq!(
+            styled(
+                one_line,
+                &[("borderRadius", json!(null)), ("color", json!("white"))]
+            )
+            .expect("edits"),
+            "export const B = () => <b style={{ backgroundColor: '#fde68a', padding: 16, color: 'white' }} />;\n"
+        );
+        let multi = "export const B = () => <b\n  style={{\n    backgroundColor: '#fde68a',\n    borderRadius: 8,\n  }}\n/>;\n";
+        let ops = [
+            style(multi, 1, 24, "borderRadius", &json!(4.5)),
+            style(multi, 1, 24, "opacity", &json!(0.5)),
+        ];
+        assert_eq!(
+            apply(&sources(multi), &ops)
+                .expect("edits")
+                .remove(FILE)
+                .expect("changed"),
+            "export const B = () => <b\n  style={{\n    backgroundColor: '#fde68a',\n    borderRadius: 4.5,\n    opacity: 0.5,\n  }}\n/>;\n"
+        );
+    }
+
+    #[test]
+    fn adds_a_style_attribute_or_props_when_there_are_none() {
+        let bare = "export const B = () => <b className=\"x\" />;\n";
+        assert_eq!(
+            styled(
+                bare,
+                &[
+                    ("backgroundColor", json!("#fff")),
+                    ("--brand", json!("it's"))
+                ]
+            )
+            .expect("adds"),
+            "export const B = () => <b style={{ backgroundColor: '#fff', '--brand': 'it\\'s' }} className=\"x\" />;\n"
+        );
+        let empty = "export const B = () => <b style={{}} />;\n";
+        assert_eq!(
+            styled(empty, &[("borderRadius", json!(999))]).expect("adds"),
+            "export const B = () => <b style={{ borderRadius: 999 }} />;\n"
+        );
+        assert_eq!(
+            styled(bare, &[("borderRadius", json!(null))]).expect("no-op"),
+            bare
+        );
+        let repeated = "export const B = () => <b style={{ color: 'red' }} />;\n";
+        assert_eq!(
+            styled(
+                repeated,
+                &[("color", json!("blue")), ("color", json!("green"))]
+            )
+            .expect("last wins"),
+            "export const B = () => <b style={{ color: 'green' }} />;\n"
+        );
+        assert_eq!(
+            styled(repeated, &[("color", json!(null))]).expect("emptied"),
+            "export const B = () => <b style={{}} />;\n"
+        );
+    }
+
+    #[test]
+    fn refuses_styles_computed_at_runtime() {
+        for source in [
+            "export const B = (p) => <b style={p.style} />;\n",
+            "export const B = (p) => <b style={{ ...p.style, color: 'red' }} />;\n",
+            "export const B = (p) => <b style={{ [p.key]: 'red' }} />;\n",
+            "export const B = (p) => <b style={{ color: 'red' }} {...p} />;\n",
+        ] {
+            let error = styled(source, &[("color", json!("blue"))]).expect_err(source);
+            assert!(
+                matches!(error, PatchError::StyleNotEditable { op: 0 }),
+                "{source}: {error}"
+            );
+        }
+        let variable = "export const B = (p) => <b style={{ color: p.color, padding: 4 }} />;\n";
+        assert_eq!(
+            styled(variable, &[("padding", json!(8))]).expect("literal props stay editable"),
+            "export const B = (p) => <b style={{ color: p.color, padding: 8 }} />;\n"
+        );
+    }
 
     #[test]
     fn rebases_snippet_edits_onto_content_that_moved() {
