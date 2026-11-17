@@ -1,7 +1,7 @@
 use crate::contracts::{
-    EditOp, EditOpAddItem, EditOpProp, EditOpRemoveItem, EditOpValue, ElementStyle,
+    EditOp, EditOpAddItem, EditOpName, EditOpProp, EditOpRemoveItem, EditOpValue, ElementStyle,
     ElementStyleAdapter, ElementStyleClassSource, ElementStyleStyleSource, FillValue,
-    FinetuneProps, ProjectPath, RadiusValue, SrcLoc, StyleGroup,
+    FinetuneProps, JsxValue, ProjectPath, RadiusValue, SrcLoc, StyleGroup,
 };
 use crate::tailwind::classify;
 use crate::theme::Theme;
@@ -36,6 +36,9 @@ pub fn finetune_ops(
     if style.adapter == ElementStyleAdapter::Tailwind {
         return finetune_op(style, props, theme).map(|op| vec![op]);
     }
+    if style.adapter == ElementStyleAdapter::Vuetify {
+        return vuetify_ops(style, props);
+    }
     if style.style_source == ElementStyleStyleSource::Dynamic {
         return Err(CodemodError::StyleNotEditable);
     }
@@ -53,6 +56,66 @@ pub fn finetune_ops(
             "borderRadius",
             radius_style(radius, theme)?,
         )?);
+    }
+    Ok(ops)
+}
+
+fn attribute_op(
+    style: &ElementStyle,
+    name: &str,
+    value: Option<String>,
+) -> Result<EditOp, CodemodError> {
+    Ok(EditOp::JsxAttr {
+        file: ProjectPath::try_from(style.file.as_str())
+            .map_err(|_| CodemodError::InvalidPath(style.file.clone()))?,
+        base_hash: style.base_hash.clone(),
+        at: SrcLoc {
+            line: style.line,
+            column: style.column,
+        },
+        name: EditOpName::try_from(name.to_owned())
+            .unwrap_or_else(|_| unreachable!("attribute names are non-empty")),
+        value: value.map(JsxValue::String),
+    })
+}
+
+fn vuetify_ops(style: &ElementStyle, props: &FinetuneProps) -> Result<Vec<EditOp>, CodemodError> {
+    let mut ops = Vec::new();
+    if let Some(fill) = &props.fill {
+        let color = match fill {
+            FillValue::None => None,
+            FillValue::Token { name } => Some(name.to_string()),
+            hex @ FillValue::Hex { .. } => match fill_style(hex, &Theme::default())? {
+                EditOpValue::String(color) => Some(color),
+                EditOpValue::Number(_) | EditOpValue::Null => None,
+            },
+        };
+        ops.push(attribute_op(style, "color", color)?);
+    }
+    if let Some(radius) = &props.radius {
+        let rounded = match radius {
+            RadiusValue::Full => Some("pill".to_owned()),
+            RadiusValue::Token { name } => Some(match name.as_str() {
+                "none" => "0".to_owned(),
+                "full" => "pill".to_owned(),
+                other => other.to_owned(),
+            }),
+            RadiusValue::Px { px: 0 } => Some("0".to_owned()),
+            RadiusValue::Px { px } => {
+                if !(0..=MAX_RADIUS_PX).contains(px) {
+                    return Err(CodemodError::RadiusOutOfRange(*px));
+                }
+                ops.push(style_op(
+                    style,
+                    "borderRadius",
+                    EditOpValue::Number(f64::from(
+                        u16::try_from(*px).unwrap_or_else(|_| unreachable!("checked 0..=999")),
+                    )),
+                )?);
+                None
+            }
+        };
+        ops.push(attribute_op(style, "rounded", rounded)?);
     }
     Ok(ops)
 }
@@ -230,7 +293,7 @@ mod tests {
 
     use super::{CodemodError, finetune_op, finetune_ops};
     use crate::contracts::{EditOp, ElementStyleAdapter, FillValue, FinetuneProps, RadiusValue};
-    use crate::style::{inspect, inspect_with};
+    use crate::style::{Styling, inspect, inspect_with};
     use crate::theme::Theme;
 
     const BUTTON: &str = r#"export const B = () => <button className="rounded-lg bg-brand px-6 hover:bg-red-500">Go</button>;"#;
@@ -390,8 +453,18 @@ mod tests {
     ) -> Result<String, CodemodError> {
         let at = |value| NonZeroU64::new(value).expect("1-based");
         let column = u64::try_from(source.find("<b").expect("element") + 1).expect("column");
-        let style = inspect_with("src/B.tsx", source, at(1), at(column), &theme(), tailwind)
-            .expect("inspected");
+        let style = inspect_with(
+            "src/B.tsx",
+            source,
+            at(1),
+            at(column),
+            &theme(),
+            Styling {
+                tailwind,
+                vuetify: false,
+            },
+        )
+        .expect("inspected");
         let ops = finetune_ops(&style, props, &theme())?;
         let sources = BTreeMap::from([("src/B.tsx".to_owned(), source.to_owned())]);
         Ok(crate::patch::apply(&sources, &ops)
@@ -449,8 +522,15 @@ mod tests {
     fn projects_without_tailwind_get_inline_styles_even_with_a_class_name() {
         let source = "export const B = () => <b className=\"card\">Gift</b>;";
         let at = |value| NonZeroU64::new(value).expect("1-based");
-        let style =
-            inspect_with("src/B.tsx", source, at(1), at(24), &theme(), false).expect("inspected");
+        let style = inspect_with(
+            "src/B.tsx",
+            source,
+            at(1),
+            at(24),
+            &theme(),
+            Styling::default(),
+        )
+        .expect("inspected");
         assert_eq!(style.adapter, ElementStyleAdapter::Inline);
         let props = FinetuneProps {
             fill: Some(fill(
@@ -462,8 +542,15 @@ mod tests {
             inline_result(source, false, &props).expect("edits"),
             "export const B = () => <b style={{ backgroundColor: '#123456' }} className=\"card\">Gift</b>;"
         );
-        let tailwind =
-            inspect_with("src/B.tsx", source, at(1), at(24), &theme(), true).expect("inspected");
+        let tailwind = inspect_with(
+            "src/B.tsx",
+            source,
+            at(1),
+            at(24),
+            &theme(),
+            Styling::TAILWIND,
+        )
+        .expect("inspected");
         assert_eq!(tailwind.adapter, ElementStyleAdapter::Tailwind);
     }
 
@@ -542,8 +629,18 @@ mod tests {
                 + 1,
         )
         .expect("column");
-        let style = inspect_with(path, source, at(line), at(column), &theme(), tailwind)
-            .expect("inspected");
+        let style = inspect_with(
+            path,
+            source,
+            at(line),
+            at(column),
+            &theme(),
+            Styling {
+                tailwind,
+                vuetify: true,
+            },
+        )
+        .expect("inspected");
         let ops = finetune_ops(&style, props, &theme())?;
         let sources = BTreeMap::from([(path.to_owned(), source.to_owned())]);
         Ok(crate::patch::apply(&sources, &ops)
@@ -583,6 +680,137 @@ mod tests {
         assert_eq!(
             template_result("src/A.svelte", interpolated, "<b", false, &blue),
             Err(CodemodError::StyleNotEditable)
+        );
+    }
+
+    #[test]
+    fn vuetify_components_get_color_and_rounded_props() {
+        let blue = |px: i64| FinetuneProps {
+            fill: Some(fill(
+                serde_json::json!({ "kind": "hex", "hex": "#0f766e", "opacity": 100 }),
+            )),
+            radius: Some(radius(serde_json::json!({ "kind": "px", "px": px }))),
+        };
+        let login = "<template>\n  <VBtn block type=\"submit\" color=\"primary\">로그인</VBtn>\n</template>\n";
+        assert_eq!(
+            template_result("src/pages/login.vue", login, "<VBtn", false, &blue(0)).expect("edits"),
+            "<template>\n  <VBtn rounded=\"0\" block type=\"submit\" color=\"#0F766E\">로그인</VBtn>\n</template>\n"
+        );
+        assert_eq!(
+            template_result("src/pages/login.vue", login, "<VBtn", false, &blue(12))
+                .expect("edits"),
+            "<template>\n  <VBtn style=\"border-radius: 12px\" block type=\"submit\" color=\"#0F766E\">로그인</VBtn>\n</template>\n"
+        );
+        let pill = FinetuneProps {
+            fill: Some(fill(serde_json::json!({ "kind": "none" }))),
+            radius: Some(radius(serde_json::json!({ "kind": "full" }))),
+        };
+        let rounded = "<template>\n  <v-btn\n    rounded=\"lg\"\n    color=\"primary\"\n  >Go</v-btn>\n</template>\n";
+        assert_eq!(
+            template_result("src/A.vue", rounded, "<v-btn", false, &pill).expect("edits"),
+            "<template>\n  <v-btn\n    rounded=\"pill\"\n  >Go</v-btn>\n</template>\n"
+        );
+        let faded = FinetuneProps {
+            fill: Some(fill(
+                serde_json::json!({ "kind": "hex", "hex": "#0f766e", "opacity": 50 }),
+            )),
+            radius: None,
+        };
+        assert_eq!(
+            template_result(
+                "src/A.vue",
+                "<template><VCard>x</VCard></template>",
+                "<VCard",
+                false,
+                &faded
+            )
+            .expect("adds"),
+            "<template><VCard color=\"rgba(15, 118, 110, 0.5)\">x</VCard></template>"
+        );
+    }
+
+    #[test]
+    fn vuetify_reads_its_props_and_refuses_bound_ones() {
+        let at = |value| NonZeroU64::new(value).expect("1-based");
+        let source = "<template><VBtn color=\"#8C57FF\" rounded=\"lg\">Go</VBtn></template>";
+        let style = inspect_with(
+            "src/A.vue",
+            source,
+            at(1),
+            at(11),
+            &theme(),
+            Styling {
+                tailwind: false,
+                vuetify: true,
+            },
+        )
+        .expect("inspected");
+        assert_eq!(style.adapter, ElementStyleAdapter::Vuetify);
+        let tokens: Vec<(String, Option<String>, bool)> = style
+            .tokens
+            .iter()
+            .map(|token| (token.token.clone(), token.value.clone(), token.editable))
+            .collect();
+        assert_eq!(
+            tokens,
+            [
+                (
+                    "color=\"#8C57FF\"".to_owned(),
+                    Some("#8C57FF".to_owned()),
+                    true
+                ),
+                ("rounded=\"lg\"".to_owned(), Some("lg".to_owned()), true),
+            ]
+        );
+        let plain = inspect_with(
+            "src/A.vue",
+            "<template><button>Go</button></template>",
+            at(1),
+            at(11),
+            &theme(),
+            Styling {
+                tailwind: false,
+                vuetify: true,
+            },
+        )
+        .expect("inspected");
+        assert_eq!(plain.adapter, ElementStyleAdapter::Inline);
+        let no_vuetify = inspect_with(
+            "src/A.vue",
+            source,
+            at(1),
+            at(11),
+            &theme(),
+            Styling::default(),
+        )
+        .expect("inspected");
+        assert_eq!(no_vuetify.adapter, ElementStyleAdapter::Inline);
+
+        let bound = "<template><VBtn :color=\"tone\">Go</VBtn></template>";
+        let props = FinetuneProps {
+            fill: Some(fill(
+                serde_json::json!({ "kind": "hex", "hex": "#0f766e", "opacity": 100 }),
+            )),
+            radius: None,
+        };
+        let style = inspect_with(
+            "src/A.vue",
+            bound,
+            at(1),
+            at(11),
+            &theme(),
+            Styling {
+                tailwind: false,
+                vuetify: true,
+            },
+        )
+        .expect("inspected");
+        let ops = finetune_ops(&style, &props, &theme()).expect("ops");
+        let sources = BTreeMap::from([("src/A.vue".to_owned(), bound.to_owned())]);
+        let error = crate::patch::apply(&sources, &ops).expect_err("bound");
+        assert!(
+            error.to_string().contains("color is bound at runtime"),
+            "{error}"
         );
     }
 }

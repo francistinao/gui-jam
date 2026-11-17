@@ -17,7 +17,58 @@ pub fn inspect(
     column: NonZeroU64,
     theme: &Theme,
 ) -> Result<ElementStyle, JsxError> {
-    inspect_with(file, source, line, column, theme, true)
+    inspect_with(file, source, line, column, theme, Styling::TAILWIND)
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Styling {
+    pub tailwind: bool,
+    pub vuetify: bool,
+}
+
+impl Styling {
+    pub const TAILWIND: Self = Self {
+        tailwind: true,
+        vuetify: false,
+    };
+}
+
+fn vuetify_component(tag: &str) -> bool {
+    let mut chars = tag.chars();
+    match (chars.next(), chars.next()) {
+        (Some('V'), Some(second)) => second.is_ascii_uppercase(),
+        (Some('v'), Some('-')) => true,
+        _ => false,
+    }
+}
+
+fn vuetify_tokens(source: &str, line: u64, column: u64) -> Vec<StyleToken> {
+    [("color", StyleGroup::Fill), ("rounded", StyleGroup::Radius)]
+        .into_iter()
+        .filter_map(|(name, group)| {
+            let slot = template::attribute(source, line, column, name).ok()?;
+            let (value, editable) = match slot {
+                template::AttributeSlot::Missing { .. } => return None,
+                template::AttributeSlot::Static { text, .. } => (Some(text), true),
+                template::AttributeSlot::Bound => (None, false),
+            };
+            Some(StyleToken {
+                token: format!("{name}=\"{}\"", value.as_deref().unwrap_or("…")),
+                group,
+                property: name.to_owned(),
+                theme_token: None,
+                value: value.map(|value| {
+                    if value == "0" {
+                        "0px".to_owned()
+                    } else {
+                        value
+                    }
+                }),
+                editable,
+                variants: Vec::new(),
+            })
+        })
+        .collect()
 }
 
 const INLINE_GROUPS: [(&str, StyleGroup, &str); 11] = [
@@ -91,10 +142,12 @@ pub fn inspect_with(
     line: NonZeroU64,
     column: NonZeroU64,
     theme: &Theme,
-    tailwind: bool,
+    styling: Styling,
 ) -> Result<ElementStyle, JsxError> {
     let element = find_element(file, source, line.get(), column.get())?;
-    let adapter = match (&element.style, tailwind) {
+    let vuetify = styling.vuetify && template::is_template(file) && vuetify_component(&element.tag);
+    let adapter = match (&element.style, styling.tailwind) {
+        _ if vuetify => ElementStyleAdapter::Vuetify,
         (StyleSource::Object(_) | StyleSource::Css(_), _) | (_, false) => {
             ElementStyleAdapter::Inline
         }
@@ -128,6 +181,9 @@ pub fn inspect_with(
         StyleSource::Object(object) => tokens.extend(inline_tokens(object)),
         StyleSource::Css(literal) => tokens.extend(css_tokens(&literal.value)),
         StyleSource::None | StyleSource::Dynamic => {}
+    }
+    if vuetify {
+        tokens.extend(vuetify_tokens(source, line.get(), column.get()));
     }
     Ok(ElementStyle {
         file: file.to_owned(),

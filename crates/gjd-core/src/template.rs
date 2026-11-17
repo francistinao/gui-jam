@@ -22,6 +22,20 @@ pub fn is_template(path: &str) -> bool {
 struct Attribute {
     name: String,
     value: Option<Value>,
+    range: Range<usize>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum AttributeSlot {
+    Missing {
+        insert_at: usize,
+    },
+    Static {
+        whole: Range<usize>,
+        value: Range<usize>,
+        text: String,
+    },
+    Bound,
 }
 
 enum Value {
@@ -76,6 +90,7 @@ fn attributes(source: &str, mut at: usize) -> (Vec<Attribute>, bool) {
                 found.push(Attribute {
                     name,
                     value: Some(Value::Expression),
+                    range: at..end,
                 });
                 at = end;
                 continue;
@@ -95,7 +110,11 @@ fn attributes(source: &str, mut at: usize) -> (Vec<Attribute>, bool) {
             at += 1;
         }
         if bytes.get(at) != Some(&b'=') {
-            found.push(Attribute { name, value: None });
+            found.push(Attribute {
+                name,
+                value: None,
+                range: start..at,
+            });
             if at == start {
                 at += 1;
             }
@@ -131,6 +150,7 @@ fn attributes(source: &str, mut at: usize) -> (Vec<Attribute>, bool) {
         found.push(Attribute {
             name,
             value: Some(value),
+            range: start..at,
         });
     }
 }
@@ -149,7 +169,11 @@ fn read(source: &str, attribute: &Attribute) -> Option<ClassLiteral> {
     }
 }
 
-pub fn find_element(source: &str, line: u64, column: u64) -> Result<JsxElement, JsxError> {
+fn start_tag(
+    source: &str,
+    line: u64,
+    column: u64,
+) -> Result<(usize, usize, Vec<Attribute>), JsxError> {
     let not_found = JsxError::ElementNotFound { line, column };
     let offset = LineIndex::new(source)
         .offset(line, column)
@@ -160,8 +184,7 @@ pub fn find_element(source: &str, line: u64, column: u64) -> Result<JsxElement, 
     {
         return Err(not_found);
     }
-    let name_start = offset + 1;
-    let mut name_end = name_start;
+    let mut name_end = offset + 1;
     while bytes
         .get(name_end)
         .is_some_and(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b':' | b'.' | b'_'))
@@ -172,15 +195,57 @@ pub fn find_element(source: &str, line: u64, column: u64) -> Result<JsxElement, 
     if !closed {
         return Err(JsxError::Syntax(format!(
             "the <{}> tag at {line}:{column} never closes",
-            &source[name_start..name_end]
+            &source[offset + 1..name_end]
         )));
     }
+    Ok((offset + 1, name_end, found))
+}
+
+fn spreads(attribute: &Attribute) -> bool {
+    attribute.name == "v-bind" || attribute.name.starts_with("{...")
+}
+
+pub fn attribute(
+    source: &str,
+    line: u64,
+    column: u64,
+    name: &str,
+) -> Result<AttributeSlot, JsxError> {
+    let (_, name_end, found) = start_tag(source, line, column)?;
+    let bound = [
+        format!(":{name}"),
+        format!("v-bind:{name}"),
+        format!(".{name}"),
+    ];
+    let last_spread = found.iter().rposition(spreads);
+    let at = found.iter().rposition(|attribute| attribute.name == name);
+    let bound_at = found
+        .iter()
+        .rposition(|attribute| bound.contains(&attribute.name));
+    if bound_at.is_some() || last_spread.is_some_and(|spread| at.is_none_or(|at| spread > at)) {
+        return Ok(AttributeSlot::Bound);
+    }
+    let Some(attribute) = at.map(|at| &found[at]) else {
+        return Ok(AttributeSlot::Missing {
+            insert_at: name_end,
+        });
+    };
+    match &attribute.value {
+        Some(Value::Quoted(range)) if !interpolated(&source[range.clone()]) => {
+            Ok(AttributeSlot::Static {
+                whole: attribute.range.clone(),
+                value: range.clone(),
+                text: source[range.clone()].to_owned(),
+            })
+        }
+        _ => Ok(AttributeSlot::Bound),
+    }
+}
+
+pub fn find_element(source: &str, line: u64, column: u64) -> Result<JsxElement, JsxError> {
+    let (name_start, name_end, found) = start_tag(source, line, column)?;
     let position = |name: &str| found.iter().rposition(|attribute| attribute.name == name);
-    let last_spread = found.iter().rposition(|attribute| {
-        attribute.name == "{...}"
-            || attribute.name == "v-bind"
-            || attribute.name.starts_with("{...")
-    });
+    let last_spread = found.iter().rposition(spreads);
     let after_spread = |at: Option<usize>| match (at, last_spread) {
         (Some(at), Some(spread)) => spread > at,
         (None, Some(_)) => true,
@@ -295,7 +360,10 @@ pub fn merged_css(text: &str, changes: &[(String, Option<String>)]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{camel, css_number, declarations, find_element, is_template, kebab, merged_css};
+    use super::{
+        AttributeSlot, attribute, camel, css_number, declarations, find_element, is_template,
+        kebab, merged_css,
+    };
     use crate::jsx::{ClassSource, StyleSource};
 
     fn at(source: &str, needle: &str) -> (u64, u64) {
@@ -432,5 +500,43 @@ mod tests {
             merged_css("", &[("color".to_owned(), Some("red".to_owned()))]),
             "color: red"
         );
+    }
+
+    #[test]
+    fn looks_up_one_attribute_on_a_start_tag() {
+        let source = "<VBtn color=\"primary\" :rounded=\"r\" block>Go</VBtn>";
+        assert_eq!(
+            attribute(source, 1, 1, "color").expect("tag"),
+            AttributeSlot::Static {
+                whole: 6..21,
+                value: 13..20,
+                text: "primary".to_owned()
+            }
+        );
+        assert_eq!(
+            attribute(source, 1, 1, "rounded").expect("tag"),
+            AttributeSlot::Bound
+        );
+        assert_eq!(
+            attribute(source, 1, 1, "size").expect("tag"),
+            AttributeSlot::Missing { insert_at: 5 }
+        );
+        assert_eq!(
+            attribute("<VBtn v-bind=\"a\">x</VBtn>", 1, 1, "color").expect("tag"),
+            AttributeSlot::Bound
+        );
+        assert_eq!(
+            attribute("<VBtn {...a} color=\"red\">x</VBtn>", 1, 1, "color").expect("tag"),
+            AttributeSlot::Static {
+                whole: 13..24,
+                value: 20..23,
+                text: "red".to_owned()
+            }
+        );
+        assert_eq!(
+            attribute("<VBtn color=\"{c}\">x</VBtn>", 1, 1, "color").expect("tag"),
+            AttributeSlot::Bound
+        );
+        assert!(attribute("<VBtn", 1, 1, "color").is_err());
     }
 }

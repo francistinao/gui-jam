@@ -91,7 +91,11 @@ export interface PanelSection {
 
 export function panelSections(style: ElementStyle): PanelSection[] {
   const dynamic =
-    style.adapter === 'inline' ? style.styleSource === 'dynamic' : style.classSource === 'dynamic';
+    style.adapter === 'vuetify'
+      ? false
+      : style.adapter === 'inline'
+        ? style.styleSource === 'dynamic'
+        : style.classSource === 'dynamic';
   return SECTION_ORDER.flatMap((group): PanelSection[] => {
     if (group === 'text' && TEXTLESS_TAGS.has(style.tag)) return [];
     const tokens = style.tokens.filter((token) => token.group === group);

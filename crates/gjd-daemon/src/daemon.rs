@@ -11,15 +11,15 @@ use gjd_core::contracts::{
     CodeChange, CommitDone, DependenciesInstall, DependenciesInstalled, DependencyNeeds, EditOp,
     EditOpValue, ElementStyle, ErrorCode, ErrorPayload, FinetunePreview, FinetunePreviewed,
     GenerateDone, GenerateDoneDroppedItem, GenerateDoneNotesItem, GenerateRequest, GuijamMessage,
-    HelloOk, OverlayClear, OverlaySet, Package, Route, RouteTier, RunRef, SourceRef, UndoDone,
-    UpdateResult, UpdateResultStatus, UpdateResultUpdateId, Variant, VariantAssetsItemFormat,
-    VariantPreview, VariantSelect, VariantSelected, VariantSet,
+    HelloOk, JsxValue, OverlayClear, OverlaySet, Package, Route, RouteTier, RunRef, SourceRef,
+    UndoDone, UpdateResult, UpdateResultStatus, UpdateResultUpdateId, Variant,
+    VariantAssetsItemFormat, VariantPreview, VariantSelect, VariantSelected, VariantSet,
 };
 use gjd_core::journal::{CommitError, FileChange, Journal};
 use gjd_core::jsx::{JsxError, check_syntax, imports};
 use gjd_core::patch::{self, PatchError};
 use gjd_core::policy::{PolicyError, ProjectRoot};
-use gjd_core::style::inspect_with;
+use gjd_core::style::{Styling, inspect_with};
 use gjd_core::theme::Theme;
 use gjd_providers::{
     AuthStatus, Discovery, GenerationRequest, ImageInput, ProviderAdapter, ProviderError,
@@ -888,12 +888,15 @@ impl Daemon {
         }
     }
 
-    fn uses_tailwind(&self, project: &Project) -> bool {
-        !locked(&self.tailwind_roots).is_empty()
-            || project
-                .dependencies
-                .keys()
-                .any(|name| name == "tailwindcss" || name.starts_with("@tailwindcss/"))
+    fn styling(&self, project: &Project) -> Styling {
+        Styling {
+            tailwind: !locked(&self.tailwind_roots).is_empty()
+                || project
+                    .dependencies
+                    .keys()
+                    .any(|name| name == "tailwindcss" || name.starts_with("@tailwindcss/")),
+            vuetify: project.dependencies.contains_key("vuetify"),
+        }
     }
 
     fn set_tailwind_roots(&self, files: &[String]) {
@@ -934,7 +937,7 @@ impl Daemon {
             source_ref.line,
             source_ref.column,
             &theme,
-            self.uses_tailwind(&project),
+            self.styling(&project),
         )?)
     }
 
@@ -952,7 +955,7 @@ impl Daemon {
             request.line,
             request.column,
             &theme,
-            self.uses_tailwind(&project),
+            self.styling(&project),
         )?;
         let ops = finetune_ops(&style, &request.props, &theme)?;
         let summary = summarize(&file, request.line, &ops);
@@ -1210,7 +1213,7 @@ impl Daemon {
             request.line,
             request.column,
             &theme,
-            self.uses_tailwind(&project),
+            self.styling(&project),
         )?;
         let exact = r0::parse_property_edits(&prompt, &style)
             .and_then(|props| finetune_ops(&style, &props, &theme).ok())
@@ -2191,6 +2194,12 @@ fn style_change(ops: &[EditOp]) -> Option<String> {
                 EditOpValue::String(text) => format!("{} {text}", prop.as_str()),
                 EditOpValue::Number(number) => format!("{} {number}", prop.as_str()),
                 EditOpValue::Null => format!("− {}", prop.as_str()),
+            }),
+            EditOp::JsxAttr { name, value, .. } => Some(match value {
+                Some(JsxValue::String(text) | JsxValue::Expression(text)) => {
+                    format!("{}=\"{text}\"", name.as_str())
+                }
+                None => format!("− {}", name.as_str()),
             }),
             _ => None,
         })

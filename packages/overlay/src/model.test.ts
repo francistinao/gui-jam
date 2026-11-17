@@ -162,6 +162,13 @@ describe('panelSections', () => {
 
     const computed = style({ adapter: 'inline', styleSource: 'dynamic', tokens: [] });
     expect(summary(computed)).toEqual([]);
+
+    const vuetify = style({
+      classSource: 'dynamic',
+      adapter: 'vuetify',
+      tokens: [token('color="primary"', 'fill')],
+    });
+    expect(summary(vuetify)).toEqual(['radius:add', 'fill:edit']);
   });
 
   it('leaves text out for elements that cannot hold text', () => {

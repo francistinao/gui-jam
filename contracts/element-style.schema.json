@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "element-style.schema.json",
   "title": "ElementStyle",
-  "description": "What the fine-tune panel knows about one JSX element, read from its source. classSource says how className is written: none (no className, one can be added), static (a literal), call (cn()/clsx(); the first literal is editable) or dynamic (not editable; use Ask AI). adapter says how fine-tune writes the change: tailwind edits className tokens, inline edits the style={{…}} object (elements that already use one, and projects without Tailwind). styleSource says how style is written: none, object (a static object literal) or dynamic (not editable).",
+  "description": "What the fine-tune panel knows about one JSX element, read from its source. classSource says how className is written: none (no className, one can be added), static (a literal), call (cn()/clsx(); the first literal is editable) or dynamic (not editable; use Ask AI). adapter says how fine-tune writes the change: tailwind edits className tokens, inline edits the style={{…}} object (elements that already use one, and projects without Tailwind), vuetify sets the color and rounded props of Vuetify components. styleSource says how style is written: none, object (a static object literal) or dynamic (not editable).",
   "type": "object",
   "required": [
     "file",
@@ -48,7 +48,7 @@
       "$ref": "#/$defs/ThemeTokens"
     },
     "adapter": {
-      "enum": ["tailwind", "inline"]
+      "enum": ["tailwind", "inline", "vuetify"]
     },
     "styleSource": {
       "enum": ["none", "object", "dynamic"]

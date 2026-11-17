@@ -3,10 +3,11 @@ use std::ops::Range;
 
 use crate::content_hash;
 use crate::contracts::{
-    ContentHash, EditOp, EditOpAddItem, EditOpRemoveItem, EditOpValue, ProjectPath,
+    ContentHash, EditOp, EditOpAddItem, EditOpRemoveItem, EditOpValue, JsxValue, ProjectPath,
+    SrcLoc,
 };
 use crate::jsx::{ClassSource, JsxError, StyleObject, StyleSource, check_syntax, find_element};
-use crate::template;
+use crate::template::{self, AttributeSlot};
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum PatchError {
@@ -20,6 +21,8 @@ pub enum PatchError {
     NotEditable { op: usize },
     #[error("op {op}: the style is computed at runtime and can't be edited directly")]
     StyleNotEditable { op: usize },
+    #[error("op {op}: {name} is bound at runtime and can't be edited directly")]
+    AttributeNotEditable { op: usize, name: String },
     #[error("op {op}: the snippet occurs {count} times in {file}; it must occur exactly once")]
     SnippetNotUnique {
         op: usize,
@@ -191,10 +194,17 @@ fn resolve<'s>(
                 },
             ))
         }
-        EditOp::JsxAttr { .. } => Err(PatchError::Unsupported {
-            op,
-            kind: "jsx_attr",
-        }),
+        EditOp::JsxAttr {
+            file,
+            base_hash,
+            at,
+            name,
+            value,
+        } => {
+            let (path, source) = current(op, file, base_hash, sources)?;
+            resolve_attribute(op, path, source, at, name.as_str(), value.as_ref())
+                .map(|edit| (path, edit))
+        }
         EditOp::StyleProp { .. } => unreachable!("style_prop ops are grouped by element"),
         EditOp::CreateFile { .. } => Err(PatchError::Unsupported {
             op,
@@ -205,6 +215,57 @@ fn resolve<'s>(
             kind: "rewrite_file",
         }),
     }
+}
+
+fn resolve_attribute(
+    op: usize,
+    path: &str,
+    source: &str,
+    at: &SrcLoc,
+    name: &str,
+    value: Option<&JsxValue>,
+) -> Result<TextEdit, PatchError> {
+    if !template::is_template(path) {
+        return Err(PatchError::Unsupported {
+            op,
+            kind: "jsx_attr",
+        });
+    }
+    let slot = template::attribute(source, at.line.get(), at.column.get(), name)
+        .map_err(|source| PatchError::Element { op, source })?;
+    let text = match value {
+        None => None,
+        Some(JsxValue::String(text)) => Some(text.replace('&', "&amp;").replace('"', "&quot;")),
+        Some(JsxValue::Expression(_)) => {
+            return Err(PatchError::Unsupported {
+                op,
+                kind: "jsx_attr with an expression",
+            });
+        }
+    };
+    Ok(match (slot, text) {
+        (AttributeSlot::Bound, _) => {
+            return Err(PatchError::AttributeNotEditable {
+                op,
+                name: name.to_owned(),
+            });
+        }
+        (AttributeSlot::Static { value, .. }, Some(text)) => TextEdit {
+            op,
+            range: value,
+            text,
+        },
+        (AttributeSlot::Static { whole, .. }, None) => TextEdit {
+            op,
+            range: source[..whole.start].trim_end().len()..whole.end,
+            text: String::new(),
+        },
+        (AttributeSlot::Missing { insert_at }, text) => TextEdit {
+            op,
+            range: insert_at..insert_at,
+            text: text.map_or_else(String::new, |text| format!(" {name}=\"{text}\"")),
+        },
+    })
 }
 
 fn style_key(key: &str) -> String {
