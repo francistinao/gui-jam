@@ -1,5 +1,6 @@
 import { readFile, writeFile } from 'node:fs/promises';
 import { basename, join } from 'node:path';
+import { supportsNext } from '@guijam/vite-plugin/next/version';
 import MagicString from 'magic-string';
 import {
   type ArrayExpression,
@@ -20,15 +21,17 @@ import { type Project, VITE_FRAMEWORKS } from './detect.js';
 export const PLUGIN_SOURCE = 'guijam/vite';
 export const NUXT_MODULE = 'guijam/nuxt';
 export const ASTRO_INTEGRATION = 'guijam/astro';
+export const NEXT_WRAPPER = 'guijam/next';
 
 interface Hook {
   source: string;
-  imported: 'guijam' | 'default';
+  imported: 'guijam' | 'default' | 'withGuijam';
   key: 'plugins' | 'integrations';
 }
 
 const VITE_HOOK: Hook = { source: PLUGIN_SOURCE, imported: 'guijam', key: 'plugins' };
 const ASTRO_HOOK: Hook = { source: ASTRO_INTEGRATION, imported: 'default', key: 'integrations' };
+const NEXT_HOOK: Hook = { source: NEXT_WRAPPER, imported: 'withGuijam', key: 'plugins' };
 
 const MAX_HOPS = 8;
 
@@ -57,7 +60,6 @@ interface Bodies {
 }
 
 const COMING_SOON: Record<string, string> = {
-  next: 'Next.js support is on the roadmap.',
   angular: 'Angular support is on the roadmap.',
   'solid-start-vinxi': 'SolidStart 1 runs on vinxi; upgrade to SolidStart 2, which runs on Vite.',
 };
@@ -265,7 +267,7 @@ function addImport(output: MagicString, code: string, program: Program, hook: Ho
   const last = imports.at(-1);
   const quote = first === undefined ? "'" : (code[first.source.start] ?? "'");
   const semicolon = last === undefined || code[last.end - 1] === ';' ? ';' : '';
-  const binding = hook.imported === 'default' ? 'guijam' : '{ guijam }';
+  const binding = hook.imported === 'default' ? 'guijam' : `{ ${hook.imported} }`;
   const line = `import ${binding} from ${quote}${hook.source}${quote}${semicolon}`;
   if (last === undefined) output.prepend(`${line}\n\n`);
   else output.appendLeft(last.end, `\n${line}`);
@@ -310,6 +312,106 @@ export function addGuijamPlugin(
 
 export function addAstroIntegration(code: string, filename = 'astro.config.mjs'): EditOutcome {
   return addGuijamPlugin(code, filename, ASTRO_HOOK);
+}
+
+function exportedExpression(program: Program): Expression | undefined {
+  for (const statement of program.body) {
+    if (statement.type === 'ExportDefaultDeclaration') {
+      const { declaration } = statement;
+      return declaration.type === 'FunctionDeclaration' ||
+        declaration.type === 'ClassDeclaration' ||
+        declaration.type === 'TSInterfaceDeclaration'
+        ? undefined
+        : (declaration as Expression);
+    }
+    if (
+      statement.type === 'ExpressionStatement' &&
+      statement.expression.type === 'AssignmentExpression' &&
+      statement.expression.left.type === 'MemberExpression' &&
+      statement.expression.left.object.type === 'Identifier' &&
+      statement.expression.left.object.name === 'module' &&
+      statement.expression.left.property.type === 'Identifier' &&
+      statement.expression.left.property.name === 'exports'
+    ) {
+      return statement.expression.right;
+    }
+  }
+  return undefined;
+}
+
+export function addWithGuijam(code: string, filename = 'next.config.mjs'): EditOutcome {
+  const parsed = parseSync(filename, code);
+  const [error] = parsed.errors;
+  if (error !== undefined)
+    return { kind: 'manual', reason: `it could not be parsed (${error.message})` };
+  const { program } = parsed;
+  const local = guijamImportOf(program, NEXT_HOOK);
+  if (local !== undefined && calls(program, local)) return { kind: 'present' };
+  const exported = exportedExpression(program);
+  if (exported === undefined)
+    return { kind: 'manual', reason: 'it has no exported config to wrap' };
+  const name = local ?? 'withGuijam';
+  const output = new MagicString(code);
+  output.appendLeft(exported.start, `${name}(`);
+  output.appendRight(exported.end, ')');
+  if (local === undefined) {
+    const esm = program.body.some(
+      (statement) =>
+        statement.type === 'ImportDeclaration' || statement.type === 'ExportDefaultDeclaration',
+    );
+    if (esm) addImport(output, code, program, NEXT_HOOK);
+    else output.prepend(`const { withGuijam } = require('${NEXT_WRAPPER}');\n`);
+  }
+  const next = output.toString();
+  const verified = parseSync(filename, next);
+  const wrapped =
+    guijamImportOf(verified.program, NEXT_HOOK) ??
+    (next.includes(`require('${NEXT_WRAPPER}')`) ? 'withGuijam' : undefined);
+  if (verified.errors.length > 0 || wrapped === undefined || !calls(verified.program, wrapped))
+    return { kind: 'manual', reason: 'the edit could not be verified' };
+  return { kind: 'added', code: next };
+}
+
+export function nextConfigSnippet(): string {
+  return [
+    `import { withGuijam } from '${NEXT_WRAPPER}';`,
+    '',
+    'export default withGuijam(yourNextConfig);',
+  ].join('\n');
+}
+
+async function wireNext(project: Project): Promise<WireResult> {
+  if (!supportsNext(project.frameworkVersion)) {
+    return {
+      status: 'unsupported',
+      reason: `GUIJam needs Next.js 16.3 or newer (this app has ${project.frameworkVersion ?? 'no Next.js installed'}). Upgrade Next.js, then run init again.`,
+    };
+  }
+  const file = project.configFile ?? join(project.root, 'next.config.mjs');
+  if (project.configFile === undefined) {
+    await writeFile(
+      file,
+      [
+        `import { withGuijam } from '${NEXT_WRAPPER}';`,
+        '',
+        'export default withGuijam({});',
+        '',
+      ].join('\n'),
+      { flag: 'wx' },
+    );
+    return { status: 'created', file };
+  }
+  const outcome = addWithGuijam(await readFile(file, 'utf8'), basename(file));
+  if (outcome.kind === 'manual') {
+    return {
+      status: 'manual',
+      file,
+      reason: `${basename(file)} can't be edited safely: ${outcome.reason}.`,
+      snippet: nextConfigSnippet(),
+    };
+  }
+  if (outcome.kind === 'added') await writeFile(file, outcome.code);
+  return { status: outcome.kind, file };
 }
 
 export function astroConfigSnippet(): string {
@@ -480,6 +582,7 @@ export async function wireProject(project: Project): Promise<WireResult> {
   }
   if (project.framework === 'nuxt') return wireNuxt(project);
   if (project.framework === 'astro') return wireAstro(project);
+  if (project.framework === 'next') return wireNext(project);
   if (!VITE_FRAMEWORKS.has(project.framework)) {
     return {
       status: 'unsupported',
@@ -520,6 +623,9 @@ export async function isWired(project: Project): Promise<boolean> {
     if (project.framework === 'nuxt') return hasNuxtModule(code, basename(project.configFile));
     if (project.framework === 'astro') {
       return callsGuijam(code, basename(project.configFile), ASTRO_HOOK);
+    }
+    if (project.framework === 'next') {
+      return callsGuijam(code, basename(project.configFile), NEXT_HOOK);
     }
     return callsGuijam(code, basename(project.configFile));
   } catch {

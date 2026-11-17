@@ -20,3 +20,5 @@ packages/guijam/assets/
 .svelte-kit/
 .react-router/
 .astro/
+.next/
+next-env.d.ts

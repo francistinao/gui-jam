@@ -15,20 +15,8 @@ import {
   type ViteDevServer,
   version as viteVersion,
 } from 'vite';
-import { findDaemonBinary, platformKey } from './daemon-binary.js';
-import { DaemonClient } from './daemon-client.js';
+import { createBridge, type OverlayOptions } from './bridge.js';
 import { hotReloadable, overlayFile, resolveOverlay } from './overlay-resolve.js';
-import { Pages } from './pages.js';
-import {
-  checkWidgetRequest,
-  errorReply,
-  generationRunId,
-  replyWindowMs,
-  requestId,
-  requestRunId,
-  splitPage,
-  terminalLine,
-} from './relay.js';
 import { type AstroCompiler, injectAstroSourceLocations } from './transform-astro-srcloc.js';
 import { injectSourceLocations } from './transform-srcloc.js';
 import { injectSvelteSourceLocations, type SvelteCompiler } from './transform-svelte-srcloc.js';
@@ -42,9 +30,7 @@ export interface GuijamOptions {
   root?: string;
 }
 
-export interface OverlayOptions {
-  pageReload?: boolean;
-}
+export type { OverlayOptions } from './bridge.js';
 
 export interface GuijamApi {
   setOverlay(file: string, content: string, options?: OverlayOptions): Promise<UpdateResult>;
@@ -96,10 +82,6 @@ function scriptEntriesOf(config: ResolvedConfig): Set<string> {
   );
 }
 
-function overlayOptions(pageReload: boolean | undefined): OverlayOptions {
-  return pageReload === undefined ? {} : { pageReload };
-}
-
 interface RunnerModules {
   getModuleById(id: string): object | undefined;
   invalidateModule(node: object): void;
@@ -119,10 +101,6 @@ function toUpdateError(error: unknown, file: string): UpdateError {
   return result;
 }
 
-interface PageClient {
-  send(event: string, payload?: unknown): void;
-}
-
 export function guijam(options: GuijamOptions = {}): Plugin<GuijamApi> {
   const overlays = new Map<string, string>();
   const settled = new Map<string, string>();
@@ -130,34 +108,31 @@ export function guijam(options: GuijamOptions = {}): Plugin<GuijamApi> {
   const tailwindRootIds = new Set<string>();
   const tracker = createUpdateTracker(UPDATE_TIMEOUT_MS);
   let devServer: ViteDevServer | undefined;
-  let daemon: DaemonClient | undefined;
   let root = process.cwd();
   let viteRoot = process.cwd();
   let frameworkClientEntry: RegExp | undefined;
   let publicDir = join(process.cwd(), 'public');
   let candidatesDir = '';
   let scriptEntries = new Set<string>();
-  const pages = new Pages<PageClient>(dropRun, releaseRun);
-  const socketIds = new WeakMap<PageClient, string>();
-
-  function dropRun(runId: string): void {
-    if (!daemon) return;
-    for (const type of ['generate.cancel', 'generate.discard'] as const) {
-      daemon.request({ type, payload: { runId } }).catch((error: unknown) => {
-        devServer?.config.logger.warn(
-          `[guijam] could not drop run ${runId} of a closed page: ${error instanceof Error ? error.message : String(error)}`,
-        );
-      });
-    }
-  }
-
-  function releaseRun(runId: string): void {
-    daemon?.request({ type: 'preview.release', payload: { runId } }).catch((error: unknown) => {
-      devServer?.config.logger.warn(
-        `[guijam] could not release the preview of run ${runId}: ${error instanceof Error ? error.message : String(error)}`,
-      );
-    });
-  }
+  const bridge = createBridge({
+    root: () => root,
+    daemonBinary: options.daemonBinary,
+    logger: {
+      info: (message) => devServer?.config.logger.info(message, { timestamp: true }),
+      warn: (message) => devServer?.config.logger.warn(message),
+    },
+    hello: () => ({
+      type: 'plugin.hello',
+      payload: {
+        pluginVersion: PLUGIN_VERSION,
+        viteVersion,
+        root,
+        tailwindRoots: tailwindRootFiles(),
+      },
+    }),
+    applyOverlay,
+  });
+  const { pages } = bridge;
 
   const compilers = new Map<string, Promise<((...args: never[]) => unknown) | null>>();
 
@@ -190,103 +165,8 @@ export function guijam(options: GuijamOptions = {}): Plugin<GuijamApi> {
     return loading;
   }
 
-  function socketId(client: PageClient): string {
-    const known = socketIds.get(client);
-    if (known) return known;
-    const id = `socket-${randomUUID()}`;
-    socketIds.set(client, id);
-    return id;
-  }
-
   function tailwindRootFiles(): string[] {
     return [...new Set([...tailwindRootIds].map((id) => id.split('?', 1)[0] ?? id))];
-  }
-
-  async function answerDaemon(message: GuijamMessage): Promise<GuijamMessage | undefined> {
-    switch (message.type) {
-      case 'overlay.set':
-        return {
-          type: 'update.result',
-          payload: await applyOverlay(
-            message.payload.file,
-            message.payload.content,
-            overlayOptions(message.payload.pageReload),
-          ),
-        };
-      case 'overlay.clear':
-        return {
-          type: 'update.result',
-          payload: await applyOverlay(
-            message.payload.file,
-            undefined,
-            overlayOptions(message.payload.pageReload),
-          ),
-        };
-      case 'generate.progress':
-        pages.client(message.payload.runId)?.send('gj:event', message);
-        return undefined;
-      default:
-        return undefined;
-    }
-  }
-
-  async function relay(data: unknown): Promise<GuijamMessage> {
-    const checked = checkWidgetRequest(data);
-    if (!checked.ok) return checked.reply;
-    const { id } = checked.message;
-    if (!daemon) {
-      return errorReply(
-        'DAEMON_UNAVAILABLE',
-        'This dev server runs without the GUIJam daemon.',
-        id,
-        'Set GUIJAM_GJD_BIN to the gjd binary, then restart the dev server.',
-      );
-    }
-    try {
-      const reply = await daemon.request(checked.message, replyWindowMs(checked.message.type));
-      const line = terminalLine(reply);
-      if (line) devServer?.config.logger.info(`[guijam] ${line}`, { timestamp: true });
-      return { ...reply, id };
-    } catch (error) {
-      return errorReply(
-        'DAEMON_UNAVAILABLE',
-        error instanceof Error ? error.message : String(error),
-        id,
-        'Check `gjd daemon status`, then retry.',
-      );
-    }
-  }
-
-  function connectDaemon(server: ViteDevServer): void {
-    const logger = server.config.logger;
-    const binary = findDaemonBinary(options.daemonBinary);
-    if (!binary) {
-      logger.warn(
-        `[guijam] fine-tune and AI edits are off: no gjd binary for ${platformKey()}. Reinstall guijam, or set GUIJAM_GJD_BIN to a gjd binary.`,
-      );
-      return;
-    }
-    const client = new DaemonClient({
-      root,
-      binary,
-      hello: () => ({
-        type: 'plugin.hello',
-        payload: {
-          pluginVersion: PLUGIN_VERSION,
-          viteVersion,
-          root,
-          tailwindRoots: tailwindRootFiles(),
-        },
-      }),
-      onMessage: answerDaemon,
-      onConnectionChange: (connected) => {
-        if (!connected) logger.warn('[guijam] daemon disconnected; reconnecting');
-      },
-      onUnavailable: (reason) => logger.warn(`[guijam] daemon unavailable: ${reason}`),
-    });
-    client.start();
-    server.httpServer?.once('close', () => client.stop());
-    daemon = client;
   }
 
   async function syncCandidates(id: string, content: string | undefined): Promise<void> {
@@ -442,7 +322,7 @@ export function guijam(options: GuijamOptions = {}): Plugin<GuijamApi> {
     api: {
       setOverlay: (file, content, options) => applyOverlay(file, content, options),
       clearOverlay: (file, options) => applyOverlay(file, undefined, options),
-      request: (message) => relay(message),
+      request: (message) => bridge.relay(message),
     },
 
     async hotUpdate({ type, file, read, modules }) {
@@ -518,34 +398,9 @@ export function guijam(options: GuijamOptions = {}): Plugin<GuijamApi> {
       server.environments.client.hot.on('vite:client:disconnect', (_data, client) => {
         pages.left(client);
       });
-      server.environments.client.hot.on('gj:request', async (raw, client) => {
-        const { pageId, data } = splitPage(raw, socketId(client));
-        pages.seen(client, pageId);
-        const attaching = requestRunId(data, 'generate.attach');
-        if (attaching !== undefined) {
-          const kept = await pages.attach(attaching);
-          const id = requestId(data);
-          client.send(
-            'gj:response',
-            kept
-              ? { ...kept, ...(id === undefined ? {} : { id }) }
-              : errorReply(
-                  'UNKNOWN_CHANGESET',
-                  'This drawing stopped while the page was reloading.',
-                  id,
-                  'Generate it again.',
-                ),
-          );
-          return;
-        }
-        const discarded = requestRunId(data, 'generate.discard');
-        if (discarded !== undefined) pages.discarded(pageId, discarded);
-        const reply = relay(data);
-        const runId = generationRunId(data);
-        if (runId !== undefined) pages.started(pageId, runId, reply);
-        client.send('gj:response', await reply);
-      });
-      connectDaemon(server);
+      server.environments.client.hot.on('gj:request', (raw, client) => bridge.handle(raw, client));
+      const stop = bridge.connect();
+      if (stop) server.httpServer?.once('close', stop);
     },
 
     resolveId(source, importer) {
@@ -621,7 +476,7 @@ export function guijam(options: GuijamOptions = {}): Plugin<GuijamApi> {
         }
         if (this.environment.name === 'client' && !tailwindRootIds.has(id)) {
           tailwindRootIds.add(id);
-          daemon?.notify({ type: 'tailwind.roots', payload: { files: tailwindRootFiles() } });
+          bridge.notify({ type: 'tailwind.roots', payload: { files: tailwindRootFiles() } });
         }
         const cssDir = dirname(id.split('?', 1)[0] ?? id);
         const source = normalizePath(relative(cssDir, candidatesDir));

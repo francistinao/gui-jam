@@ -12,6 +12,19 @@
     "./daemon-binary": {
       "types": "./dist/daemon-binary.d.ts",
       "default": "./dist/daemon-binary.js"
+    },
+    "./next": {
+      "types": "./dist/next.d.ts",
+      "default": "./dist/next.js"
+    },
+    "./next/client": "./dist/next-client.js",
+    "./next/loader": {
+      "types": "./dist/next-loader.d.ts",
+      "default": "./dist/next-loader.js"
+    },
+    "./next/version": {
+      "types": "./dist/next-version.d.ts",
+      "default": "./dist/next-version.js"
     }
   },
   "files": [
@@ -29,6 +42,7 @@
     "@guijam/contracts-ts": "workspace:*",
     "@guijam/overlay": "workspace:*",
     "@types/node": "22.20.5",
+    "@types/ws": "8.18.2",
     "svelte": "5.57.3",
     "typescript": "7.0.2",
     "vite": "8.3.5",
@@ -37,6 +51,7 @@
   "dependencies": {
     "lucide": "1.66.0",
     "magic-string": "1.4.5",
-    "oxc-parser": "0.157.0"
+    "oxc-parser": "0.157.0",
+    "ws": "8.22.1"
   }
 }

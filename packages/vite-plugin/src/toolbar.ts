@@ -3,7 +3,10 @@ import type { Tool, Widget, WidgetHost, WidgetModule } from '@guijam/overlay/hos
 import { createElement, type IconNode, MousePointer, Pencil } from 'lucide';
 import { LOGO_DATA_URL } from './logo.js';
 
-type HotContext = NonNullable<ImportMeta['hot']>;
+export interface ToolbarChannel {
+  send(event: 'gj:request', data: unknown): void;
+  on(event: 'gj:response' | 'gj:event', listener: (data: GuijamMessage) => void): void;
+}
 
 const WIDGET_URL = '/@guijam/widget.js';
 const REQUEST_TIMEOUT_MS = 20_000;
@@ -99,7 +102,7 @@ function hasSavedJobs(): boolean {
   }
 }
 
-function createRequester(hot: HotContext): WidgetHost['request'] {
+function createRequester(hot: ToolbarChannel): WidgetHost['request'] {
   const page = pageId();
   let next = 1;
   const waiting = new Map<string, (reply: GuijamMessage) => void>();
@@ -133,7 +136,7 @@ function createRequester(hot: HotContext): WidgetHost['request'] {
     });
 }
 
-export function bootToolbar(hot: HotContext): void {
+export function bootToolbar(hot: ToolbarChannel, widgetUrl = WIDGET_URL): void {
   const hostElement = document.createElement('div');
   hostElement.id = 'guijam-root';
   document.documentElement.append(hostElement);
@@ -202,8 +205,10 @@ export function bootToolbar(hot: HotContext): void {
   };
 
   const loadWidget = (): Promise<Widget> => {
-    widget ??= import(/* @vite-ignore */ WIDGET_URL).then((module: unknown) => {
-      if (!isWidgetModule(module)) throw new Error(`${WIDGET_URL} is not the GUIJam widget`);
+    widget ??= import(
+      /* @vite-ignore */ /* webpackIgnore: true */ /* turbopackIgnore: true */ widgetUrl
+    ).then((module: unknown) => {
+      if (!isWidgetModule(module)) throw new Error(`${widgetUrl} is not the GUIJam widget`);
       return module.mount({ shadowRoot, hostElement, request, onEvent, onToolChange: show });
     });
     return widget;

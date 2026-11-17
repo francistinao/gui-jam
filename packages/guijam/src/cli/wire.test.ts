@@ -7,6 +7,7 @@ import {
   addAstroIntegration,
   addGuijamPlugin,
   addNuxtModule,
+  addWithGuijam,
   callsGuijam,
   hasNuxtModule,
   isWired,
@@ -245,11 +246,62 @@ export default defineConfig({
     });
   });
 
+  it('wraps the exported Next config with withGuijam, outermost, in ESM and CommonJS', () => {
+    const esm = addWithGuijam(
+      "import type { NextConfig } from 'next';\n\nconst config: NextConfig = { reactStrictMode: true };\n\nexport default withSentry(config);\n",
+      'next.config.ts',
+    );
+    const cjs = addWithGuijam('module.exports = { reactStrictMode: true };\n', 'next.config.js');
+    const satisfied = addWithGuijam(
+      "import type { NextConfig } from 'next';\nexport default { images: {} } satisfies NextConfig;\n",
+      'next.config.ts',
+    );
+
+    expect(esm).toMatchObject({ kind: 'added' });
+    expect(esm.kind === 'added' && esm.code).toContain("import { withGuijam } from 'guijam/next';");
+    expect(esm.kind === 'added' && esm.code).toContain(
+      'export default withGuijam(withSentry(config));',
+    );
+    expect(cjs.kind === 'added' && cjs.code).toBe(
+      "const { withGuijam } = require('guijam/next');\nmodule.exports = withGuijam({ reactStrictMode: true });\n",
+    );
+    expect(satisfied.kind === 'added' && satisfied.code).toContain(
+      'export default withGuijam({ images: {} } satisfies NextConfig);',
+    );
+    expect(
+      addWithGuijam("import { withGuijam as gj } from 'guijam/next';\nexport default gj({});\n"),
+    ).toEqual({ kind: 'present' });
+    expect(addWithGuijam('export default function config() { return {}; }\n')).toEqual({
+      kind: 'manual',
+      reason: 'it has no exported config to wrap',
+    });
+  });
+
+  it('wires Next 16.3+ apps and refuses older ones with the reason', async () => {
+    const current = app(
+      { 'next.config.mjs': 'export default {};\n' },
+      { next: '16.4.4', react: '19.3.1' },
+    );
+    const old = app({ 'next.config.mjs': 'export default {};\n' }, { next: '16.2.1' });
+
+    expect(await wireProject(detectProject(current, {}))).toEqual({
+      status: 'added',
+      file: join(current, 'next.config.mjs'),
+    });
+    expect(await isWired(detectProject(current, {}))).toBe(true);
+    expect(await wireProject(detectProject(old, {}))).toEqual({
+      status: 'unsupported',
+      reason:
+        'GUIJam needs Next.js 16.3 or newer (this app has 16.2.1). Upgrade Next.js, then run init again.',
+    });
+    expect(readFileSync(join(old, 'next.config.mjs'), 'utf8')).toBe('export default {};\n');
+  });
+
   it('leaves frameworks without an adapter untouched', async () => {
-    const root = app({ 'next.config.mjs': 'export default {};\n' }, { next: '^16.0.0' });
+    const root = app({ 'angular.json': '{}\n' }, { '@angular/core': '^21.0.0' });
 
     expect(await wireProject(detectProject(root, {}))).toMatchObject({ status: 'unsupported' });
-    expect(readFileSync(join(root, 'next.config.mjs'), 'utf8')).toBe('export default {};\n');
+    expect(readFileSync(join(root, 'angular.json'), 'utf8')).toBe('{}\n');
   });
 
   it('adds the Nuxt module once and recognises it afterwards', async () => {

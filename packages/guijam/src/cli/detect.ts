@@ -26,6 +26,7 @@ export const SUPPORTED_FRAMEWORKS: ReadonlySet<FrameworkId> = new Set([
   ...VITE_FRAMEWORKS,
   'nuxt',
   'astro',
+  'next',
 ]);
 
 export interface Project {
@@ -37,6 +38,7 @@ export interface Project {
   ui: string | undefined;
   styling: string;
   viteVersion: string | undefined;
+  frameworkVersion: string | undefined;
   configFile: string | undefined;
   typescript: boolean;
   devScript: string | undefined;
@@ -236,6 +238,7 @@ export function detectProject(root: string, env: NodeJS.ProcessEnv = process.env
     viteVersion: VITE_FRAMEWORKS.has(framework)
       ? installedVersion(root, 'vite', deps.vite)
       : undefined,
+    frameworkVersion: framework === 'next' ? installedVersion(root, 'next', deps.next) : undefined,
     configFile,
     typescript: 'typescript' in deps,
     devScript: devScriptOf(stringRecord(manifest.scripts)),
@@ -250,10 +253,9 @@ export function runScriptCommand(packageManager: PackageManager, script: string)
 }
 
 export function describeProject(project: Project): string {
+  const version = project.viteVersion ?? project.frameworkVersion;
   const bundler =
-    project.viteVersion === undefined
-      ? project.frameworkLabel
-      : `${project.frameworkLabel} ${project.viteVersion}`;
+    version === undefined ? project.frameworkLabel : `${project.frameworkLabel} ${version}`;
   const parts = [project.ui, bundler, project.styling, project.packageManager];
   return [...new Set(parts.filter((part): part is string => part !== undefined))].join(' · ');
 }

@@ -117,7 +117,7 @@ describe('detectProject', () => {
       framework: 'next',
       configFile: join(next, 'next.config.ts'),
     });
-    expect(describeProject(detectProject(next, {}))).toBe('React · Next.js · CSS · npm');
+    expect(describeProject(detectProject(next, {}))).toBe('React · Next.js 16.1.0 · CSS · npm');
   });
 
   it('explains a missing package.json', () => {

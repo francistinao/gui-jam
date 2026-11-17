@@ -1,4 +1,5 @@
 import { intro, log, outro } from '@clack/prompts';
+import { supportsNext } from '@guijam/vite-plugin/next/version';
 import {
   describeProject,
   detectProject,
@@ -44,6 +45,7 @@ function nodeCheck(): Check {
 const CONFIG_NAMES: Partial<Record<Project['framework'], string>> = {
   nuxt: 'nuxt.config',
   astro: 'astro.config',
+  next: 'next.config',
 };
 
 export async function projectChecks(project: Project): Promise<Check[]> {
@@ -52,6 +54,13 @@ export async function projectChecks(project: Project): Promise<Check[]> {
     checks.push({
       level: 'fail',
       message: `GUIJam doesn't plug into ${project.frameworkLabel} yet.`,
+    });
+    return checks;
+  }
+  if (project.framework === 'next' && !supportsNext(project.frameworkVersion)) {
+    checks.push({
+      level: 'fail',
+      message: `Next.js ${project.frameworkVersion ?? 'is not installed'}. GUIJam needs Next.js 16.3 or newer.`,
     });
     return checks;
   }

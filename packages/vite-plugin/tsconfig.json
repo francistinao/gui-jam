@@ -8,5 +8,5 @@
     "declaration": true
   },
   "include": ["src"],
-  "exclude": ["src/client.ts", "src/toolbar.ts", "src/logo.ts"]
+  "exclude": ["src/client.ts", "src/next-client.ts", "src/toolbar.ts", "src/logo.ts"]
 }

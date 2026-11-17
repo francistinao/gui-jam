@@ -76,6 +76,11 @@ const widget = new URL('./widget.js', import.meta.resolve('guijam/vite'));
 if (!existsSync(widget)) {
   throw new Error('browser widget not found next to guijam/vite: ' + widget);
 }
+const { withGuijam } = await import('guijam/next');
+const untouched = { reactStrictMode: true };
+if ((await withGuijam(untouched)('phase-production-build', {})) !== untouched) {
+  throw new Error('guijam/next changed a production config');
+}
 const { default: astro } = await import('guijam/astro');
 const integration = astro();
 if (integration.name !== 'guijam' || typeof integration.hooks['astro:config:setup'] !== 'function') {
@@ -85,11 +90,13 @@ if (integration.name !== 'guijam' || typeof integration.hooks['astro:config:setu
 
 cat > check.ts <<'TS'
 import guijamAstro from 'guijam/astro';
+import { withGuijam } from 'guijam/next';
 import { type GuijamApi, guijam, type UpdateResult } from 'guijam/vite';
 import type { Plugin } from 'vite';
 
 export const plugin: Plugin<GuijamApi> = guijam();
 export const integration: { name: string } = guijamAstro({ root: '.' });
+export const nextConfig = withGuijam({ reactStrictMode: true });
 export const ok: UpdateResult['status'] = 'timeout';
 // @ts-expect-error not a status
 export const bad: UpdateResult['status'] = 'not-a-status';
