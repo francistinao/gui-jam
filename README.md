@@ -16,9 +16,9 @@
 
 ## Introduction
 
-GUIJam turns the app running in your Vite dev server into an editable canvas. Point at an element, circle it, or sketch what you want, describe the change in plain words, and GUIJam previews it live in the page before anything touches your files. When you keep a change, it lands as a minimal edit in the component that renders it, with one-click undo.
+GUIJam turns the app running in your dev server into an editable canvas. Point at an element, circle it, or sketch what you want, describe the change in plain words, and GUIJam previews it live in the page before anything touches your files. When you keep a change, it lands as a minimal edit in the component that renders it, with one-click undo.
 
-GUIJam drives the AI coding CLI you already use and are logged into, such as Claude Code, Codex or OpenCode. There are no API keys to configure and no credentials leave your machine. Everything runs only in development: production builds are byte-for-byte the same with or without it.
+GUIJam drives the AI coding CLI you already use and are logged into, such as Claude Code, Codex or OpenCode. There are no API keys to configure and no credentials leave your machine. Everything runs only in development: production builds are the same with or without it.
 
 ## Quick start
 
@@ -32,17 +32,11 @@ npx guijam@latest init
 
 1. Detects your package manager, framework and styling.
 2. Adds `guijam` as a dev dependency.
-3. Adds `guijam()` to your Vite config. If the config is too dynamic to edit safely, it shows the lines to add.
-4. Lists the AI coding CLIs on your machine (Claude Code, Codex, OpenCode) and saves the one you pick. With OpenCode it also lets you choose the model, such as DeepSeek or GLM.
+3. Wires GUIJam into your framework's config, as shown in [Supported frameworks](#supported-frameworks). If the config is too dynamic to edit safely, it shows the lines to add.
+4. Lists the AI coding CLIs on your machine and saves the one you pick. With OpenCode it also lets you choose the model, such as DeepSeek or GLM.
 5. Runs that CLI's own login if you aren't logged in yet. GUIJam never reads your credentials.
 
-Then start your dev server as usual:
-
-```bash
-npm run dev
-```
-
-The GUIJam toolbar appears at the bottom right of your page.
+Then start your dev server as usual, for example `npm run dev`. The GUIJam toolbar appears at the bottom right of your page.
 
 | Tool | What to do |
 |---|---|
@@ -55,11 +49,27 @@ Every applied change shows an **Undo** for 10 seconds, and `Alt+Shift+M` hides t
 
 `npx guijam doctor` checks the setup, and `npx guijam provider use codex` switches the AI tool.
 
+## Supported frameworks
+
+| Framework | What `init` adds | Previews |
+|---|---|---|
+| Vite 6, 7 or 8 with React, Preact, Solid, Vue or Svelte | `guijam()` first in `vite.config` | Live, through hot reload |
+| Laravel, Inertia, or any backend that renders the HTML | `guijam()` first in `vite.config` | Live. GUIJam loads from your Vite script entries. |
+| SvelteKit | `guijam()` before `sveltekit()` | Live |
+| Nuxt 4 | `'guijam/nuxt'` in `modules` | Live |
+| React Router 7 or 8, framework mode | `guijam()` before `reactRouter()` | Live |
+| SolidStart 2 (needs Node 24) | `guijam()` before `solidStart()` | Live |
+| Astro 7 | `guijam()` from `guijam/astro` in `integrations` | Fine-tune changes the page in place. AI variants re-render the page, and the panel comes back after the reload. Islands update live. |
+| Next.js 16.3 or later, App Router, Turbopack or webpack | `withGuijam(...)` from `guijam/next` around your config | Live, for client and server components |
+
+**Styling.** Fine-tune writes Tailwind CSS classes when your project uses Tailwind, `color` and `rounded` props on Vuetify components, and inline styles everywhere else. Draw and Ask work with any CSS.
+
+**Not supported yet:** Windows, Angular, SolidStart 1 (vinxi) and the Next.js Pages Router. In Next.js, a sketch that would create new component files can't be previewed yet.
+
 ### Requirements
 
-- Node `^20.19.0` or `>=22.12.0`, on macOS or Linux
-- Vite 6, 7 or 8, with React, Preact or Solid. Vue, Svelte, Nuxt, Next.js and Angular support is in progress.
-- Tailwind CSS for the fine-tune panel. Draw and Ask work with any CSS.
+- Node `^20.19.0` or `>=22.12.0` on macOS or Linux. SolidStart 2 itself needs Node 24.
+- One of the frameworks above.
 - An AI coding CLI, installed and logged in: [Claude Code](https://claude.com/claude-code), [Codex](https://github.com/openai/codex) or [OpenCode](https://opencode.ai). OpenCode reaches DeepSeek, GLM and many other models with your own key. [Qwen Code](https://github.com/QwenLM/qwen-code) and [Gemini CLI](https://github.com/google-gemini/gemini-cli) are supported too, but haven't been verified live yet. `init` helps you pick one and log in.
 
 ### Pages rendered by a backend
@@ -68,31 +78,33 @@ With Laravel's `@vite` directive, Inertia, or any server that renders the HTML i
 
 ## Core features
 
-- **Source-mapped elements.** Every element knows the file, line and column of the JSX that rendered it, including polymorphic components such as `asChild` buttons.
-- **Live previews, never written early.** Previews are served from memory through Vite's module graph and hot reload, so switching between variants never changes a file on disk.
-- **Fine-tune like a design tool.** The panel adapts to the element's real Tailwind classes, prefers your theme tokens, and writes a one-line change.
+- **Source-mapped elements.** Every element knows the file, line and column that rendered it, in JSX, Vue, Svelte and Astro templates, including polymorphic components such as `asChild` buttons and Vue component usages.
+- **Live previews, never written early.** Previews are served from memory through Vite's module graph or, in Next.js, through files GUIJam keeps in `.guijam/`. Switching between variants never changes your source files.
+- **Fine-tune like a design tool.** The panel reads the element's real classes and styles, prefers your theme tokens, and writes a one-line change.
 - **Three variants per request.** One call to your CLI returns three takes on the request, with live progress while it works.
 - **Exact edits without AI.** Prompts like "make it blue and pill-shaped" become a precise edit instantly, with no model call. Ask for AI variations when you want them.
 - **Answers, not just edits.** Ask about an element and get an answer that points at the files involved.
 - **References across the page.** "Use the image from the navbar here" works, because GUIJam indexes your project's assets and the page you are looking at.
-- **Sketch to UI.** Rough out a layout or an icon. GUIJam sends the sketch and a screenshot of the page, then places the new markup in the right component.
-- **Generated icons.** Icons drawn from your sketches are saved as lightweight SVG, or WEBP when a raster image fits better.
+- **Sketch to UI.** Rough out a layout or an icon. GUIJam sends the sketch and a screenshot of the page, then places the new markup in the right component, split into atoms, molecules and organisms when your project has components.
+- **Inspiration and links.** Paste or drop images next to your prompt, or paste a link: GUIJam reads the page's text, colors and fonts, and takes a screenshot with your installed Chromium browser.
+- **3D and motion when asked.** Requests that need three.js, Motion or GSAP can use them, after you approve the install.
 - **Safe writes.** Edits are journaled with the exact previous bytes, conflicts with your own unsaved work are refused, and undo restores files exactly.
 - **Your CLI, your login.** GUIJam runs the provider CLI headlessly with no write tools and never reads its credentials.
 
 ## Architecture
 
 ```
- Browser                       Vite dev server                 gjd daemon (Rust)               Provider CLI
-┌──────────────────┐  HMR   ┌────────────────────────┐   WS    ┌───────────────────────┐ stdio ┌──────────────┐
-│ GUIJam widget    │◀──────▶│ guijam() plugin        │◀───────▶│ inspect · patch ·     │◀─────▶│ Your AI CLI  │
-│ in a shadow root │        │ source locations,      │  token  │ journal · routing ·   │       │ (headless)   │
-└──────────────────┘        │ in-memory previews     │         │ providers             │       └──────────────┘
-                            └────────────────────────┘         └───────────────────────┘
+ Browser                       Dev server                      gjd daemon (Rust)               Provider CLI
+┌──────────────────┐        ┌────────────────────────┐   WS    ┌───────────────────────┐ stdio ┌──────────────┐
+│ GUIJam widget    │◀──────▶│ guijam() plugin, or    │◀───────▶│ inspect · patch ·     │◀─────▶│ Your AI CLI  │
+│ in a shadow root │        │ withGuijam() in Next   │  token  │ journal · routing ·   │       │ (headless)   │
+└──────────────────┘        └────────────────────────┘         │ providers             │       └──────────────┘
+                                                               └───────────────────────┘
 ```
 
-- **The widget** lives in a shadow root, so your app's styles never leak into it and its styles never leak out. It talks only to the Vite dev server, over the existing hot-reload channel.
-- **The Vite plugin** adds source locations to JSX elements, serves previews from memory in place of the files on disk, and reports whether each hot update succeeded.
+- **The widget** lives in a shadow root, so your app's styles never leak into it and its styles never leak out. It talks only to your dev server: Vite's hot-reload channel, or a localhost relay in Next.js.
+- **The Vite plugin** adds source locations to elements, serves previews from memory in place of the files on disk, and reports whether each hot update succeeded.
+- **In Next.js**, `withGuijam()` adds a loader that marks elements and serves previews, loads the toolbar through `instrumentationClientInject`, and starts a relay on localhost that connects the page to `gjd` with a per-session token.
 - **The `gjd` daemon** is the only process that writes to your project. It reads the element's source, routes each request, runs your CLI, validates every proposed edit against the current file, and journals each commit for undo. It listens on localhost only and requires a per-session token.
 - **Your CLI** receives the relevant code inline and answers with structured edits. It is never given tools that can change files.
 
@@ -115,6 +127,20 @@ Run the example app against your own checkout:
 GUIJAM_GJD_BIN=$PWD/target/debug/gjd pnpm --filter small-react-tailwind4 dev
 ```
 
+Try GUIJam in one of your own Vite apps without changing its tracked files, then remove it again:
+
+```bash
+scripts/try-guijam.sh setup ../my-app
+scripts/try-guijam.sh clean ../my-app
+```
+
+Create fresh apps for every supported framework with their official starters and a real `guijam init`, then test them all:
+
+```bash
+scripts/playground.sh
+pnpm test:playground
+```
+
 Try the setup CLI on any app:
 
 ```bash
@@ -129,8 +155,8 @@ scripts/gate.sh
 
 | Path | What it is |
 |---|---|
-| `packages/guijam` | The published package; `guijam/vite` bundles the plugin |
-| `packages/vite-plugin` | Vite plugin: source locations, in-memory previews, hot-update tracking |
+| `packages/guijam` | The published package: `guijam/vite`, `guijam/nuxt`, `guijam/astro`, `guijam/next` and the `guijam` CLI |
+| `packages/vite-plugin` | Source locations, in-memory previews, hot-update tracking, and the Next.js loader and relay |
 | `packages/overlay` | The browser widget (React in a shadow root) |
 | `packages/contracts-ts` | TypeScript types generated from `contracts/` |
 | `contracts/` | JSON Schemas shared by every process |
@@ -139,10 +165,14 @@ scripts/gate.sh
 | `crates/gjd-daemon` | The `gjd` binary |
 | `fixtures/` | Apps the tests run against |
 | `tests/e2e/` | Playwright suites |
+| `tests/playground/` | Playwright suite for the apps `scripts/playground.sh` creates |
 
 ### Releasing
 
-Publish a GitHub release tagged `vX.Y.Z`. CI runs every check on the tag, builds `gjd` for macOS (arm64, x64) and Linux (x64, arm64), and publishes it as `@guijam/gjd-<os>-<arch>` packages, which `guijam` installs as optional dependencies. It then publishes `guijam@X.Y.Z`. Tags such as `vX.Y.Z-rc.N`, marked as pre-releases, publish under the `next` dist-tag.
+1. Run the `npm-check` workflow (Actions, then Run workflow). It confirms that `NPM_TOKEN` authenticates and belongs to the `guijam` npm organization, and publishes nothing.
+2. Publish a GitHub release tagged `vX.Y.Z-rc.N` and marked as a pre-release. CI runs every check on the tag, builds `gjd` for macOS (arm64, x64) and Linux (x64, arm64), publishes it as `@guijam/gjd-<os>-<arch>` packages, which `guijam` installs as optional dependencies, then publishes `guijam` under the `next` dist-tag.
+3. Try it from npm: `npx guijam@next init` in an app, or `GUIJAM_SPEC=guijam@X.Y.Z-rc.N scripts/playground.sh` followed by `pnpm test:playground`.
+4. Publish the release `vX.Y.Z` to move `latest`.
 
 ## Credits
 
@@ -156,5 +186,3 @@ Publish a GitHub release tagged `vX.Y.Z`. CI runs every check on the tag, builds
 ## License
 
 [MIT](LICENSE)
-
-<p align="center">Made with ♥ by Francis</p>
