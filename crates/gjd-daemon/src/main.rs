@@ -20,7 +20,7 @@ rationale probe, missing empty, and a single create_file op for src/GuiJamProbe.
 'export {}'.";
 
 #[derive(Parser)]
-#[command(name = "gjd", version, about = "GUIJam daemon and developer CLI")]
+#[command(name = "gjd", version = gjd_daemon::VERSION, about = "GUIJam daemon and developer CLI")]
 struct Cli {
     #[command(subcommand)]
     command: Command,

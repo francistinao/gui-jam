@@ -748,7 +748,7 @@ impl Daemon {
                 Some(GuijamMessage::HelloOk {
                     id,
                     payload: HelloOk {
-                        daemon_version: env!("CARGO_PKG_VERSION").to_owned(),
+                        daemon_version: crate::VERSION.to_owned(),
                     },
                 })
             }

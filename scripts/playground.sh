@@ -6,10 +6,17 @@ play="${GUIJAM_PLAYGROUND:-$HOME/Documents/personal/guijam-playground}"
 node24="${GUIJAM_NODE24_BIN:-$(ls -d "$HOME"/.nvm/versions/node/v24.*/bin 2>/dev/null | tail -1)}"
 only="${1:-}"
 
+spec="${GUIJAM_SPEC:-}"
+
 mkdir -p "$play/apps"
-rm -f "$play"/guijam-*.tgz
-pnpm -s --dir "$repo/packages/guijam" pack --pack-destination "$play" > /dev/null
-tarball="$(ls "$play"/guijam-*.tgz)"
+if [ -z "$spec" ]; then
+  rm -f "$play"/guijam-*.tgz
+  pnpm -s --dir "$repo/packages/guijam" pack --pack-destination "$play" > /dev/null
+  spec="$(ls "$play"/guijam-*.tgz)"
+  gjd_env="GUIJAM_GJD_BIN=$repo/target/debug/gjd"
+else
+  gjd_env="GUIJAM_PLAYGROUND_SPEC=$spec"
+fi
 
 wanted() {
   [ -z "$only" ] || [ "$only" = "$1" ]
@@ -52,11 +59,15 @@ for dir in "$play"/apps/*/; do
     printf 'minimumReleaseAge: 20160\n' >> "$dir/pnpm-workspace.yaml"
   fi
   node "$repo/scripts/pin-mature.mjs" "$dir/package.json" guijam
-  (cd "$dir" && PATH="$path_prefix$PATH" pnpm add -D "$tarball" > /dev/null)
-  (cd "$dir" && PATH="$path_prefix$PATH" GUIJAM_GJD_BIN="$repo/target/debug/gjd" \
+  (cd "$dir" && PATH="$path_prefix$PATH" pnpm add -D "$spec" > /dev/null)
+  (cd "$dir" && env PATH="$path_prefix$PATH" "$gjd_env" \
     node node_modules/guijam/dist/cli.js init --yes --skip-install --provider claude-code)
 done
 
 echo
 echo "Playground ready in $play/apps. Start an app with:"
-echo "  cd $play/apps/<app> && GUIJAM_GJD_BIN=$repo/target/debug/gjd pnpm dev"
+if [ -n "${GUIJAM_SPEC:-}" ]; then
+  echo "  cd $play/apps/<app> && pnpm dev"
+else
+  echo "  cd $play/apps/<app> && GUIJAM_GJD_BIN=$repo/target/debug/gjd pnpm dev"
+fi

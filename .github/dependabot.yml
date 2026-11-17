@@ -7,7 +7,7 @@ updates:
       interval: weekly
       day: monday
     cooldown:
-      default-days: 7
+      default-days: 14
       semver-major-days: 14
     versioning-strategy: increase
     commit-message:
@@ -47,7 +47,7 @@ updates:
       interval: weekly
       day: monday
     cooldown:
-      default-days: 7
+      default-days: 14
       semver-major-days: 14
     commit-message:
       prefix: build
@@ -82,7 +82,7 @@ updates:
       interval: weekly
       day: monday
     cooldown:
-      default-days: 7
+      default-days: 14
     commit-message:
       prefix: ci
     groups:

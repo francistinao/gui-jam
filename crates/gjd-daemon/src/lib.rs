@@ -33,6 +33,11 @@ use crate::daemon::Daemon;
 use crate::run_dir::{DaemonInfo, PROTOCOL_VERSION, RunDir};
 
 const TOKEN_BYTES: usize = 32;
+
+pub const VERSION: &str = match option_env!("GJD_VERSION") {
+    Some(version) => version,
+    None => env!("CARGO_PKG_VERSION"),
+};
 const IDLE_CHECK_EVERY: Duration = Duration::from_secs(15);
 
 #[derive(Debug, PartialEq, Eq)]
@@ -72,7 +77,7 @@ pub async fn run(project: &Path, idle_timeout: Duration) -> Result<Outcome, RunE
         pid,
         port,
         token: token.clone(),
-        version: env!("CARGO_PKG_VERSION").to_owned(),
+        version: VERSION.to_owned(),
         protocol: PROTOCOL_VERSION,
     })?;
 

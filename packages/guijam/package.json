@@ -1,7 +1,28 @@
 {
   "name": "guijam",
   "version": "0.0.0",
-  "description": "Draw on your running Vite app, get live UI variants from your own LLM CLI, and write minimal source edits.",
+  "description": "Draw on your running web app (Vite, Next.js, Nuxt, Astro, SvelteKit, React Router), preview AI UI variants live, and keep them as minimal source edits.",
+  "keywords": [
+    "ui",
+    "design",
+    "ai",
+    "devtools",
+    "vite-plugin",
+    "nextjs",
+    "nuxt",
+    "astro",
+    "sveltekit",
+    "react-router",
+    "tailwindcss",
+    "claude-code",
+    "codex",
+    "opencode"
+  ],
+  "author": "Francis Tin-ao",
+  "homepage": "https://github.com/francistinao/gui-jam#readme",
+  "bugs": {
+    "url": "https://github.com/francistinao/gui-jam/issues"
+  },
   "license": "MIT",
   "type": "module",
   "bin": {

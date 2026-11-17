@@ -34,7 +34,9 @@ const AGENT_MARKERS = /^(?:CLAUDE|AI_AGENT|CODEX|CURSOR_AGENT|GEMINI_CLI|OPENCOD
 
 function humanEnvironment(): NodeJS.ProcessEnv {
   return Object.fromEntries(
-    Object.entries(process.env).filter(([name]) => !AGENT_MARKERS.test(name)),
+    Object.entries(process.env).filter(
+      ([name]) => !AGENT_MARKERS.test(name) && name !== 'GUIJAM_GJD_BIN',
+    ),
   );
 }
 
@@ -158,7 +160,7 @@ for (const app of APPS) {
         env: {
           ...humanEnvironment(),
           PATH: path,
-          GUIJAM_GJD_BIN: GJD_BINARY,
+          ...(process.env.GUIJAM_PACKAGED_GJD === '1' ? {} : { GUIJAM_GJD_BIN: GJD_BINARY }),
           NEXT_TELEMETRY_DISABLED: '1',
           NUXT_TELEMETRY_DISABLED: '1',
           ASTRO_TELEMETRY_DISABLED: '1',
