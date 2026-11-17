@@ -47,7 +47,49 @@ Then start your dev server as usual, for example `npm run dev`. The GUIJam toolb
 
 Every applied change shows an **Undo** for 10 seconds, and `Alt+Shift+M` hides the toolbar.
 
-`npx guijam doctor` checks the setup, and `npx guijam provider use codex` switches the AI tool.
+See [Commands](#commands) for everything else, including how to switch the AI tool.
+
+## Commands
+
+Run these in your app's folder.
+
+| Command | What it does |
+|---|---|
+| `npx guijam init` | Sets up GUIJam: adds the package, wires your framework's config, and picks your AI tool and logs it in. Safe to run again. |
+| `npx guijam doctor` | Checks Node, your framework, the config wiring, the `gjd` daemon and your AI tool's login. |
+| `npx guijam provider list` | Lists the AI coding CLIs GUIJam can drive, and whether each is installed and logged in. |
+| `npx guijam provider use <id>` | Switches the AI tool: `claude-code`, `codex`, `opencode`, `qwen-code` or `gemini-cli`. |
+| `npx guijam provider use opencode --model <id>` | With OpenCode, also picks the model, such as `deepseek/deepseek-chat`. |
+| `npx guijam --help` | Shows every command and option. |
+
+Options for `init`:
+
+| Option | What it does |
+|---|---|
+| `-y`, `--yes` | Uses the defaults instead of asking |
+| `--provider <id>` | The AI tool to use |
+| `--model <id>` | The model to use with it |
+| `--skip-install` | Doesn't add `guijam` to `package.json` |
+| `--cwd <dir>` | Runs in another folder |
+
+The AI tool you pick is saved for your user in `~/.config/guijam/config.toml`, applies to every project, and takes effect on your next request without restarting the dev server.
+
+### In the page
+
+| Key | What it does |
+|---|---|
+| `Esc` | Leaves the active tool |
+| `Alt+Shift+M` | Hides or shows the toolbar |
+
+### Settings
+
+| Variable | What it does |
+|---|---|
+| `GUIJAM_GJD_BIN` | Path to a `gjd` binary to use instead of the one installed from npm |
+| `GUIJAM_BROWSER` | Path to the Chromium-based browser that takes screenshots of links in your prompts. By default GUIJam finds Chrome, Brave, Edge or Chromium. |
+| `XDG_CONFIG_HOME` | Moves the saved AI tool choice to `$XDG_CONFIG_HOME/guijam/config.toml` |
+
+GUIJam keeps its run state, logs and undo journal in `.guijam/` in your project. `init` adds that folder to `.gitignore`.
 
 ## Supported frameworks
 
@@ -153,6 +195,26 @@ Run every check the CI runs, stopping at the first failure:
 scripts/gate.sh
 ```
 
+| Command | What it does |
+|---|---|
+| `pnpm build` | Builds every package; the fixtures use the built output |
+| `pnpm check` | Lints and formats with Biome |
+| `pnpm typecheck` | Type-checks the packages and the fixtures |
+| `pnpm test` | Runs the unit tests (Vitest) |
+| `pnpm test:e2e` | Builds, then runs the browser tests (Playwright) against the fixtures |
+| `pnpm test:playground` | Builds, then runs the browser tests against the apps `scripts/playground.sh` creates |
+| `pnpm contracts:gen` | Regenerates the TypeScript and Rust types from `contracts/` |
+| `pnpm contracts:check` | Fails if the generated contracts are out of date |
+| `cargo fmt --all --check` | Checks Rust formatting |
+| `cargo clippy --workspace --all-targets -- -D warnings` | Lints the Rust code |
+| `cargo test --workspace` | Runs the Rust tests |
+| `scripts/smoke-package.sh` | Packs `guijam`, installs it outside the workspace, and checks that it loads and type-checks |
+| `scripts/try-guijam.sh setup\|clean <app>` | Adds GUIJam to one of your Vite apps without touching tracked files, or removes it |
+| `scripts/playground.sh [app]` | Creates or refreshes the playground apps; `GUIJAM_SPEC=guijam@X.Y.Z` installs a published version |
+| `scripts/release-local.sh build\|publish <version>` | Builds or publishes a release from a Mac when GitHub Actions is unavailable |
+| `cargo run -p gjd-daemon -- provider list` | Lists the AI CLIs as the daemon sees them |
+| `cargo run -p gjd-daemon -- provider test claude-code --runs 5` | Runs a real CLI five times and reports timings (spends tokens) |
+
 | Path | What it is |
 |---|---|
 | `packages/guijam` | The published package: `guijam/vite`, `guijam/nuxt`, `guijam/astro`, `guijam/next` and the `guijam` CLI |
@@ -169,10 +231,15 @@ scripts/gate.sh
 
 ### Releasing
 
-1. Run the `npm-check` workflow (Actions, then Run workflow). It confirms that `NPM_TOKEN` authenticates and belongs to the `guijam` npm organization, and publishes nothing.
-2. Publish a GitHub release tagged `vX.Y.Z-rc.N` and marked as a pre-release. CI runs every check on the tag, builds `gjd` for macOS (arm64, x64) and Linux (x64, arm64), publishes it as `@guijam/gjd-<os>-<arch>` packages, which `guijam` installs as optional dependencies, then publishes `guijam` under the `next` dist-tag.
-3. Try it from npm: `npx guijam@next init` in an app, or `GUIJAM_SPEC=guijam@X.Y.Z-rc.N scripts/playground.sh` followed by `pnpm test:playground`.
-4. Publish the release `vX.Y.Z` to move `latest`.
+Versions come from the release tag; nothing in the repo needs a version bump.
+
+1. Publish a GitHub release tagged `vX.Y.Z-rc.N` and marked as a pre-release. CI runs every check on the tag, builds `gjd` for macOS (arm64, x64) and Linux (x64, arm64), publishes it as `@guijam/gjd-<os>-<arch>` packages, which `guijam` installs as optional dependencies, then publishes `guijam` under the `next` dist-tag. Packages already on npm are skipped, so a failed release can be run again.
+2. Try it from npm: `npx guijam@next init` in an app, or `GUIJAM_SPEC=guijam@X.Y.Z-rc.N scripts/playground.sh` followed by `pnpm test:playground`.
+3. Publish the release `vX.Y.Z` to move `latest`.
+
+npm requires two-factor authentication to publish. For CI, either set up npm trusted publishing on each of the five packages (GitHub Actions, workflow `release.yml`, environment `npm`), or store a granular token with "Bypass two-factor authentication" as the `NPM_TOKEN` secret. The `npm-check` workflow (Actions, then Run workflow) confirms that the token works and belongs to the `guijam` organization, and publishes nothing.
+
+Without GitHub Actions, release from a Mac with zig and `cargo-zigbuild` installed: `scripts/release-local.sh build X.Y.Z` builds and smoke-tests everything, then `scripts/release-local.sh publish X.Y.Z next` (or `latest`) publishes it and asks for your npm one-time password.
 
 ## Credits
 
