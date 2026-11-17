@@ -91,7 +91,8 @@ fn inline_tokens(object: &StyleObject) -> Vec<StyleToken> {
         .props
         .iter()
         .filter_map(|prop| {
-            let (_, group, property) = INLINE_GROUPS.iter().find(|(key, _, _)| *key == prop.key)?;
+            let key = template::camel(&prop.key);
+            let (_, group, property) = INLINE_GROUPS.iter().find(|(name, _, _)| *name == key)?;
             let value = prop.value.as_ref().map(|value| {
                 let numeric = value.parse::<f64>().is_ok();
                 if numeric && !UNITLESS.contains(&prop.key.as_str()) {

@@ -334,14 +334,18 @@ export function guijam(options: GuijamOptions = {}): Plugin<GuijamApi> {
       request: (message) => relay(message),
     },
 
-    async hotUpdate({ file, read }) {
+    async hotUpdate({ file, read, modules }) {
       if (this.environment.name !== 'client') return;
       const id = normalizePath(file);
       if (overlays.has(id)) return [];
       const shown = settled.get(id);
       if (shown === undefined) return;
       settled.delete(id);
-      return (await read()) === shown ? [] : undefined;
+      if ((await read()) === shown) return [];
+      for (const mod of modules.filter((entry) => hotReloadable(entry.url))) {
+        await this.environment.reloadModule(mod);
+      }
+      return [];
     },
 
     config() {

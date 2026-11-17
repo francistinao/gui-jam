@@ -6,7 +6,10 @@ use crate::contracts::{
     ContentHash, EditOp, EditOpAddItem, EditOpRemoveItem, EditOpValue, JsxValue, ProjectPath,
     SrcLoc,
 };
-use crate::jsx::{ClassSource, JsxError, StyleObject, StyleSource, check_syntax, find_element};
+use crate::jsx::{
+    ClassSource, JsxError, StyleObject, StyleSource, check_syntax, class_attribute, find_element,
+    is_solid,
+};
 use crate::template::{self, AttributeSlot};
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -49,9 +52,22 @@ struct TextEdit {
     text: String,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Dialect {
+    pub solid: bool,
+}
+
 pub fn apply(
     sources: &BTreeMap<String, String>,
     ops: &[EditOp],
+) -> Result<BTreeMap<String, String>, PatchError> {
+    apply_with(sources, ops, Dialect::default())
+}
+
+pub fn apply_with(
+    sources: &BTreeMap<String, String>,
+    ops: &[EditOp],
+    dialect: Dialect,
 ) -> Result<BTreeMap<String, String>, PatchError> {
     let mut edits: BTreeMap<&str, Vec<TextEdit>> = BTreeMap::new();
     let mut styles: Vec<(StyleKey<'_>, Vec<usize>)> = Vec::new();
@@ -64,11 +80,11 @@ pub fn apply(
             }
             continue;
         }
-        let (file, edit) = resolve(op, edit_op, sources)?;
+        let (file, edit) = resolve(op, edit_op, sources, dialect)?;
         edits.entry(file).or_default().push(edit);
     }
     for (_, members) in styles {
-        let (file, edit) = resolve_style(&members, ops, sources)?;
+        let (file, edit) = resolve_style(&members, ops, sources, dialect)?;
         edits.entry(file).or_default().push(edit);
     }
 
@@ -131,6 +147,7 @@ fn resolve<'s>(
     op: usize,
     edit_op: &EditOp,
     sources: &'s BTreeMap<String, String>,
+    dialect: Dialect,
 ) -> Result<(&'s str, TextEdit), PatchError> {
     match edit_op {
         EditOp::ClassTokens {
@@ -151,10 +168,10 @@ fn resolve<'s>(
                 },
                 ClassSource::None => {
                     let classes = merge_tokens("", add, remove);
-                    let attribute = if template::is_template(path) {
+                    let attribute = if dialect.solid {
                         "class"
                     } else {
-                        "className"
+                        class_attribute(path, source)
                     };
                     TextEdit {
                         op,
@@ -348,6 +365,7 @@ fn resolve_style<'s>(
     members: &[usize],
     ops: &[EditOp],
     sources: &'s BTreeMap<String, String>,
+    dialect: Dialect,
 ) -> Result<(&'s str, TextEdit), PatchError> {
     let op = members[0];
     let EditOp::StyleProp {
@@ -363,12 +381,19 @@ fn resolve_style<'s>(
     let element = find_element(path, source, at.line.get(), at.column.get())
         .map_err(|source| PatchError::Element { op, source })?;
     let css = template::is_template(path);
+    let kebab_keys = matches!(&element.style, StyleSource::Object(object) if object.props.iter().any(|prop| prop.key.contains('-') && !prop.key.starts_with("--")));
+    let solid = dialect.solid || kebab_keys || is_solid(source);
     let mut changes: Vec<(String, Option<String>)> = Vec::new();
     for member in members {
         if let EditOp::StyleProp { prop, value, .. } = &ops[*member] {
             let (name, value) = if css {
                 let property = template::kebab(prop.as_str());
                 let value = css_value(&property, value);
+                (property, value)
+            } else if solid {
+                let property = template::kebab(prop.as_str());
+                let value = css_value(&property, value)
+                    .map(|text| format!("'{}'", text.replace('\\', "\\\\").replace('\'', "\\'")));
                 (property, value)
             } else {
                 (prop.to_string(), style_value(value))
@@ -833,6 +858,80 @@ mod tests {
                 &[class_tokens(content, 1, 18, &["bg-sea"], &[])]
             ),
             Err(PatchError::NotEditable { op: 0 })
+        );
+    }
+
+    #[test]
+    fn solid_components_use_class_rather_than_class_name() {
+        let solid = "import { createSignal } from 'solid-js';\nexport const B = () => <b class=\"bg-brand p-2\" />;\n";
+        let edit = class_tokens(solid, 2, 24, &["bg-sea"], &["bg-brand"]);
+        assert_eq!(
+            apply(&sources(solid), &[edit])
+                .expect("edits")
+                .remove(FILE)
+                .expect("changed"),
+            "import { createSignal } from 'solid-js';\nexport const B = () => <b class=\"bg-sea p-2\" />;\n"
+        );
+        let bare = "import { For } from \"solid-js\";\nexport const B = () => <b />;\n";
+        let added = class_tokens(bare, 2, 24, &["bg-sea"], &[]);
+        assert_eq!(
+            apply(&sources(bare), &[added])
+                .expect("adds")
+                .remove(FILE)
+                .expect("changed"),
+            "import { For } from \"solid-js\";\nexport const B = () => <b class=\"bg-sea\" />;\n"
+        );
+        let react = "export const B = () => <b />;\n";
+        let react_added = class_tokens(react, 1, 24, &["bg-sea"], &[]);
+        assert_eq!(
+            apply(&sources(react), &[react_added])
+                .expect("adds")
+                .remove(FILE)
+                .expect("changed"),
+            "export const B = () => <b className=\"bg-sea\" />;\n"
+        );
+    }
+
+    #[test]
+    fn solid_style_objects_get_css_names_and_string_values() {
+        let solid = "import { For } from 'solid-js';\nexport const B = () => <b style={{ 'background-color': '#fde68a', 'border-radius': '8px', padding: '16px' }} />;\n";
+        let column = 24;
+        let ops = [
+            style(solid, 2, column, "backgroundColor", &json!("#1D4ED8")),
+            style(solid, 2, column, "borderRadius", &json!(12)),
+            style(solid, 2, column, "opacity", &json!(0.5)),
+        ];
+        assert_eq!(
+            apply(&sources(solid), &ops)
+                .expect("edits")
+                .remove(FILE)
+                .expect("changed"),
+            "import { For } from 'solid-js';\nexport const B = () => <b style={{ 'background-color': '#1D4ED8', 'border-radius': '12px', padding: '16px', opacity: '0.5' }} />;\n"
+        );
+    }
+
+    #[test]
+    fn kebab_keys_or_the_solid_dialect_choose_css_names_without_an_import() {
+        let kebab = "export const B = () => <b style={{ 'background-color': '#fde68a' }} />;\n";
+        let ops = [style(kebab, 1, 24, "borderRadius", &json!(4))];
+        assert_eq!(
+            apply(&sources(kebab), &ops)
+                .expect("edits")
+                .remove(FILE)
+                .expect("changed"),
+            "export const B = () => <b style={{ 'background-color': '#fde68a', 'border-radius': '4px' }} />;\n"
+        );
+        let bare = "export const B = () => <b />;\n";
+        let ops = [
+            style(bare, 1, 24, "backgroundColor", &json!("#fff")),
+            class_tokens(bare, 1, 24, &["p-2"], &[]),
+        ];
+        assert_eq!(
+            super::apply_with(&sources(bare), &ops, super::Dialect { solid: true })
+                .expect("edits")
+                .remove(FILE)
+                .expect("changed"),
+            "export const B = () => <b class=\"p-2\" style={{ 'background-color': '#fff' }} />;\n"
         );
     }
 }

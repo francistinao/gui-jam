@@ -960,7 +960,7 @@ impl Daemon {
         let ops = finetune_ops(&style, &request.props, &theme)?;
         let summary = summarize(&file, request.line, &ops);
         let sources = BTreeMap::from([(file.clone(), source.clone())]);
-        let content = patch::apply(&sources, &ops)?
+        let content = patch::apply_with(&sources, &ops, dialect(&project))?
             .remove(&file)
             .unwrap_or_else(|| source.clone());
 
@@ -1252,7 +1252,7 @@ impl Daemon {
     async fn exact_edit(&self, job: &Job<'_>, ops: &[EditOp]) -> Result<GenerateDone, Failure> {
         let file = job.request.file.as_str();
         let sources = BTreeMap::from([(file.to_owned(), job.source.to_owned())]);
-        let content = patch::apply(&sources, ops)?
+        let content = patch::apply_with(&sources, ops, dialect(job.project))?
             .remove(file)
             .unwrap_or_else(|| job.source.to_owned());
         if content == job.source {
@@ -2153,6 +2153,12 @@ fn message_id(message: &GuijamMessage) -> Option<String> {
             .and_then(serde_json::Value::as_str)
             .map(str::to_owned)
     })
+}
+
+fn dialect(project: &Project) -> patch::Dialect {
+    patch::Dialect {
+        solid: project.ui == project::Ui::Solid,
+    }
 }
 
 fn installed(payload: DependenciesInstalled) -> GuijamMessage {

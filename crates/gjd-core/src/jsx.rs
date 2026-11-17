@@ -12,6 +12,8 @@ use oxc_span::{GetSpan, SourceType, Span};
 use crate::srcloc::LineIndex;
 use crate::template;
 
+const SOLID_IMPORT: [&str; 2] = ["from 'solid-js", "from \"solid-js"];
+
 const CLASS_HELPERS: [&str; 5] = ["cn", "clsx", "classnames", "classNames", "cx"];
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -263,7 +265,21 @@ fn read_style(source: &str, value: Option<&JSXAttributeValue<'_>>) -> StyleSourc
 }
 
 fn is_class_name(name: &JSXAttributeName<'_>) -> bool {
-    matches!(name, JSXAttributeName::Identifier(identifier) if identifier.name == "className")
+    matches!(name, JSXAttributeName::Identifier(identifier) if identifier.name == "className" || identifier.name == "class")
+}
+
+#[must_use]
+pub fn is_solid(source: &str) -> bool {
+    SOLID_IMPORT.iter().any(|import| source.contains(import))
+}
+
+#[must_use]
+pub fn class_attribute(path: &str, source: &str) -> &'static str {
+    if template::is_template(path) || is_solid(source) {
+        "class"
+    } else {
+        "className"
+    }
 }
 
 fn read_class(source: &str, value: Option<&JSXAttributeValue<'_>>) -> ClassSource {
