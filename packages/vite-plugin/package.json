@@ -28,6 +28,7 @@
     "@guijam/contracts-ts": "workspace:*",
     "@guijam/overlay": "workspace:*",
     "@types/node": "22.20.5",
+    "svelte": "5.57.3",
     "typescript": "7.0.2",
     "vite": "8.3.5",
     "vue": "3.5.44"

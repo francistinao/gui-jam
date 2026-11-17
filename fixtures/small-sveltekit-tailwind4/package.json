@@ -1,0 +1,22 @@
+{
+  "name": "small-sveltekit-tailwind4",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "imports": {
+    "#lib/*": "./src/lib/*"
+  },
+  "scripts": {
+    "dev": "vite dev"
+  },
+  "devDependencies": {
+    "@sveltejs/adapter-auto": "8.0.0",
+    "@sveltejs/kit": "3.1.1",
+    "@sveltejs/vite-plugin-svelte": "7.3.1",
+    "@tailwindcss/vite": "4.3.4",
+    "guijam": "workspace:*",
+    "svelte": "5.57.3",
+    "tailwindcss": "4.3.4",
+    "vite": "8.3.5"
+  }
+}

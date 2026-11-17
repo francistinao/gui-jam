@@ -40,7 +40,7 @@
   },
   "overrides": [
     {
-      "includes": ["**/*.vue"],
+      "includes": ["**/*.vue", "**/*.svelte"],
       "linter": {
         "rules": {
           "correctness": {

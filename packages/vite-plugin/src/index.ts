@@ -30,6 +30,7 @@ import {
   terminalLine,
 } from './relay.js';
 import { injectSourceLocations } from './transform-srcloc.js';
+import { injectSvelteSourceLocations, type SvelteCompiler } from './transform-svelte-srcloc.js';
 import { injectVueSourceLocations, type VueSfcCompiler } from './transform-vue-srcloc.js';
 import { createUpdateTracker, isUpdateResult } from './update-tracker.js';
 
@@ -53,6 +54,8 @@ const WIDGET_FILE = fileURLToPath(new URL('./widget.js', import.meta.url));
 const UPDATE_TIMEOUT_MS = 3000;
 const JSX_MODULE = /\.[jt]sx$/;
 const VUE_MODULE = /\.vue$/;
+const SVELTE_MODULE = /\.svelte$/;
+const SVELTEKIT_CLIENT_ENTRY = /\/@sveltejs\/kit\/src\/runtime\/client\/entry\.js$/;
 const ASSET_FILE = /\.(?:svg|webp|png|jpe?g|gif|avif|ico)$/i;
 const SCRIPT_MODULE = /\.[cm]?[jt]sx?$/;
 const CLIENT_IMPORT = `import '${CLIENT_ID}';\n`;
@@ -105,6 +108,7 @@ export function guijam(options: GuijamOptions = {}): Plugin<GuijamApi> {
   let daemon: DaemonClient | undefined;
   let root = process.cwd();
   let viteRoot = process.cwd();
+  let sveltekit = false;
   let publicDir = join(process.cwd(), 'public');
   let candidatesDir = '';
   let scriptEntries = new Set<string>();
@@ -130,25 +134,29 @@ export function guijam(options: GuijamOptions = {}): Plugin<GuijamApi> {
     });
   }
 
-  let vueCompiler: Promise<VueSfcCompiler | null> | undefined;
+  const compilers = new Map<string, Promise<((...args: never[]) => unknown) | null>>();
 
-  function loadVueCompiler(): Promise<VueSfcCompiler | null> {
-    vueCompiler ??= (async () => {
-      try {
-        const entry = createRequire(join(root, 'package.json')).resolve('vue/compiler-sfc');
-        const loaded = (await import(pathToFileURL(entry).href)) as Partial<VueSfcCompiler> & {
-          default?: Partial<VueSfcCompiler>;
-        };
-        const parse = loaded.parse ?? loaded.default?.parse;
-        return parse ? { parse } : null;
-      } catch (error) {
-        devServer?.config.logger.warn(
-          `[guijam] could not load vue/compiler-sfc, so .vue elements have no source locations: ${error instanceof Error ? error.message : String(error)}`,
-        );
-        return null;
-      }
-    })();
-    return vueCompiler;
+  function loadParser(specifier: string): Promise<((...args: never[]) => unknown) | null> {
+    let loading = compilers.get(specifier);
+    if (!loading) {
+      loading = (async () => {
+        try {
+          const entry = createRequire(join(root, 'package.json')).resolve(specifier);
+          const loaded = (await import(pathToFileURL(entry).href)) as {
+            parse?: (...args: never[]) => unknown;
+            default?: { parse?: (...args: never[]) => unknown };
+          };
+          return loaded.parse ?? loaded.default?.parse ?? null;
+        } catch (error) {
+          devServer?.config.logger.warn(
+            `[guijam] could not load ${specifier}, so its files have no source locations: ${error instanceof Error ? error.message : String(error)}`,
+          );
+          return null;
+        }
+      })();
+      compilers.set(specifier, loading);
+    }
+    return loading;
   }
 
   function socketId(client: PageClient): string {
@@ -315,7 +323,7 @@ export function guijam(options: GuijamOptions = {}): Plugin<GuijamApi> {
     return result;
   }
 
-  return {
+  const plugin: Plugin<GuijamApi> = {
     name: 'guijam',
     apply: 'serve',
     enforce: 'pre',
@@ -341,6 +349,8 @@ export function guijam(options: GuijamOptions = {}): Plugin<GuijamApi> {
     },
 
     configResolved(config) {
+      sveltekit = config.plugins.some((entry) => entry.name.startsWith('vite-plugin-sveltekit'));
+      if (sveltekit) delete plugin.transformIndexHtml;
       viteRoot = config.root;
       root = options.root === undefined ? config.root : normalizePath(resolve(options.root));
       publicDir = config.publicDir || join(viteRoot, 'public');
@@ -430,15 +440,28 @@ export function guijam(options: GuijamOptions = {}): Plugin<GuijamApi> {
     transform: {
       order: 'pre',
       async handler(code, id) {
-        const prepend =
-          this.environment.name === 'client' && scriptEntries.has(id.split('?', 1)[0] ?? id)
-            ? CLIENT_IMPORT
-            : '';
+        const file = id.split('?', 1)[0] ?? id;
+        const entry = scriptEntries.has(file) || (sveltekit && SVELTEKIT_CLIENT_ENTRY.test(file));
+        const prepend = this.environment.name === 'client' && entry ? CLIENT_IMPORT : '';
         if (VUE_MODULE.test(id)) {
           const projectPath = normalizePath(relative(root, id));
           if (projectPath.startsWith('..') || id.includes('/node_modules/')) return null;
-          const compiler = await loadVueCompiler();
-          return compiler ? injectVueSourceLocations(code, id, projectPath, compiler) : null;
+          const parse = await loadParser('vue/compiler-sfc');
+          return parse
+            ? injectVueSourceLocations(code, id, projectPath, {
+                parse,
+              } as unknown as VueSfcCompiler)
+            : null;
+        }
+        if (SVELTE_MODULE.test(id)) {
+          const projectPath = normalizePath(relative(root, id));
+          if (projectPath.startsWith('..') || id.includes('/node_modules/')) return null;
+          const parse = await loadParser('svelte/compiler');
+          return parse
+            ? injectSvelteSourceLocations(code, id, projectPath, {
+                parse,
+              } as unknown as SvelteCompiler)
+            : null;
         }
         if (JSX_MODULE.test(id)) {
           const projectPath = normalizePath(relative(root, id));
@@ -475,4 +498,5 @@ export function guijam(options: GuijamOptions = {}): Plugin<GuijamApi> {
       ];
     },
   };
+  return plugin;
 }
