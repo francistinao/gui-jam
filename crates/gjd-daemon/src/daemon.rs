@@ -1277,7 +1277,7 @@ impl Daemon {
         }
         let change = summarize(file, job.request.line, ops);
         let label = change
-            .split_once(" — ")
+            .split_once(" · ")
             .map_or(change.as_str(), |(_, change)| change)
             .to_owned();
         let held = Held {
@@ -1808,7 +1808,7 @@ impl Daemon {
             .into_iter()
             .map(|(variant, content, ops)| {
                 let summary = format!(
-                    "{file}:{} — {} ({route_label})",
+                    "{file}:{} · {} ({route_label})",
                     request.line, variant.label
                 );
                 let mut changes = code_changes(file, current, &content);
@@ -2236,13 +2236,13 @@ fn style_change(ops: &[EditOp]) -> Option<String> {
             EditOp::StyleProp { prop, value, .. } => Some(match value {
                 EditOpValue::String(text) => format!("{} {text}", prop.as_str()),
                 EditOpValue::Number(number) => format!("{} {number}", prop.as_str()),
-                EditOpValue::Null => format!("− {}", prop.as_str()),
+                EditOpValue::Null => format!("- {}", prop.as_str()),
             }),
             EditOp::JsxAttr { name, value, .. } => Some(match value {
                 Some(JsxValue::String(text) | JsxValue::Expression(text)) => {
                     format!("{}=\"{text}\"", name.as_str())
                 }
-                None => format!("− {}", name.as_str()),
+                None => format!("- {}", name.as_str()),
             }),
             _ => None,
         })
@@ -2252,7 +2252,7 @@ fn style_change(ops: &[EditOp]) -> Option<String> {
 
 fn summarize(file: &str, line: NonZeroU64, ops: &[EditOp]) -> String {
     if let Some(change) = style_change(ops) {
-        return format!("{file}:{line} — {change}");
+        return format!("{file}:{line} · {change}");
     }
     let Some(EditOp::ClassTokens { add, remove, .. }) = ops.first() else {
         return format!("{file}:{line}");
@@ -2263,10 +2263,10 @@ fn summarize(file: &str, line: NonZeroU64, ops: &[EditOp]) -> String {
     let change = match (removed.is_empty(), added.is_empty()) {
         (false, false) => format!("{removed} → {added}"),
         (true, false) => format!("+ {added}"),
-        (false, true) => format!("− {removed}"),
+        (false, true) => format!("- {removed}"),
         (true, true) => "no change".to_owned(),
     };
-    format!("{file}:{line} — {change}")
+    format!("{file}:{line} · {change}")
 }
 
 #[cfg(test)]

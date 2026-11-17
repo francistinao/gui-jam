@@ -385,8 +385,8 @@ export function stillWorking(
   if (elapsedMs < STILL_WORKING_MS) return 'Generating…';
   if (elapsedMs < SLOW_MS) {
     return context.sketch || context.images > 0
-      ? 'Still generating. Sketches and new components usually take 20–60 s.'
-      : 'Still generating. Most changes take 10–40 s.';
+      ? 'Still generating. Sketches and new components usually take 20 to 60 s.'
+      : 'Still generating. Most changes take 10 to 40 s.';
   }
   if (elapsedMs < VERY_SLOW_MS) return reason(context);
   if (timeoutMs === null)

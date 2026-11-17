@@ -309,7 +309,7 @@ test('an exact edit needs no model, and Ask AI for variations asks for three', a
   const variants = prompt.getByRole('region', { name: 'Variants' });
   const tiles = variants.getByRole('group', { name: 'Pick a variant' }).getByRole('button');
   await expect(tiles).toHaveText(['V1Exact']);
-  await expect(variants.getByRole('note')).toHaveText('Exact edit — no AI needed.');
+  await expect(variants.getByRole('note')).toHaveText('Exact edit. No AI needed.');
   await expect(variants).toContainText('→ bg-blue-600 rounded-full');
   await expect(button).toHaveClass(/\bbg-blue-600\b/);
   await expect(button).toHaveClass(/\brounded-full\b/);

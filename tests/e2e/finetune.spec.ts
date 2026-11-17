@@ -112,7 +112,7 @@ test('fine-tunes a fill live, applies one line, and undo restores the exact byte
   await panel.getByRole('tab', { name: 'Code' }).click();
   const code = panel.getByRole('tabpanel', { name: 'Code' });
   await expect(code.locator('pre')).toHaveCount(1);
-  await expect(code).toContainText('3 − <button type="button" className="rounded-lg bg-brand');
+  await expect(code).toContainText('3 - <button type="button" className="rounded-lg bg-brand');
   await expect(code).toContainText('3 + <button type="button" className="rounded-lg bg-[#1D4ED8]');
   expect(await fileSnapshot(ORDER_BUTTON)).toEqual(before);
 
@@ -170,7 +170,7 @@ test('edits every instance of a repeated element, and closing reverts unsaved tw
   const menuCard = await fileSnapshot(fixturePath('src/components/MenuCard.tsx'));
 
   await expect(panel.getByRole('note')).toHaveText(
-    'Used 3× on this page — changes apply to every instance.',
+    'Used 3× on this page. Changes apply to every instance.',
   );
   await panel.getByRole('textbox', { name: 'Fill hex' }).fill('1D4ED8');
   for (const add of await addButtons.all())

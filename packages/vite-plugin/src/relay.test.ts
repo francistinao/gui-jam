@@ -98,10 +98,10 @@ describe('terminalLine', () => {
         payload: {
           journalId: 'j1',
           files: ['src/A.tsx'],
-          summary: 'src/A.tsx:3 — bg-brand → bg-sea',
+          summary: 'src/A.tsx:3 · bg-brand → bg-sea',
         },
       }),
-    ).toBe('✎ src/A.tsx:3 — bg-brand → bg-sea');
+    ).toBe('✎ src/A.tsx:3 · bg-brand → bg-sea');
     expect(terminalLine({ type: 'undo.done', payload: { journalId: 'j2', undoOf: 'j1' } })).toBe(
       '↺ undid j1',
     );

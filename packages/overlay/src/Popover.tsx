@@ -119,7 +119,7 @@ export function CodeChanges({ changes }: { changes: readonly CodeChange[] }) {
             </span>
           ) : null}
           {change.before.length > 0 ? (
-            <span className="block text-red-600">{numbered(change.line, '−', change.before)}</span>
+            <span className="block text-red-600">{numbered(change.line, '-', change.before)}</span>
           ) : null}
           {change.after.length > 0 ? (
             <span className="block text-green-600">{numbered(change.line, '+', change.after)}</span>

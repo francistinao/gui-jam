@@ -118,7 +118,7 @@ test('previews a fill live, commits one line, and undo restores the exact bytes'
   const committed = commit.payload;
 
   const written = await readFile(ORDER_BUTTON, 'utf8');
-  expect(committed.summary).toBe('src/components/OrderButton.tsx:3 — bg-brand → bg-[#1D4ED8]');
+  expect(committed.summary).toBe('src/components/OrderButton.tsx:3 · bg-brand → bg-[#1D4ED8]');
   expect(changedLines(original, written)).toHaveLength(1);
   await expect(button).toHaveCSS('background-color', BLUE_RGB);
 

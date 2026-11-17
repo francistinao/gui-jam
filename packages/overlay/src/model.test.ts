@@ -367,10 +367,10 @@ describe('stillWorking', () => {
     expect(stillWorking(0, 60_000, plain)).toBe('Generating…');
     expect(stillWorking(14_999, 60_000, plain)).toBe('Generating…');
     expect(stillWorking(15_000, 60_000, plain)).toBe(
-      'Still generating. Most changes take 10–40 s.',
+      'Still generating. Most changes take 10 to 40 s.',
     );
     expect(stillWorking(15_000, 180_000, { ...plain, sketch: true })).toBe(
-      'Still generating. Sketches and new components usually take 20–60 s.',
+      'Still generating. Sketches and new components usually take 20 to 60 s.',
     );
     expect(stillWorking(45_000, 60_000, plain)).toBe(
       'Still working: the model is writing three takes on your request.',

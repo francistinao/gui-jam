@@ -117,7 +117,7 @@ test('a long run explains the wait in plain words, then can be cancelled', async
     .toBe(true);
 
   await page.clock.fastForward(20_000);
-  await expect(status).toHaveText('Still generating. Most changes take 10–40 s.');
+  await expect(status).toHaveText('Still generating. Most changes take 10 to 40 s.');
 
   await page.clock.fastForward(30_000);
   await expect(status).toHaveText(

@@ -14,7 +14,7 @@ pub struct Decision {
     pub notice: Option<&'static str>,
 }
 
-pub const EXACT_NOTICE: &str = "Exact edit — no AI needed.";
+pub const EXACT_NOTICE: &str = "Exact edit. No AI needed.";
 pub const MULTI_FILE_NOTICE: &str =
     "Multi-file changes work best from your CLI session; this only changes the selected file.";
 
