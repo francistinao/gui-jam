@@ -87,7 +87,7 @@ The AI tool you pick is saved for your user in `~/.config/guijam/config.toml`, a
 |---|---|
 | `GUIJAM_GJD_BIN` | Path to a `gjd` binary to use instead of the one installed from npm |
 | `GUIJAM_BROWSER` | Path to the Chromium-based browser that takes screenshots of links in your prompts. By default GUIJam finds Chrome, Brave, Edge or Chromium. |
-| `XDG_CONFIG_HOME` | Moves the saved AI tool choice to `$XDG_CONFIG_HOME/guijam/config.toml` |
+| `XDG_CONFIG_HOME` | Moves the saved AI tool choice to `$XDG_CONFIG_HOME/guijam/config.toml`. Without it, the choice is saved in `~/.config/guijam/` on macOS and Linux and in `%APPDATA%\guijam\` on Windows. |
 
 GUIJam keeps its run state, logs and undo journal in `.guijam/` in your project. `init` adds that folder to `.gitignore`.
 
@@ -106,11 +106,11 @@ GUIJam keeps its run state, logs and undo journal in `.guijam/` in your project.
 
 **Styling.** Fine-tune writes Tailwind CSS classes when your project uses Tailwind, `color` and `rounded` props on Vuetify components, and inline styles everywhere else. Draw and Ask work with any CSS.
 
-**Not supported yet:** Windows, Angular, SolidStart 1 (vinxi) and the Next.js Pages Router. In Next.js, a sketch that would create new component files can't be previewed yet.
+**Not supported yet:** Windows on Arm, Angular, SolidStart 1 (vinxi) and the Next.js Pages Router. In Next.js, a sketch that would create new component files can't be previewed yet.
 
 ### Requirements
 
-- Node `^20.19.0` or `>=22.12.0` on macOS or Linux. SolidStart 2 itself needs Node 24.
+- Node `^20.19.0` or `>=22.12.0` on macOS (Apple silicon or Intel), Linux (x64 or arm64) or Windows (x64). SolidStart 2 itself needs Node 24.
 - One of the frameworks above.
 - An AI coding CLI, installed and logged in: [Claude Code](https://claude.com/claude-code), [Codex](https://github.com/openai/codex) or [OpenCode](https://opencode.ai). OpenCode reaches DeepSeek, GLM and many other models with your own key. [Qwen Code](https://github.com/QwenLM/qwen-code) and [Gemini CLI](https://github.com/google-gemini/gemini-cli) are supported too, but haven't been verified live yet. `init` helps you pick one and log in.
 
@@ -233,13 +233,13 @@ scripts/gate.sh
 
 Versions come from the release tag; nothing in the repo needs a version bump.
 
-1. Publish a GitHub release tagged `vX.Y.Z-rc.N` and marked as a pre-release. CI runs every check on the tag, builds `gjd` for macOS (arm64, x64) and Linux (x64, arm64), publishes it as `@guijam/gjd-<os>-<arch>` packages, which `guijam` installs as optional dependencies, then publishes `guijam` under the `next` dist-tag. Packages already on npm are skipped, so a failed release can be run again.
+1. Publish a GitHub release tagged `vX.Y.Z-rc.N` and marked as a pre-release. CI runs every check on the tag, builds `gjd` for macOS (arm64, x64), Linux (x64, arm64) and Windows (x64), publishes it as `@guijam/gjd-<os>-<arch>` packages, which `guijam` installs as optional dependencies, then publishes `guijam` under the `next` dist-tag. Packages already on npm are skipped, so a failed release can be run again.
 2. Try it from npm: `npx guijam@next init` in an app, or `GUIJAM_SPEC=guijam@X.Y.Z-rc.N scripts/playground.sh` followed by `pnpm test:playground`.
 3. Publish the release `vX.Y.Z` to move `latest`.
 
-npm requires two-factor authentication to publish. For CI, either set up npm trusted publishing on each of the five packages (GitHub Actions, workflow `release.yml`, environment `npm`), or store a granular token with "Bypass two-factor authentication" as the `NPM_TOKEN` secret. The `npm-check` workflow (Actions, then Run workflow) confirms that the token works and belongs to the `guijam` organization, and publishes nothing.
+npm requires two-factor authentication to publish. For CI, either set up npm trusted publishing on each of the six packages (GitHub Actions, workflow `release.yml`, environment `npm`), or store a granular token with "Bypass two-factor authentication" as the `NPM_TOKEN` secret. The `npm-check` workflow (Actions, then Run workflow) confirms that the token works and belongs to the `guijam` organization, and publishes nothing.
 
-Without GitHub Actions, release from a Mac with zig and `cargo-zigbuild` installed: `scripts/release-local.sh build X.Y.Z` builds and smoke-tests everything, then `scripts/release-local.sh publish X.Y.Z next` (or `latest`) publishes it and asks for your npm one-time password.
+Without GitHub Actions, release from a Mac with zig and `cargo-zigbuild` installed and the cross targets added (`rustup target add x86_64-apple-darwin x86_64-unknown-linux-musl aarch64-unknown-linux-musl x86_64-pc-windows-gnu`): `scripts/release-local.sh build X.Y.Z` builds and smoke-tests everything, then `scripts/release-local.sh publish X.Y.Z next` (or `latest`) publishes it and asks for your npm one-time password.
 
 ## Credits
 
