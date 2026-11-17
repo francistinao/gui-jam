@@ -2,7 +2,6 @@ use std::fmt::Write as _;
 use std::fs;
 use std::io::{Read, Write as _};
 use std::net::TcpStream;
-use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::process::{Child, Command, Output};
 use std::thread::sleep;
@@ -134,8 +133,11 @@ fn admits_only_the_bearer_of_the_token_from_a_loopback_host_without_an_origin() 
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn keeps_its_run_files_private_to_the_owner() {
+    use std::os::unix::fs::PermissionsExt;
+
     let project = project();
     let (_daemon, _info) = start(project.path(), "60");
     let mode = |path: &Path| fs::metadata(path).expect("metadata").permissions().mode() & 0o777;

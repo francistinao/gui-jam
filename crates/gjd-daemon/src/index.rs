@@ -67,7 +67,7 @@ async fn list(root: &Path) -> Vec<String> {
 }
 
 async fn git_files(root: &Path) -> Option<Vec<String>> {
-    let output = tokio::process::Command::new("git")
+    let output = gjd_providers::spawn::command("git")
         .arg("-C")
         .arg(root)
         .args([

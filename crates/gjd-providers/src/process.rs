@@ -4,25 +4,21 @@ use std::path::Path;
 use std::process::Stdio;
 use std::time::{Duration, Instant};
 
-use nix::sys::signal::{Signal, killpg};
-use nix::unistd::Pid;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader, Lines};
-use tokio::process::{Child, ChildStdout, Command};
+use tokio::process::ChildStdout;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 
+use crate::spawn::{ProcessTree, command};
 use crate::{ProviderError, ProviderEvent};
 
 const STDERR_TAIL_BYTES: usize = 4096;
 const EXIT_GRACE: Duration = Duration::from_secs(10);
-const SIGINT_GRACE: Duration = Duration::from_secs(2);
-const SIGTERM_GRACE: Duration = Duration::from_secs(3);
 
 pub(crate) struct ProviderProcess {
-    child: Child,
-    group: Pid,
+    tree: ProcessTree,
     stdout: Lines<BufReader<ChildStdout>>,
     stderr_tail: JoinHandle<String>,
     stderr_lines: Option<mpsc::UnboundedReceiver<String>>,
@@ -59,24 +55,19 @@ impl ProviderProcess {
         I: IntoIterator<Item = S>,
         S: AsRef<OsStr>,
     {
-        let mut child = Command::new(binary)
+        let mut provider = command(binary);
+        provider
             .args(args)
             .envs(options.env)
             .current_dir(cwd)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .process_group(0)
-            .spawn()?;
+            .stderr(Stdio::piped());
+        let mut tree = ProcessTree::spawn(provider)?;
 
-        let pid = child
-            .id()
-            .ok_or_else(|| io::Error::other("provider exited before it could be tracked"))?;
-        let group = Pid::from_raw(i32::try_from(pid).map_err(io::Error::other)?);
-
-        let mut stdin = child.stdin.take().expect("stdin is piped");
-        let stdout = child.stdout.take().expect("stdout is piped");
-        let mut stderr = child.stderr.take().expect("stderr is piped");
+        let mut stdin = tree.stdin().expect("stdin is piped");
+        let stdout = tree.stdout().expect("stdout is piped");
+        let mut stderr = tree.stderr().expect("stderr is piped");
 
         stdin.write_all(stdin_payload).await?;
         drop(stdin);
@@ -108,8 +99,7 @@ impl ProviderProcess {
         };
 
         Ok(Self {
-            child,
-            group,
+            tree,
             stdout: BufReader::new(stdout).lines(),
             stderr_tail,
             stderr_lines,
@@ -132,43 +122,21 @@ impl ProviderProcess {
     }
 
     pub(crate) async fn exit_code_and_stderr(mut self) -> (Option<i32>, String) {
-        let exit_code = self
-            .child
-            .wait()
-            .await
-            .ok()
-            .and_then(|status| status.code());
+        let exit_code = self.tree.wait().await.ok().and_then(|status| status.code());
         let stderr = self.stderr_tail.await.unwrap_or_default();
         (exit_code, stderr)
     }
 
     pub(crate) async fn terminate(mut self) {
-        for (signal, grace) in [
-            (Signal::SIGINT, SIGINT_GRACE),
-            (Signal::SIGTERM, SIGTERM_GRACE),
-        ] {
-            if self.signal_group(signal).is_err() {
-                return;
-            }
-            if timeout(grace, self.child.wait()).await.is_ok() {
-                let _ = self.signal_group(Signal::SIGKILL);
-                return;
-            }
-        }
-        let _ = self.signal_group(Signal::SIGKILL);
-        let _ = self.child.wait().await;
+        self.tree.terminate().await;
     }
 
     pub(crate) fn reap_in_background(mut self, grace: Duration) {
         tokio::spawn(async move {
-            if timeout(grace, self.child.wait()).await.is_err() {
+            if timeout(grace, self.tree.wait()).await.is_err() {
                 self.terminate().await;
             }
         });
-    }
-
-    fn signal_group(&self, signal: Signal) -> nix::Result<()> {
-        killpg(self.group, signal)
     }
 }
 

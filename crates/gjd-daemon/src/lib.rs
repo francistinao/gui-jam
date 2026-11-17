@@ -26,7 +26,6 @@ use std::time::Duration;
 use gjd_core::journal::{CommitError, Journal};
 use gjd_core::policy::ProjectRoot;
 use tokio::net::TcpListener;
-use tokio::signal::unix::{SignalKind, signal};
 use tokio_util::sync::CancellationToken;
 
 use crate::daemon::Daemon;
@@ -107,13 +106,34 @@ fn new_token() -> io::Result<String> {
     Ok(hex)
 }
 
+#[cfg(unix)]
 async fn stop_on_signal(shutdown: CancellationToken) {
+    use tokio::signal::unix::{SignalKind, signal};
+
     let Ok(mut terminate) = signal(SignalKind::terminate()) else {
         tracing::warn!("cannot listen for SIGTERM; the daemon stops on Ctrl-C or when idle");
         return;
     };
     tokio::select! {
         _ = terminate.recv() => {}
+        _ = tokio::signal::ctrl_c() => {}
+    }
+    shutdown.cancel();
+}
+
+#[cfg(windows)]
+async fn stop_on_signal(shutdown: CancellationToken) {
+    use tokio::signal::windows::{ctrl_break, ctrl_close};
+
+    let (Ok(mut close), Ok(mut brk)) = (ctrl_close(), ctrl_break()) else {
+        tracing::warn!("cannot listen for console events; the daemon stops on Ctrl-C or when idle");
+        let _ = tokio::signal::ctrl_c().await;
+        shutdown.cancel();
+        return;
+    };
+    tokio::select! {
+        _ = close.recv() => {}
+        _ = brk.recv() => {}
         _ = tokio::signal::ctrl_c() => {}
     }
     shutdown.cancel();

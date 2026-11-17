@@ -6,6 +6,7 @@ mod opencode;
 mod process;
 mod qwen_code;
 mod schema;
+pub mod spawn;
 mod text_answer;
 
 use std::fmt;

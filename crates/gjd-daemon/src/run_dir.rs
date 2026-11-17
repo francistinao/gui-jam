@@ -1,5 +1,6 @@
 use std::fs::{self, DirBuilder, File, OpenOptions, TryLockError};
 use std::io::{self, Write};
+#[cfg(unix)]
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 
@@ -30,10 +31,11 @@ impl RunDir {
 
     pub fn create(project: &Path) -> io::Result<Self> {
         let run_dir = Self::of(project);
-        DirBuilder::new()
-            .recursive(true)
-            .mode(0o700)
-            .create(&run_dir.dir)?;
+        let mut builder = DirBuilder::new();
+        builder.recursive(true);
+        #[cfg(unix)]
+        builder.mode(0o700);
+        builder.create(&run_dir.dir)?;
         Ok(run_dir)
     }
 
@@ -43,11 +45,10 @@ impl RunDir {
     }
 
     pub fn lock(&self) -> io::Result<Option<File>> {
-        let file = OpenOptions::new()
+        let file = private_file()
             .create(true)
             .write(true)
             .truncate(false)
-            .mode(0o600)
             .open(self.dir.join("lock"))?;
         match file.try_lock() {
             Ok(()) => Ok(Some(file)),
@@ -58,11 +59,10 @@ impl RunDir {
 
     pub fn write_info(&self, info: &DaemonInfo) -> io::Result<()> {
         let temp = self.dir.join(format!("daemon.json.{}.tmp", info.pid));
-        let mut file = OpenOptions::new()
+        let mut file = private_file()
             .create(true)
             .write(true)
             .truncate(true)
-            .mode(0o600)
             .open(&temp)?;
         file.write_all(&serde_json::to_vec(info).map_err(io::Error::other)?)?;
         file.sync_all()?;
@@ -80,4 +80,16 @@ impl RunDir {
             let _ = fs::remove_file(self.info_path());
         }
     }
+}
+
+#[cfg(unix)]
+fn private_file() -> OpenOptions {
+    let mut options = OpenOptions::new();
+    options.mode(0o600);
+    options
+}
+
+#[cfg(not(unix))]
+fn private_file() -> OpenOptions {
+    OpenOptions::new()
 }

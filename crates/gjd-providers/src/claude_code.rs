@@ -2,12 +2,12 @@ use std::path::Path;
 use std::process::Stdio;
 use std::time::{Duration, Instant};
 
+use crate::spawn::command;
 use async_trait::async_trait;
 use gjd_core::VARIANT_SET_PROVIDER_SCHEMA;
 use gjd_core::contracts::VariantSet;
 use serde::Deserialize;
 use serde_json::json;
-use tokio::process::Command;
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 
@@ -214,7 +214,7 @@ fn user_message(request: &GenerationRequest) -> String {
 async fn query(binary: &Path, args: &[&str]) -> Result<String, ProviderError> {
     let output = timeout(
         QUERY_TIMEOUT,
-        Command::new(binary)
+        command(binary)
             .args(args)
             .stdin(Stdio::null())
             .kill_on_drop(true)

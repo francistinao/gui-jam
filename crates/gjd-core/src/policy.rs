@@ -109,6 +109,7 @@ pub fn is_denied(relative: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use std::fs;
+    #[cfg(unix)]
     use std::os::unix::fs::symlink;
 
     use super::{PolicyError, ProjectRoot};
@@ -142,6 +143,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     #[test]
     fn rejects_symlinks_that_leave_the_project() {
         let (dir, root) = project();
@@ -166,6 +168,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn rejects_denied_files_even_through_symlinks() {
         let (dir, root) = project();

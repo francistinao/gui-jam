@@ -2,6 +2,7 @@ use std::path::Path;
 use std::process::Stdio;
 use std::time::Duration;
 
+use gjd_providers::spawn::command;
 use serde_json::Value;
 use tokio::process::Command;
 use tokio::time::timeout;
@@ -77,11 +78,7 @@ pub async fn lookup(
     today: i64,
     limit: Duration,
 ) -> Result<String, InstallError> {
-    let output = run(
-        Command::new(npm).args(["view", name, "time", "--json"]),
-        limit,
-    )
-    .await?;
+    let output = run(command(npm).args(["view", name, "time", "--json"]), limit).await?;
     if !output.status.success() {
         let reason = tail(&output.stderr);
         return Err(InstallError::Failed(if reason.is_empty() {
@@ -111,7 +108,7 @@ pub async fn install(
     limit: Duration,
 ) -> Result<(), InstallError> {
     let output = run(
-        Command::new(binary)
+        command(binary)
             .args(install_args(manager, needs))
             .current_dir(root),
         limit,
@@ -132,22 +129,11 @@ pub async fn install(
 
 #[cfg(test)]
 mod tests {
-    use std::os::unix::fs::PermissionsExt;
-    use std::path::{Path, PathBuf};
-    use std::time::Duration;
-
-    use super::{InstallError, command_line, install, install_args, lookup};
+    use super::{command_line, install_args};
     use crate::libraries::Need;
     use crate::project::PackageManager;
 
-    fn script(dir: &Path, name: &str, body: &str) -> PathBuf {
-        let path = dir.join(name);
-        std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).expect("write");
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).expect("chmod");
-        path
-    }
-
-    fn need(name: &str, version: &str) -> Need {
+    pub(super) fn need(name: &str, version: &str) -> Need {
         Need {
             name: name.to_owned(),
             version: version.to_owned(),
@@ -176,6 +162,24 @@ mod tests {
             command_line(PackageManager::Bun, &needs[..1]),
             "bun add --exact three@0.187.0"
         );
+    }
+}
+
+#[cfg(all(test, unix))]
+mod scripted_tests {
+    use std::os::unix::fs::PermissionsExt;
+    use std::path::{Path, PathBuf};
+    use std::time::Duration;
+
+    use super::tests::need;
+    use super::{InstallError, install, lookup};
+    use crate::project::PackageManager;
+
+    fn script(dir: &Path, name: &str, body: &str) -> PathBuf {
+        let path = dir.join(name);
+        std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).expect("write");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        path
     }
 
     #[tokio::test]

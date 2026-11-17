@@ -2,11 +2,11 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::{Duration, Instant};
 
+use crate::spawn::command;
 use async_trait::async_trait;
 use gjd_core::VARIANT_SET_PROVIDER_SCHEMA;
 use serde::Deserialize;
 use serde_json::Value;
-use tokio::process::Command;
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 
@@ -206,7 +206,7 @@ fn args(request: &GenerationRequest) -> Vec<String> {
 async fn version(binary: &Path) -> Result<String, ProviderError> {
     let output = timeout(
         QUERY_TIMEOUT,
-        Command::new(binary)
+        command(binary)
             .arg("--version")
             .stdin(Stdio::null())
             .kill_on_drop(true)

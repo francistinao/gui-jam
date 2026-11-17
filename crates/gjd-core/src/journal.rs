@@ -1,5 +1,6 @@
 use std::fs::{self, DirBuilder, File, OpenOptions};
 use std::io::{self, BufRead, BufReader, Write};
+#[cfg(unix)]
 use std::os::unix::fs::DirBuilderExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, PoisonError};
@@ -128,10 +129,11 @@ impl Journal {
     pub fn open(project: ProjectRoot) -> io::Result<Self> {
         let dir = project.path().join(".guijam").join("journal");
         let blobs = dir.join("blobs");
-        DirBuilder::new()
-            .recursive(true)
-            .mode(0o700)
-            .create(&blobs)?;
+        let mut builder = DirBuilder::new();
+        builder.recursive(true);
+        #[cfg(unix)]
+        builder.mode(0o700);
+        builder.create(&blobs)?;
         Ok(Self {
             project,
             dir,
@@ -461,6 +463,9 @@ fn write_temp(target: &Path, bytes: &[u8], id: &str) -> io::Result<PathBuf> {
 }
 
 fn sync_parents<'p>(targets: impl Iterator<Item = &'p Path>) -> io::Result<()> {
+    if !cfg!(unix) {
+        return Ok(());
+    }
     let mut parents: Vec<&Path> = targets.filter_map(Path::parent).collect();
     parents.sort();
     parents.dedup();
@@ -547,6 +552,7 @@ fn year_month(days: i64) -> (i64, i64) {
 #[cfg(test)]
 mod tests {
     use std::fs;
+    #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
 
     use super::{
@@ -576,6 +582,7 @@ mod tests {
         fs::read_to_string(dir.path().join(path)).expect("readable")
     }
 
+    #[cfg(unix)]
     #[test]
     fn commits_every_file_and_keeps_permissions() {
         let (dir, journal) = project(&[(BUTTON, "a\n"), (CARD, "b\n")]);
@@ -669,6 +676,7 @@ mod tests {
         ));
     }
 
+    #[cfg(unix)]
     #[test]
     fn writes_nothing_when_one_target_cannot_be_written() {
         let (dir, journal) = project(&[(BUTTON, "a\n")]);

@@ -1,15 +1,30 @@
+use std::ffi::OsString;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 use gjd_providers::ProviderId;
 
+const NO_CONFIG_DIR: &str = if cfg!(windows) {
+    "neither XDG_CONFIG_HOME nor APPDATA is set"
+} else {
+    "neither XDG_CONFIG_HOME nor HOME is set"
+};
+
 #[must_use]
 pub fn config_path() -> Option<PathBuf> {
-    let base = std::env::var_os("XDG_CONFIG_HOME")
-        .filter(|dir| !dir.is_empty())
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))?;
+    config_path_from(|name| std::env::var_os(name), cfg!(windows))
+}
+
+fn config_path_from(var: impl Fn(&str) -> Option<OsString>, windows: bool) -> Option<PathBuf> {
+    let dir = |name| var(name).filter(|dir| !dir.is_empty()).map(PathBuf::from);
+    let base = dir("XDG_CONFIG_HOME").or_else(|| {
+        if windows {
+            dir("APPDATA")
+        } else {
+            dir("HOME").map(|home| home.join(".config"))
+        }
+    })?;
     Some(base.join("guijam").join("config.toml"))
 }
 
@@ -84,8 +99,7 @@ pub fn provider_model(id: ProviderId) -> Option<String> {
 }
 
 pub fn set_active_provider(id: ProviderId, model: Option<&str>) -> io::Result<PathBuf> {
-    let path =
-        config_path().ok_or_else(|| io::Error::other("neither XDG_CONFIG_HOME nor HOME is set"))?;
+    let path = config_path().ok_or_else(|| io::Error::other(NO_CONFIG_DIR))?;
     set_active_provider_in(&path, id, model)?;
     Ok(path)
 }
@@ -96,7 +110,47 @@ mod tests {
 
     use gjd_providers::ProviderId;
 
-    use super::{active_provider_in, provider_model_in, set_active_provider_in};
+    use std::ffi::OsString;
+    use std::path::PathBuf;
+
+    use super::{active_provider_in, config_path_from, provider_model_in, set_active_provider_in};
+
+    fn env(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<OsString> {
+        let pairs: Vec<(String, OsString)> = pairs
+            .iter()
+            .map(|(name, value)| ((*name).to_owned(), OsString::from(value)))
+            .collect();
+        move |name| {
+            pairs
+                .iter()
+                .find(|(key, _)| key == name)
+                .map(|(_, value)| value.clone())
+        }
+    }
+
+    #[test]
+    fn the_config_lives_under_xdg_then_the_platform_default() {
+        let file = |base: &str| Some(PathBuf::from(base).join("guijam").join("config.toml"));
+        let everything = env(&[
+            ("XDG_CONFIG_HOME", "/xdg"),
+            ("HOME", "/home/me"),
+            ("APPDATA", "/roaming"),
+        ]);
+        assert_eq!(config_path_from(&everything, false), file("/xdg"));
+        assert_eq!(config_path_from(&everything, true), file("/xdg"));
+
+        let defaults = env(&[
+            ("XDG_CONFIG_HOME", ""),
+            ("HOME", "/home/me"),
+            ("APPDATA", "/roaming"),
+        ]);
+        assert_eq!(config_path_from(&defaults, false), file("/home/me/.config"));
+        assert_eq!(config_path_from(&defaults, true), file("/roaming"));
+
+        let bare = env(&[("HOME", "/home/me")]);
+        assert_eq!(config_path_from(&bare, true), None);
+        assert_eq!(config_path_from(env(&[]), false), None);
+    }
 
     #[test]
     fn saves_the_active_provider_and_keeps_other_settings() {

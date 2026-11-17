@@ -4,8 +4,8 @@ use axum::Router;
 use axum::extract::State;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::http::{HeaderMap, StatusCode, header};
-use axum::response::{IntoResponse, Response};
-use axum::routing::get;
+use axum::response::{IntoResponse, Json, Response};
+use axum::routing::{get, post};
 use gjd_core::contracts::GuijamMessage;
 use tokio::net::TcpListener;
 use tokio::sync::mpsc;
@@ -20,6 +20,7 @@ struct Gateway {
     daemon: Arc<Daemon>,
     token: Arc<str>,
     port: u16,
+    shutdown: CancellationToken,
 }
 
 pub async fn serve(
@@ -33,11 +34,32 @@ pub async fn serve(
         daemon,
         token: token.into(),
         port,
+        shutdown: shutdown.clone(),
     };
-    let app = Router::new().route("/ws", get(upgrade)).with_state(gateway);
+    let app = Router::new()
+        .route("/ws", get(upgrade))
+        .route("/status", get(status))
+        .route("/stop", post(stop))
+        .with_state(gateway);
     axum::serve(listener, app)
         .with_graceful_shutdown(async move { shutdown.cancelled().await })
         .await
+}
+
+async fn status(State(gateway): State<Gateway>, headers: HeaderMap) -> Response {
+    if let Err(status) = admit(&headers, &gateway) {
+        return status.into_response();
+    }
+    Json(serde_json::json!({ "pid": std::process::id(), "version": crate::VERSION }))
+        .into_response()
+}
+
+async fn stop(State(gateway): State<Gateway>, headers: HeaderMap) -> Response {
+    if let Err(status) = admit(&headers, &gateway) {
+        return status.into_response();
+    }
+    gateway.shutdown.cancel();
+    StatusCode::ACCEPTED.into_response()
 }
 
 async fn upgrade(

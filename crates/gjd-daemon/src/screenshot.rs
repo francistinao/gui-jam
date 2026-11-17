@@ -5,11 +5,9 @@ use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
 use gjd_providers::ImageInput;
-use nix::sys::signal::{Signal, killpg};
-use nix::unistd::Pid;
+use gjd_providers::spawn::{ProcessTree, command};
 use serde_json::{Value, json};
 use tokio::net::TcpStream;
-use tokio::process::{Child, Command};
 use tokio::time::{Instant, sleep, timeout_at};
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
@@ -116,16 +114,13 @@ fn find_browser_with(
 }
 
 struct Running {
-    child: Child,
-    group: Option<Pid>,
+    browser: ProcessTree,
     profile: tempfile::TempDir,
 }
 
 impl Drop for Running {
     fn drop(&mut self) {
-        if let Some(group) = self.group {
-            let _ = killpg(group, Signal::SIGKILL);
-        }
+        self.browser.kill();
     }
 }
 
@@ -133,7 +128,8 @@ fn launch(binary: &Path) -> Result<Running, ShotError> {
     let profile = tempfile::Builder::new()
         .prefix("guijam-browser-")
         .tempdir()?;
-    let child = Command::new(binary)
+    let mut browser = command(binary);
+    browser
         .args(FLAGS)
         .arg(format!("--user-data-dir={}", profile.path().display()))
         .arg(format!("--window-size={WIDTH},{HEIGHT}"))
@@ -141,16 +137,9 @@ fn launch(binary: &Path) -> Result<Running, ShotError> {
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
-        .kill_on_drop(true)
-        .process_group(0)
-        .spawn()?;
-    let group = child
-        .id()
-        .and_then(|id| i32::try_from(id).ok())
-        .map(Pid::from_raw);
+        .kill_on_drop(true);
     Ok(Running {
-        child,
-        group,
+        browser: ProcessTree::spawn(browser)?,
         profile,
     })
 }
@@ -167,7 +156,7 @@ async fn devtools_endpoint(running: &mut Running) -> Result<String, ShotError> {
                 return Ok(format!("ws://127.0.0.1:{port}{path}"));
             }
         }
-        if running.child.try_wait()?.is_some() {
+        if running.browser.try_wait()?.is_some() {
             return Err(ShotError::Exited);
         }
         sleep(POLL).await;
@@ -335,19 +324,22 @@ pub async fn capture(binary: &Path, url: &Url, limit: Duration) -> Result<ImageI
 #[cfg(test)]
 mod tests {
     use std::ffi::OsString;
-    use std::os::unix::fs::PermissionsExt;
     use std::path::{Path, PathBuf};
     use std::time::{Duration, Instant};
 
     use url::Url;
 
-    use super::{Browser, ShotError, capture, find_browser, find_browser_with};
+    use super::{Browser, capture, find_browser, find_browser_with};
 
     fn executable(dir: &Path, name: &str, body: &str) -> PathBuf {
         let path = dir.join(name);
         std::fs::create_dir_all(path.parent().expect("parent")).expect("dir");
         std::fs::write(&path, body).expect("write");
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        }
         path
     }
 
@@ -393,6 +385,7 @@ mod tests {
         assert_eq!(find_browser_with(None, &[], nothing), Browser::Missing);
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn a_browser_that_closes_at_once_is_reported() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -403,9 +396,10 @@ mod tests {
             .await
             .expect_err("fails");
 
-        assert!(matches!(error, ShotError::Exited), "{error}");
+        assert!(matches!(error, super::ShotError::Exited), "{error}");
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn a_browser_that_never_gets_ready_times_out_and_is_stopped() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -425,7 +419,7 @@ mod tests {
             .await
             .expect_err("fails");
 
-        assert!(matches!(error, ShotError::Timeout), "{error}");
+        assert!(matches!(error, super::ShotError::Timeout), "{error}");
         assert!(started.elapsed() < Duration::from_secs(6));
         let sleeper = std::fs::read_to_string(&marker).expect("pid");
         tokio::time::sleep(Duration::from_millis(200)).await;

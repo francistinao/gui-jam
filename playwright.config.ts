@@ -1,4 +1,10 @@
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { defineConfig, devices } from '@playwright/test';
+
+process.env.GUIJAM_E2E_CONFIG_HOME ??= join(tmpdir(), `guijam-e2e-config-${process.pid}`);
+process.env.XDG_CONFIG_HOME = process.env.GUIJAM_E2E_CONFIG_HOME;
+process.env.APPDATA = process.env.GUIJAM_E2E_CONFIG_HOME;
 
 export default defineConfig({
   testDir: './tests/e2e',

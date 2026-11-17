@@ -20,7 +20,6 @@ getrandom.workspace = true
 gjd-core = { path = "../gjd-core" }
 gjd-providers = { path = "../gjd-providers" }
 image-webp.workspace = true
-nix.workspace = true
 resvg.workspace = true
 serde.workspace = true
 serde_json.workspace = true

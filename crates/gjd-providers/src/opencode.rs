@@ -2,12 +2,12 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::{Duration, Instant};
 
+use crate::spawn::command;
 use async_trait::async_trait;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use serde::Deserialize;
 use serde_json::{Value, json};
-use tokio::process::Command;
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 
@@ -303,7 +303,7 @@ async fn query(
 ) -> Result<String, ProviderError> {
     let output = timeout(
         QUERY_TIMEOUT,
-        Command::new(binary)
+        command(binary)
             .args(args)
             .envs(env.iter().cloned())
             .stdin(Stdio::null())

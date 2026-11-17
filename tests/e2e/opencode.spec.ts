@@ -40,7 +40,7 @@ interface OpenCodeRun {
 let fixture: FixtureServer;
 let configHome: string;
 let runLog: string;
-const savedEnv = { PATH: process.env.PATH };
+const savedEnv = { PATH: process.env.PATH, XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME };
 
 async function runs(): Promise<OpenCodeRun[]> {
   const text = await readFile(runLog, 'utf8').catch(() => '');
@@ -104,15 +104,11 @@ test.beforeAll(async () => {
 test.afterAll(async () => {
   await fixture?.server.close();
   await stopDaemon(FIXTURE_DIR);
-  for (const name of [
-    'GUIJAM_GJD_BIN',
-    'XDG_CONFIG_HOME',
-    'GUIJAM_TEST_CONFIG_HOME',
-    'GUIJAM_FAKE_OPENCODE_LOG',
-  ]) {
+  for (const name of ['GUIJAM_GJD_BIN', 'GUIJAM_TEST_CONFIG_HOME', 'GUIJAM_FAKE_OPENCODE_LOG']) {
     delete process.env[name];
   }
   process.env.PATH = savedEnv.PATH;
+  process.env.XDG_CONFIG_HOME = savedEnv.XDG_CONFIG_HOME;
   await rm(configHome, { recursive: true, force: true });
 });
 

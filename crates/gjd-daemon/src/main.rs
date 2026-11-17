@@ -4,16 +4,15 @@ use std::time::{Duration, Instant};
 
 use clap::{Parser, Subcommand};
 use gjd_daemon::Outcome;
-use gjd_daemon::run_dir::RunDir;
+use gjd_daemon::run_dir::{DaemonInfo, RunDir};
 use gjd_providers::{
     AuthStatus, GenerationRequest, ProviderAdapter, ProviderId, RunTimings, ToolPolicy, adapter,
 };
-use nix::sys::signal::{Signal, kill};
-use nix::unistd::Pid;
 use tokio_util::sync::CancellationToken;
 
 const PROBE_TIMEOUT: Duration = Duration::from_mins(2);
 const STOP_WAIT: Duration = Duration::from_secs(5);
+const CONTROL_TIMEOUT: Duration = Duration::from_secs(2);
 const PROBE_SYSTEM_PROMPT: &str = "Answer only with the requested JSON.";
 const PROBE_PROMPT: &str = "Return exactly one variant: label Probe, system project, style plain, \
 rationale probe, missing empty, and a single create_file op for src/GuiJamProbe.tsx with content \
@@ -291,10 +290,27 @@ async fn test(id: ProviderId, runs: u32, model: Option<String>) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-fn running_pid(project: &Path) -> Option<(Pid, u16)> {
+fn control_agent() -> ureq::Agent {
+    ureq::Agent::config_builder()
+        .timeout_global(Some(CONTROL_TIMEOUT))
+        .build()
+        .into()
+}
+
+fn control_url(info: &DaemonInfo, path: &str) -> String {
+    format!("http://127.0.0.1:{}/{path}", info.port)
+}
+
+fn running(project: &Path) -> Option<DaemonInfo> {
     let info = RunDir::of(project).read_info().ok()?;
-    let pid = Pid::from_raw(i32::try_from(info.pid).ok()?);
-    kill(pid, None).ok().map(|()| (pid, info.port))
+    let mut response = control_agent()
+        .get(control_url(&info, "status"))
+        .header("Authorization", format!("Bearer {}", info.token))
+        .call()
+        .ok()?;
+    let body = response.body_mut().read_to_string().ok()?;
+    let status: serde_json::Value = serde_json::from_str(&body).ok()?;
+    (status.get("pid")?.as_u64()? == u64::from(info.pid)).then_some(info)
 }
 
 async fn run_daemon(project: &Path, idle_seconds: u64) -> ExitCode {
@@ -316,20 +332,25 @@ async fn run_daemon(project: &Path, idle_seconds: u64) -> ExitCode {
 }
 
 fn daemon_status(project: &Path) -> ExitCode {
-    let Some((pid, port)) = running_pid(project) else {
+    let Some(info) = running(project) else {
         println!("not running");
         return ExitCode::FAILURE;
     };
-    println!("running · pid {pid} · port {port}");
+    println!("running · pid {} · port {}", info.pid, info.port);
     ExitCode::SUCCESS
 }
 
 async fn stop_daemon(project: &Path) -> ExitCode {
-    let Some((pid, _)) = running_pid(project) else {
+    let Some(info) = running(project) else {
         println!("not running");
         return ExitCode::SUCCESS;
     };
-    if let Err(error) = kill(pid, Signal::SIGTERM) {
+    let pid = info.pid;
+    if let Err(error) = control_agent()
+        .post(control_url(&info, "stop"))
+        .header("Authorization", format!("Bearer {}", info.token))
+        .send_empty()
+    {
         eprintln!("cannot stop pid {pid}: {error}");
         return ExitCode::FAILURE;
     }

@@ -1002,6 +1002,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn only_pages_that_block_readers_fall_back_to_a_screenshot() {
         use std::os::unix::fs::PermissionsExt;

@@ -2,13 +2,13 @@ use std::path::{Path, PathBuf};
 use std::process::{Output, Stdio};
 use std::time::{Duration, Instant};
 
+use crate::spawn::command;
 use async_trait::async_trait;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use gjd_core::contracts::VariantSet;
 use serde::Deserialize;
 use serde_json::Value;
-use tokio::process::Command;
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 
@@ -215,7 +215,7 @@ async fn write_images(dir: &Path, images: &[ImageInput]) -> Result<Vec<PathBuf>,
 async fn query(binary: &Path, args: &[&str]) -> Result<Output, ProviderError> {
     timeout(
         QUERY_TIMEOUT,
-        Command::new(binary)
+        command(binary)
             .args(args)
             .stdin(Stdio::null())
             .kill_on_drop(true)
