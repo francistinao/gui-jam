@@ -58,6 +58,9 @@ for dir in "$play"/apps/*/; do
   if [ ! -f "$dir/pnpm-workspace.yaml" ] || ! grep -q minimumReleaseAge "$dir/pnpm-workspace.yaml"; then
     printf 'minimumReleaseAge: 20160\n' >> "$dir/pnpm-workspace.yaml"
   fi
+  if ! grep -q minimumReleaseAgeExclude "$dir/pnpm-workspace.yaml"; then
+    printf "minimumReleaseAgeExclude:\n  - guijam\n  - '@guijam/*'\n" >> "$dir/pnpm-workspace.yaml"
+  fi
   node "$repo/scripts/pin-mature.mjs" "$dir/package.json" guijam
   (cd "$dir" && PATH="$path_prefix$PATH" pnpm add -D "$spec" > /dev/null)
   (cd "$dir" && env PATH="$path_prefix$PATH" "$gjd_env" \
