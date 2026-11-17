@@ -3,7 +3,14 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { detectProject } from './detect.js';
-import { addGuijamPlugin, callsGuijam, isWired, wireProject } from './wire.js';
+import {
+  addGuijamPlugin,
+  addNuxtModule,
+  callsGuijam,
+  hasNuxtModule,
+  isWired,
+  wireProject,
+} from './wire.js';
 
 const REACT_CONFIG = `import react from '@vitejs/plugin-react';
 import { defineConfig } from 'vite';
@@ -132,15 +139,28 @@ describe('wireProject', () => {
   });
 
   it('leaves frameworks without an adapter untouched', async () => {
-    const root = app(
-      { 'nuxt.config.ts': 'export default defineNuxtConfig({});\n' },
-      { nuxt: '^4.2.0' },
-    );
+    const root = app({ 'next.config.mjs': 'export default {};\n' }, { next: '^16.0.0' });
 
     expect(await wireProject(detectProject(root, {}))).toMatchObject({ status: 'unsupported' });
-    expect(readFileSync(join(root, 'nuxt.config.ts'), 'utf8')).toBe(
-      'export default defineNuxtConfig({});\n',
+    expect(readFileSync(join(root, 'next.config.mjs'), 'utf8')).toBe('export default {};\n');
+  });
+
+  it('adds the Nuxt module once and recognises it afterwards', async () => {
+    const root = app(
+      {
+        'nuxt.config.ts':
+          'export default defineNuxtConfig({\n  devtools: { enabled: true },\n});\n',
+      },
+      { nuxt: '4.6.4' },
     );
+    const project = detectProject(root, {});
+
+    expect(await wireProject(project)).toMatchObject({ status: 'added' });
+    expect(readFileSync(join(root, 'nuxt.config.ts'), 'utf8')).toBe(
+      "export default defineNuxtConfig({\n  modules: ['guijam/nuxt'],\n  devtools: { enabled: true },\n});\n",
+    );
+    expect(await isWired(project)).toBe(true);
+    expect(await wireProject(project)).toMatchObject({ status: 'present' });
   });
 
   it('returns the snippet when it cannot edit safely', async () => {
@@ -152,5 +172,55 @@ describe('wireProject', () => {
 
     expect(result).toMatchObject({ status: 'manual', file: join(root, 'vite.config.js') });
     expect(readFileSync(join(root, 'vite.config.js'), 'utf8')).toBe(code);
+  });
+});
+
+describe('addNuxtModule', () => {
+  it.each([
+    [
+      "export default defineNuxtConfig({ modules: ['@nuxt/ui'] });\n",
+      "export default defineNuxtConfig({ modules: ['guijam/nuxt', '@nuxt/ui'] });\n",
+    ],
+    [
+      'export default defineNuxtConfig({ modules: [] });\n',
+      "export default defineNuxtConfig({ modules: ['guijam/nuxt'] });\n",
+    ],
+    [
+      'export default defineNuxtConfig({});\n',
+      "export default defineNuxtConfig({ modules: ['guijam/nuxt'] });\n",
+    ],
+    [
+      'export default defineNuxtConfig({ modules: ["@pinia/nuxt"] });\n',
+      'export default defineNuxtConfig({ modules: ["guijam/nuxt", "@pinia/nuxt"] });\n',
+    ],
+    [
+      "const config = defineNuxtConfig({\n  modules: [\n    '@pinia/nuxt',\n  ],\n});\nexport default config;\n",
+      "const config = defineNuxtConfig({\n  modules: [\n    'guijam/nuxt',\n    '@pinia/nuxt',\n  ],\n});\nexport default config;\n",
+    ],
+  ])('adds guijam/nuxt to %j', (code, expected) => {
+    expect(addNuxtModule(code)).toEqual({ kind: 'added', code: expected });
+    expect(hasNuxtModule(expected)).toBe(true);
+  });
+
+  it('knows when the module is already there, as a string or with options', () => {
+    expect(
+      addNuxtModule("export default defineNuxtConfig({ modules: ['guijam/nuxt'] });\n"),
+    ).toEqual({ kind: 'present' });
+    expect(
+      addNuxtModule("export default defineNuxtConfig({ modules: [['guijam/nuxt', {}]] });\n"),
+    ).toEqual({ kind: 'present' });
+  });
+
+  it('falls back to manual steps when modules are computed or the file does not parse', () => {
+    expect(
+      addNuxtModule('export default defineNuxtConfig({ modules: getModules() });\n'),
+    ).toMatchObject({
+      kind: 'manual',
+      reason: 'its modules are not a plain array',
+    });
+    expect(addNuxtModule('export default defineNuxtConfig({').kind).toBe('manual');
+    expect(hasNuxtModule('export default defineNuxtConfig({ modules: getModules() });\n')).toBe(
+      false,
+    );
   });
 });

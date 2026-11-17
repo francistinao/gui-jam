@@ -18,6 +18,7 @@ import {
 import type { Project } from './detect.js';
 
 export const PLUGIN_SOURCE = 'guijam/vite';
+export const NUXT_MODULE = 'guijam/nuxt';
 
 const MAX_HOPS = 8;
 
@@ -48,7 +49,6 @@ interface Bodies {
 const VITE_FRAMEWORKS = new Set(['vite', 'sveltekit']);
 
 const COMING_SOON: Record<string, string> = {
-  nuxt: 'Nuxt support is next on the roadmap.',
   next: 'Next.js support is on the roadmap.',
   astro: 'Astro support is on the roadmap.',
   angular: 'Angular support is on the roadmap.',
@@ -199,13 +199,17 @@ function exportedConfig(program: Program): Found<ObjectExpression> {
   return configObject(declaration, program.body, bodies, 0);
 }
 
-function isPluginsKey(property: ObjectProperty): boolean {
+function isKey(property: ObjectProperty, name: string): boolean {
   if (property.computed) return false;
   const { key } = property;
   return (
-    (key.type === 'Identifier' && key.name === 'plugins') ||
-    (key.type === 'Literal' && key.value === 'plugins')
+    (key.type === 'Identifier' && key.name === name) ||
+    (key.type === 'Literal' && key.value === name)
   );
+}
+
+function isPluginsKey(property: ObjectProperty): boolean {
+  return isKey(property, 'plugins');
 }
 
 function insertFirst(
@@ -287,6 +291,78 @@ export function addGuijamPlugin(code: string, filename = 'vite.config.ts'): Edit
   return { kind: 'added', code: next };
 }
 
+function modulesOf(config: ObjectExpression): Found<ArrayExpression> | undefined {
+  const property = config.properties.find(
+    (entry): entry is ObjectProperty => entry.type === 'Property' && isKey(entry, 'modules'),
+  );
+  if (property === undefined) return undefined;
+  const value = unwrap(property.value);
+  return value.type === 'ArrayExpression'
+    ? { node: value }
+    : { problem: 'its modules are not a plain array' };
+}
+
+function listsNuxtModule(modules: ArrayExpression): boolean {
+  return modules.elements.some((element) => {
+    if (element === null || element.type === 'SpreadElement') return false;
+    const value = unwrap(element);
+    if (value.type === 'Literal') return value.value === NUXT_MODULE;
+    if (value.type === 'ArrayExpression') {
+      const [name] = value.elements;
+      return (
+        name !== null && name !== undefined && name.type === 'Literal' && name.value === NUXT_MODULE
+      );
+    }
+    return false;
+  });
+}
+
+export function hasNuxtModule(code: string, filename = 'nuxt.config.ts'): boolean {
+  const parsed = parseSync(filename, code);
+  if (parsed.errors.length > 0) return false;
+  const config = exportedConfig(parsed.program);
+  if ('problem' in config) return false;
+  const modules = modulesOf(config.node);
+  return modules !== undefined && 'node' in modules && listsNuxtModule(modules.node);
+}
+
+export function addNuxtModule(code: string, filename = 'nuxt.config.ts'): EditOutcome {
+  const parsed = parseSync(filename, code);
+  const [error] = parsed.errors;
+  if (error !== undefined)
+    return { kind: 'manual', reason: `it could not be parsed (${error.message})` };
+  const config = exportedConfig(parsed.program);
+  if ('problem' in config) return { kind: 'manual', reason: config.problem };
+  const output = new MagicString(code);
+  const quote = code.includes('"') && !code.includes("'") ? '"' : "'";
+  const entry = `${quote}${NUXT_MODULE}${quote}`;
+  const modules = modulesOf(config.node);
+  if (modules !== undefined && 'problem' in modules)
+    return { kind: 'manual', reason: modules.problem };
+  if (modules === undefined) {
+    const [first] = config.node.properties;
+    if (first === undefined) output.appendLeft(config.node.start + 1, ` modules: [${entry}] `);
+    else insertFirst(output, code, config.node.start + 1, first.start, `modules: [${entry}]`);
+  } else {
+    if (listsNuxtModule(modules.node)) return { kind: 'present' };
+    const first = modules.node.elements.find((element) => element !== null);
+    if (first === undefined || first === null) output.appendLeft(modules.node.start + 1, entry);
+    else insertFirst(output, code, modules.node.start + 1, first.start, entry);
+  }
+  const next = output.toString();
+  if (!hasNuxtModule(next, filename))
+    return { kind: 'manual', reason: 'the edit could not be verified' };
+  return { kind: 'added', code: next };
+}
+
+export function nuxtConfigSnippet(): string {
+  return [
+    'export default defineNuxtConfig({',
+    `  modules: ['${NUXT_MODULE}', ...yourModules],`,
+    '});',
+  ].join('\n');
+}
+
 export function viteConfigSnippet(): string {
   return [
     "import { guijam } from 'guijam/vite';",
@@ -309,6 +385,29 @@ function newViteConfig(): string {
   ].join('\n');
 }
 
+async function wireNuxt(project: Project): Promise<WireResult> {
+  const file = project.configFile ?? join(project.root, 'nuxt.config.ts');
+  if (project.configFile === undefined) {
+    await writeFile(
+      file,
+      ['export default defineNuxtConfig({', `  modules: ['${NUXT_MODULE}'],`, '});', ''].join('\n'),
+      { flag: 'wx' },
+    );
+    return { status: 'created', file };
+  }
+  const outcome = addNuxtModule(await readFile(file, 'utf8'), basename(file));
+  if (outcome.kind === 'manual') {
+    return {
+      status: 'manual',
+      file,
+      reason: `${basename(file)} can't be edited safely: ${outcome.reason}.`,
+      snippet: nuxtConfigSnippet(),
+    };
+  }
+  if (outcome.kind === 'added') await writeFile(file, outcome.code);
+  return { status: outcome.kind, file };
+}
+
 export async function wireProject(project: Project): Promise<WireResult> {
   const soon = COMING_SOON[project.framework];
   if (soon !== undefined) {
@@ -317,6 +416,7 @@ export async function wireProject(project: Project): Promise<WireResult> {
       reason: `GUIJam doesn't plug into ${project.frameworkLabel} yet. ${soon}`,
     };
   }
+  if (project.framework === 'nuxt') return wireNuxt(project);
   if (!VITE_FRAMEWORKS.has(project.framework)) {
     return {
       status: 'unsupported',
@@ -345,7 +445,9 @@ export async function wireProject(project: Project): Promise<WireResult> {
 export async function isWired(project: Project): Promise<boolean> {
   if (project.configFile === undefined) return false;
   try {
-    return callsGuijam(await readFile(project.configFile, 'utf8'), basename(project.configFile));
+    const code = await readFile(project.configFile, 'utf8');
+    if (project.framework === 'nuxt') return hasNuxtModule(code, basename(project.configFile));
+    return callsGuijam(code, basename(project.configFile));
   } catch {
     return false;
   }

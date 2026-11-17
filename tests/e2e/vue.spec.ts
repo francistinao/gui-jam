@@ -167,7 +167,9 @@ test('an inline style attribute in a vue template is edited as CSS', async ({ pa
 
 test('a drawn prompt previews a variant in the vue file and Use writes it', async ({ page }) => {
   await openFixture(page, fixture.url);
-  await page.getByRole('toolbar', { name: 'GUIJam' }).getByRole('button', { name: 'Draw' }).click();
+  const draw = page.getByRole('toolbar', { name: 'GUIJam' }).getByRole('button', { name: 'Draw' });
+  await draw.click();
+  await expect(draw).toHaveAttribute('aria-pressed', 'true');
   const button = page.getByRole('button', { name: 'Order now' });
   await circle(page, button);
   const prompt = page.getByRole('dialog', { name: 'Ask AI src/components/OrderButton.vue' });
