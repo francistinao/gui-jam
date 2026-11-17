@@ -11,6 +11,7 @@ import {
   widgetRequests,
 } from './support/daemon.js';
 import { type FixtureServer, openFixture, startFixtureServer } from './support/fixture.js';
+import { searchPath } from './support/process.js';
 
 const START_DIR = fileURLToPath(
   new URL('../../fixtures/node24/small-solidstart-tailwind4/', import.meta.url),
@@ -81,7 +82,7 @@ test.beforeAll(async () => {
   workDir = await mkdtemp(join(tmpdir(), 'guijam-solidstart-'));
   process.env.GUIJAM_GJD_BIN = GJD_BINARY;
   process.env.GUIJAM_FAKE_CLAUDE_LOG = join(workDir, 'runs.jsonl');
-  process.env.PATH = `${FAKE_CLI_DIR}:${savedPath ?? ''}`;
+  process.env.PATH = searchPath(FAKE_CLI_DIR, savedPath);
   for (const file of [ORDER_BUTTON, HOME, MENU]) originals.set(file, await readFile(file, 'utf8'));
   process.chdir(START_DIR);
   fixture = await startFixtureServer(undefined, START_DIR);

@@ -17,6 +17,7 @@ import {
   openFixture,
   startFixtureServer,
 } from './support/fixture.js';
+import { searchPath } from './support/process.js';
 
 const FAKE_CLI_DIR = fileURLToPath(new URL('../fake-cli/', import.meta.url));
 const APP = fixturePath('src/App.tsx');
@@ -96,7 +97,7 @@ test.beforeAll(async () => {
   cliLog = join(await mkdtemp(join(tmpdir(), 'guijam-fake-claude-')), 'runs.jsonl');
   process.env.GUIJAM_GJD_BIN = GJD_BINARY;
   process.env.GUIJAM_FAKE_CLAUDE_LOG = cliLog;
-  process.env.PATH = `${FAKE_CLI_DIR}:${savedEnv.PATH ?? ''}`;
+  process.env.PATH = searchPath(FAKE_CLI_DIR, savedEnv.PATH);
   fixture = await startFixtureServer();
   originalApp = await readFile(APP, 'utf8');
   await waitForDaemon(widgetRequests(fixture.api), ORDER_BUTTON_REF);

@@ -98,3 +98,79 @@ jobs:
       - run: pnpm build
       - name: Packed guijam installs, loads and type-checks outside the workspace
         run: scripts/smoke-package.sh
+
+  unit-windows:
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: pnpm/action-setup@v6.1.1
+      - uses: actions/setup-node@v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - run: pnpm test
+
+  rust-windows:
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - name: Install the pinned toolchain from rust-toolchain.toml
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2.9.3
+      - run: cargo test --workspace
+
+  e2e-windows:
+    runs-on: windows-2025
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: pnpm/action-setup@v6.1.1
+      - uses: actions/setup-node@v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - name: Install the pinned toolchain from rust-toolchain.toml
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2.9.3
+      - run: cargo build -p gjd-daemon
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec playwright install chromium
+      - run: pnpm build
+      - name: Core specs on Windows
+        run: >-
+          pnpm exec playwright test tests/e2e/s1-overlays.spec.ts tests/e2e/finetune.spec.ts
+          tests/e2e/daemon-bridge.spec.ts tests/e2e/draw-variant.spec.ts tests/e2e/init.spec.ts
+          tests/e2e/next.spec.ts tests/e2e/vue.spec.ts
+      - if: failure()
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: playwright-report-windows
+          path: test-results/
+          retention-days: 7
+
+  package-windows:
+    runs-on: windows-2025
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: pnpm/action-setup@v6.1.1
+      - uses: actions/setup-node@v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - name: Install the pinned toolchain from rust-toolchain.toml
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2.9.3
+      - run: cargo build -p gjd-daemon
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - name: Packed guijam and the win32-x64 gjd install and load outside the workspace
+        env:
+          GJD_BINARY: target/debug/gjd.exe
+        run: scripts/smoke-package.sh

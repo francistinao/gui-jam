@@ -6,6 +6,7 @@ import { expect, type Locator, type Page, test } from '@playwright/test';
 import { type AstroServer, startAstro } from './support/astro.js';
 import { GJD_BINARY, requireDaemonBinary, stopDaemon } from './support/daemon.js';
 import { openFixture } from './support/fixture.js';
+import { searchPath } from './support/process.js';
 
 const ASTRO_DIR = fileURLToPath(new URL('../../fixtures/small-astro-tailwind4/', import.meta.url));
 const FAKE_CLI_DIR = fileURLToPath(new URL('../fake-cli/', import.meta.url));
@@ -75,7 +76,7 @@ test.beforeAll(async () => {
   workDir = await mkdtemp(join(tmpdir(), 'guijam-astro-'));
   process.env.GUIJAM_GJD_BIN = GJD_BINARY;
   process.env.GUIJAM_FAKE_CLAUDE_LOG = join(workDir, 'runs.jsonl');
-  process.env.PATH = `${FAKE_CLI_DIR}:${savedPath ?? ''}`;
+  process.env.PATH = searchPath(FAKE_CLI_DIR, savedPath);
   for (const file of [ORDER_BUTTON, INDEX, TALLY]) {
     originals.set(file, await readFile(file, 'utf8'));
   }

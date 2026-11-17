@@ -1,6 +1,6 @@
-import { type ChildProcess, spawn } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { createServer } from 'node:net';
-import { join } from 'node:path';
+import { binOf, IS_WINDOWS, mergeEnv, stopTree } from './process.js';
 
 const READY = /Ready in/;
 const START_TIMEOUT_MS = 90_000;
@@ -26,40 +26,15 @@ function freePort(): Promise<number> {
   });
 }
 
-function stopGroup(child: ChildProcess): Promise<void> {
-  return new Promise((resolve) => {
-    if (child.exitCode !== null || child.pid === undefined) {
-      resolve();
-      return;
-    }
-    child.once('exit', () => resolve());
-    try {
-      process.kill(-child.pid, 'SIGTERM');
-    } catch {
-      resolve();
-    }
-    setTimeout(() => {
-      try {
-        if (child.pid !== undefined) process.kill(-child.pid, 'SIGKILL');
-      } catch {
-        resolve();
-      }
-    }, 5_000).unref();
-  });
-}
-
 export async function startNuxt(dir: string, env: NodeJS.ProcessEnv): Promise<NuxtServer> {
   const port = await freePort();
-  const child = spawn(
-    join(dir, 'node_modules/.bin/nuxt'),
-    ['dev', '--port', String(port), '--host', '127.0.0.1'],
-    {
-      cwd: dir,
-      env: { ...process.env, ...env, NUXT_TELEMETRY_DISABLED: '1' },
-      stdio: ['ignore', 'pipe', 'pipe'],
-      detached: true,
-    },
-  );
+  const child = spawn(binOf(dir, 'nuxt'), ['dev', '--port', String(port), '--host', '127.0.0.1'], {
+    cwd: dir,
+    env: mergeEnv(process.env, { ...env, NUXT_TELEMETRY_DISABLED: '1' }),
+    stdio: ['ignore', 'pipe', 'pipe'],
+    detached: !IS_WINDOWS,
+    shell: IS_WINDOWS,
+  });
   let output = '';
   const ready = new Promise<void>((resolve, reject) => {
     const timer = setTimeout(
@@ -83,12 +58,12 @@ export async function startNuxt(dir: string, env: NodeJS.ProcessEnv): Promise<Nu
   try {
     await ready;
   } catch (error) {
-    await stopGroup(child);
+    await stopTree(child);
     throw error;
   }
   return {
     url: `http://127.0.0.1:${port}/`,
     output: () => output,
-    stop: () => stopGroup(child),
+    stop: () => stopTree(child),
   };
 }

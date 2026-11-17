@@ -6,6 +6,7 @@ import { expect, type Locator, type Page, test } from '@playwright/test';
 import { GJD_BINARY, requireDaemonBinary, stopDaemon } from './support/daemon.js';
 import { openFixture } from './support/fixture.js';
 import { type NuxtServer, startNuxt } from './support/nuxt.js';
+import { searchPath } from './support/process.js';
 
 const NUXT_DIR = fileURLToPath(new URL('../../fixtures/small-nuxt-tailwind4/', import.meta.url));
 const FAKE_CLI_DIR = fileURLToPath(new URL('../fake-cli/', import.meta.url));
@@ -56,7 +57,7 @@ test.beforeAll(async () => {
   nuxt = await startNuxt(NUXT_DIR, {
     GUIJAM_GJD_BIN: GJD_BINARY,
     GUIJAM_FAKE_CLAUDE_LOG: join(workDir, 'runs.jsonl'),
-    PATH: `${FAKE_CLI_DIR}:${process.env.PATH ?? ''}`,
+    PATH: searchPath(FAKE_CLI_DIR, process.env.PATH),
   });
 });
 

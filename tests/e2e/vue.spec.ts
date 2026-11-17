@@ -11,6 +11,7 @@ import {
   widgetRequests,
 } from './support/daemon.js';
 import { type FixtureServer, openFixture, startFixtureServer } from './support/fixture.js';
+import { searchPath } from './support/process.js';
 
 const VUE_DIR = fileURLToPath(new URL('../../fixtures/small-vue-tailwind4/', import.meta.url));
 const FAKE_CLI_DIR = fileURLToPath(new URL('../fake-cli/', import.meta.url));
@@ -68,7 +69,7 @@ test.beforeAll(async () => {
   workDir = await mkdtemp(join(tmpdir(), 'guijam-vue-'));
   process.env.GUIJAM_GJD_BIN = GJD_BINARY;
   process.env.GUIJAM_FAKE_CLAUDE_LOG = join(workDir, 'runs.jsonl');
-  process.env.PATH = `${FAKE_CLI_DIR}:${savedPath ?? ''}`;
+  process.env.PATH = searchPath(FAKE_CLI_DIR, savedPath);
   for (const file of [ORDER_BUTTON, APP]) originals.set(file, await readFile(file, 'utf8'));
   fixture = await startFixtureServer(undefined, VUE_DIR);
   await waitForDaemon(widgetRequests(fixture.api), {

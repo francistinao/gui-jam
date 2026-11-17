@@ -8,6 +8,7 @@ targets=(
   darwin-x64:x86_64-apple-darwin
   linux-x64:x86_64-unknown-linux-musl
   linux-arm64:aarch64-unknown-linux-musl
+  win32-x64:x86_64-pc-windows-gnu
 )
 
 usage() {
@@ -33,11 +34,13 @@ build() {
     target="${entry#*:}"
     echo "== gjd $version for $platform"
     builder=(cargo build)
-    [[ $target == *-linux-* ]] && builder=(cargo zigbuild)
+    [[ $target == *-linux-* || $target == *-windows-* ]] && builder=(cargo zigbuild)
+    binary=gjd
+    [[ $target == *-windows-* ]] && binary=gjd.exe
     (cd "$repo" && GJD_VERSION="$version" "${builder[@]}" --release --locked -p gjd-daemon \
       --target "$target")
     REPO_URL="$repo_url" node "$repo/scripts/platform-package.mjs" "$platform" \
-      "$repo/target/$target/release/gjd" "$version" "$out/platforms"
+      "$repo/target/$target/release/$binary" "$version" "$out/platforms"
     rm -rf "$repo/target/$target"
   done
 
@@ -49,11 +52,11 @@ build() {
     cd "$worktree/packages/guijam"
     npm pkg set "version=$version" repository.type=git "repository.url=$repo_url"
     npm pkg delete devDependencies scripts
-    VERSION="$version" node -e '
+    VERSION="$version" PLATFORMS="${targets[*]%%:*}" node -e '
       const fs = require("node:fs");
       const manifest = JSON.parse(fs.readFileSync("package.json", "utf8"));
       manifest.optionalDependencies = Object.fromEntries(
-        ["darwin-arm64", "darwin-x64", "linux-x64", "linux-arm64"].map((platform) => [
+        process.env.PLATFORMS.split(" ").map((platform) => [
           `@guijam/gjd-${platform}`,
           process.env.VERSION,
         ]),

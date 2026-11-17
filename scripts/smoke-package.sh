@@ -59,7 +59,8 @@ if [[ ${#platform_tarball[@]} -gt 0 ]]; then
 import { execFileSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 const require = createRequire(import.meta.resolve('guijam/vite'));
-const binary = require.resolve('@guijam/gjd-' + process.platform + '-' + process.arch + '/bin/gjd');
+const name = process.platform === 'win32' ? 'gjd.exe' : 'gjd';
+const binary = require.resolve('@guijam/gjd-' + process.platform + '-' + process.arch + '/bin/' + name);
 const version = execFileSync(binary, ['--version'], { encoding: 'utf8' });
 if (!version.startsWith('gjd ')) throw new Error('unexpected gjd --version output: ' + version);
 "

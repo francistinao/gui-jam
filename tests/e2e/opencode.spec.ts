@@ -18,6 +18,7 @@ import {
   openFixture,
   startFixtureServer,
 } from './support/fixture.js';
+import { searchPath } from './support/process.js';
 
 const FAKE_CLI_DIR = fileURLToPath(new URL('../fake-cli/', import.meta.url));
 const ORDER_BUTTON = fixturePath('src/components/OrderButton.tsx');
@@ -96,7 +97,7 @@ test.beforeAll(async () => {
   process.env.XDG_CONFIG_HOME = configHome;
   process.env.GUIJAM_TEST_CONFIG_HOME = configHome;
   process.env.GUIJAM_FAKE_OPENCODE_LOG = runLog;
-  process.env.PATH = `${FAKE_CLI_DIR}:${savedEnv.PATH ?? ''}`;
+  process.env.PATH = searchPath(FAKE_CLI_DIR, savedEnv.PATH);
   fixture = await startFixtureServer();
   await waitForDaemon(widgetRequests(fixture.api), ORDER_BUTTON_REF);
 });

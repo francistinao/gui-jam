@@ -7,6 +7,7 @@ const PLATFORMS = {
   'darwin-x64': { os: 'darwin', cpu: 'x64', label: 'macOS on Intel' },
   'linux-x64': { os: 'linux', cpu: 'x64', label: 'Linux on x64' },
   'linux-arm64': { os: 'linux', cpu: 'arm64', label: 'Linux on arm64' },
+  'win32-x64': { os: 'win32', cpu: 'x64', label: 'Windows on x64' },
 };
 
 const [requested, binary, version, outDir] = process.argv.slice(2);
@@ -36,9 +37,10 @@ const manifest = {
   ...(process.env.REPO_URL ? { repository: { type: 'git', url: process.env.REPO_URL } } : {}),
 };
 
+const shipped = join(dir, 'bin', target.os === 'win32' ? 'gjd.exe' : 'gjd');
 await mkdir(join(dir, 'bin'), { recursive: true });
-await copyFile(binary, join(dir, 'bin/gjd'));
-await chmod(join(dir, 'bin/gjd'), 0o755);
+await copyFile(binary, shipped);
+await chmod(shipped, 0o755);
 await copyFile(join(repo, 'LICENSE'), join(dir, 'LICENSE'));
 await writeFile(join(dir, 'package.json'), `${JSON.stringify(manifest, null, 2)}\n`);
 await writeFile(

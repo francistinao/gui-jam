@@ -7,6 +7,7 @@ import { promisify } from 'node:util';
 import { expect, test } from '@playwright/test';
 import { GJD_BINARY, requireDaemonBinary, stopDaemon } from './support/daemon.js';
 import { FIXTURE_DIR, fixturePath, openFixture, startFixtureServer } from './support/fixture.js';
+import { mergeEnv, withSearchPath } from './support/process.js';
 
 const run = promisify(execFile);
 const CLI = fileURLToPath(new URL('../../packages/guijam/dist/cli.js', import.meta.url));
@@ -25,7 +26,7 @@ async function copyFixture(root: string): Promise<void> {
   for (const entry of ['index.html', 'package.json', 'src', 'public']) {
     await cp(fixturePath(entry), join(root, entry), { recursive: true });
   }
-  await symlink(join(FIXTURE_DIR, 'node_modules'), join(root, 'node_modules'));
+  await symlink(join(FIXTURE_DIR, 'node_modules'), join(root, 'node_modules'), 'junction');
   await writeFile(join(root, 'vite.config.ts'), UNWIRED_CONFIG);
   await writeFile(join(root, '.gitignore'), 'node_modules\n');
   await mkdir(join(root, '.git'));
@@ -36,13 +37,12 @@ async function init(root: string, configHome: string): Promise<string> {
     process.execPath,
     [CLI, 'init', '--yes', '--skip-install', '--provider', 'claude-code', '--cwd', root],
     {
-      env: {
-        ...process.env,
+      env: mergeEnv(withSearchPath(process.env, FAKE_CLI_DIR), {
         NO_COLOR: '1',
         XDG_CONFIG_HOME: configHome,
+        APPDATA: configHome,
         GUIJAM_GJD_BIN: GJD_BINARY,
-        PATH: `${FAKE_CLI_DIR}:${process.env.PATH ?? ''}`,
-      },
+      }),
     },
   );
   return stdout;

@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { expect, type Locator, type Page, test } from '@playwright/test';
 import { GJD_BINARY, requireDaemonBinary, stopDaemon } from './support/daemon.js';
 import { type Bundler, type NextServer, startNext } from './support/next.js';
+import { searchPath } from './support/process.js';
 
 const NEXT_DIR = fileURLToPath(new URL('../../fixtures/small-next-tailwind4/', import.meta.url));
 const FAKE_CLI_DIR = fileURLToPath(new URL('../fake-cli/', import.meta.url));
@@ -77,7 +78,7 @@ for (const bundler of BUNDLERS) {
       workDir = await mkdtemp(join(tmpdir(), `guijam-next-${bundler}-`));
       process.env.GUIJAM_GJD_BIN = GJD_BINARY;
       process.env.GUIJAM_FAKE_CLAUDE_LOG = join(workDir, 'runs.jsonl');
-      process.env.PATH = `${FAKE_CLI_DIR}:${savedPath ?? ''}`;
+      process.env.PATH = searchPath(FAKE_CLI_DIR, savedPath);
       for (const file of [ORDER_BUTTON, PAGE]) originals.set(file, await readFile(file, 'utf8'));
       await rm(join(NEXT_DIR, '.next'), { recursive: true, force: true });
       next = await startNext(NEXT_DIR, bundler);

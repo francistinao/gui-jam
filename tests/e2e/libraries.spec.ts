@@ -17,6 +17,7 @@ import {
   openFixture,
   startFixtureServer,
 } from './support/fixture.js';
+import { searchPath } from './support/process.js';
 
 const FAKE_CLI_DIR = fileURLToPath(new URL('../fake-cli/', import.meta.url));
 const FAKE_PM_DIR = fileURLToPath(new URL('../fake-pm/', import.meta.url));
@@ -94,7 +95,7 @@ test.beforeAll(async () => {
   process.env.GUIJAM_GJD_BIN = GJD_BINARY;
   process.env.GUIJAM_FAKE_CLAUDE_LOG = cliLog;
   process.env.GUIJAM_FAKE_PM_LOG = pmLog;
-  process.env.PATH = `${FAKE_PM_DIR}:${FAKE_CLI_DIR}:${savedPath ?? ''}`;
+  process.env.PATH = searchPath(FAKE_PM_DIR, FAKE_CLI_DIR, savedPath);
   originalManifest = await readFile(MANIFEST, 'utf8');
   await rm(THREE, { recursive: true, force: true });
   fixture = await startFixtureServer();

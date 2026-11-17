@@ -6,7 +6,12 @@ import type { GuijamApi, GuijamMessage } from 'guijam/vite';
 
 const run = promisify(execFile);
 
-export const GJD_BINARY = fileURLToPath(new URL('../../../target/debug/gjd', import.meta.url));
+export const GJD_BINARY = fileURLToPath(
+  new URL(
+    `../../../target/debug/gjd${process.platform === 'win32' ? '.exe' : ''}`,
+    import.meta.url,
+  ),
+);
 
 export async function requireDaemonBinary(): Promise<void> {
   try {
