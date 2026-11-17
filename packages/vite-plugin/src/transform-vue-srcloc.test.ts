@@ -31,7 +31,7 @@ const open = true;
 </script>
 `;
 
-    const result = injectVueSourceLocations(source, 'src/App.vue', compiler);
+    const result = injectVueSourceLocations(source, '/repo/src/App.vue', 'src/App.vue', compiler);
 
     expect(attributes(result?.code ?? '')).toEqual([
       'div src/App.vue:2:3',
@@ -47,23 +47,34 @@ const open = true;
   it('counts columns in UTF-16 code units after non-ASCII text', () => {
     const source =
       '<template>\n  <p>오늘 <span class="font-semibold">Ube</span></p>\n</template>\n';
-    const result = injectVueSourceLocations(source, 'src/A.vue', compiler);
+    const result = injectVueSourceLocations(source, '/repo/src/A.vue', 'src/A.vue', compiler);
     expect(attributes(result?.code ?? '')).toEqual(['p src/A.vue:2:3', 'span src/A.vue:2:9']);
   });
 
   it('leaves files without a template, already marked elements, or parse errors alone', () => {
     expect(
-      injectVueSourceLocations('<script setup>const a = 1;</script>\n', 'src/B.vue', compiler),
+      injectVueSourceLocations(
+        '<script setup>const a = 1;</script>\n',
+        '/repo/src/B.vue',
+        'src/B.vue',
+        compiler,
+      ),
     ).toBeNull();
     expect(
       injectVueSourceLocations(
         '<template><p data-gj-src="x:1:1">Hi</p></template>\n',
+        '/repo/src/C.vue',
         'src/C.vue',
         compiler,
       ),
     ).toBeNull();
     expect(
-      injectVueSourceLocations('<template><div><p></template>\n', 'src/D.vue', compiler),
+      injectVueSourceLocations(
+        '<template><div><p></template>\n',
+        '/repo/src/D.vue',
+        'src/D.vue',
+        compiler,
+      ),
     ).toBeNull();
   });
 });

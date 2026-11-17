@@ -19,9 +19,7 @@ fn main() {
         .add_root_schema(root)
         .expect("typify rejected the contracts bundle");
 
-    let tokens = space
-        .to_stream()
-        .expect("typify failed to render the contracts");
+    let tokens = space.to_stream();
     let file: syn::File = syn::parse2(tokens).expect("typify produced unparsable tokens");
     let out = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR is set by cargo"));
     fs::write(out.join("contracts.rs"), prettyplease::unparse(&file))

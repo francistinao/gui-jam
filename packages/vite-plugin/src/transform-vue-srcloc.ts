@@ -37,6 +37,7 @@ function marked(node: VueNode): boolean {
 
 export function injectVueSourceLocations(
   code: string,
+  id: string,
   projectPath: string,
   compiler: VueSfcCompiler,
 ): AnnotatedVue | null {
@@ -63,5 +64,8 @@ export function injectVueSourceLocations(
   };
   for (const child of root.children ?? []) visit(child);
   if (!changed) return null;
-  return { code: output.toString(), map: output.generateMap({ hires: true, source: projectPath }) };
+  return {
+    code: output.toString(),
+    map: output.generateMap({ hires: true, source: id, includeContent: true }),
+  };
 }

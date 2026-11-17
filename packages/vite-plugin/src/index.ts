@@ -37,6 +37,7 @@ export type { GuijamMessage, UpdateResult } from '@guijam/contracts-ts';
 
 export interface GuijamOptions {
   daemonBinary?: string;
+  root?: string;
 }
 
 export interface GuijamApi {
@@ -103,6 +104,8 @@ export function guijam(options: GuijamOptions = {}): Plugin<GuijamApi> {
   let devServer: ViteDevServer | undefined;
   let daemon: DaemonClient | undefined;
   let root = process.cwd();
+  let viteRoot = process.cwd();
+  let publicDir = join(process.cwd(), 'public');
   let candidatesDir = '';
   let scriptEntries = new Set<string>();
   const pages = new Pages<PageClient>(dropRun, releaseRun);
@@ -335,12 +338,15 @@ export function guijam(options: GuijamOptions = {}): Plugin<GuijamApi> {
     },
 
     configResolved(config) {
-      root = config.root;
+      viteRoot = config.root;
+      root = options.root === undefined ? config.root : normalizePath(resolve(options.root));
+      publicDir = config.publicDir || join(viteRoot, 'public');
       candidatesDir = join(root, '.guijam', 'run', 'candidates');
       scriptEntries = scriptEntriesOf(config);
     },
 
     async configureServer(server) {
+      if (server.config.build.ssr) return;
       devServer = server;
       await mkdir(candidatesDir, { recursive: true });
       server.environments.client.hot.on('gj:update-result', (data) => {
@@ -350,7 +356,7 @@ export function guijam(options: GuijamOptions = {}): Plugin<GuijamApi> {
         const [pathname = '', search = ''] = (request.url ?? '').split('?', 2);
         if (!ASSET_FILE.test(pathname) || /(?:^|&)import\b/.test(search)) return next();
         const local = decodeURIComponent(pathname).replace(/^\/+/, '');
-        const file = [resolve(root, local), resolve(root, 'public', local)]
+        const file = [resolve(viteRoot, local), resolve(publicDir, local), resolve(root, local)]
           .map(normalizePath)
           .find((candidate) => overlays.has(candidate));
         const content = file === undefined ? undefined : overlays.get(file);
@@ -402,7 +408,7 @@ export function guijam(options: GuijamOptions = {}): Plugin<GuijamApi> {
     resolveId(source, importer) {
       if (source === CLIENT_ID) return CLIENT_ENTRY;
       return resolveOverlay(source, importer, {
-        root,
+        root: viteRoot,
         has: (id) => overlays.has(id),
         onDisk: (id) => existsSync(id),
       });
@@ -411,7 +417,7 @@ export function guijam(options: GuijamOptions = {}): Plugin<GuijamApi> {
     load(id) {
       const file = id.split('?', 1)[0] ?? id;
       if (ASSET_FILE.test(file) && overlays.has(file)) {
-        const inside = relative(root, file);
+        const inside = relative(viteRoot, file);
         const url = inside.startsWith('..') ? `/@fs${file}` : `/${normalizePath(inside)}`;
         return `export default ${JSON.stringify(url)};`;
       }
@@ -429,7 +435,7 @@ export function guijam(options: GuijamOptions = {}): Plugin<GuijamApi> {
           const projectPath = normalizePath(relative(root, id));
           if (projectPath.startsWith('..') || id.includes('/node_modules/')) return null;
           const compiler = await loadVueCompiler();
-          return compiler ? injectVueSourceLocations(code, projectPath, compiler) : null;
+          return compiler ? injectVueSourceLocations(code, id, projectPath, compiler) : null;
         }
         if (JSX_MODULE.test(id)) {
           const projectPath = normalizePath(relative(root, id));

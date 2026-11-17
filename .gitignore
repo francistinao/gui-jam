@@ -15,3 +15,5 @@ CLAUDE.md
 packages/guijam/README.md
 packages/guijam/LICENSE
 packages/guijam/assets/
+.nuxt/
+.output/

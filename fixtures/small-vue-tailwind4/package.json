@@ -11,10 +11,10 @@
     "vue": "3.5.44"
   },
   "devDependencies": {
-    "@tailwindcss/vite": "4.3.5",
+    "@tailwindcss/vite": "4.3.4",
     "@vitejs/plugin-vue": "6.0.10",
     "guijam": "workspace:*",
-    "tailwindcss": "4.3.5",
-    "vite": "8.3.8"
+    "tailwindcss": "4.3.4",
+    "vite": "8.3.5"
   }
 }
