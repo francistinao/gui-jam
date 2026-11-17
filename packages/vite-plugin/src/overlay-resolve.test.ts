@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { resolveOverlay } from './overlay-resolve.js';
+import { hotReloadable, resolveOverlay } from './overlay-resolve.js';
 
 const ROOT = '/repo/app';
 
@@ -44,5 +44,17 @@ describe('resolveOverlay', () => {
     expect(resolveOverlay('react', importer, lookup([organism]))).toBe(null);
     expect(resolveOverlay('./organisms/Missing', importer, lookup([organism]))).toBe(null);
     expect(resolveOverlay('./organisms/PricingSection', undefined, lookup([organism]))).toBe(null);
+  });
+});
+
+describe('hotReloadable', () => {
+  it.each([
+    ['/src/pages/login.vue', true],
+    ['/src/pages/login.vue?vue&type=style&index=0&lang.scss', true],
+    ['/src/index.css?direct', true],
+    ['/src/pages/login.vue?definePage&vue', false],
+    ['/pages/index.vue?macro=true', false],
+  ])('%s → %s', (url, expected) => {
+    expect(hotReloadable(url)).toBe(expected);
   });
 });

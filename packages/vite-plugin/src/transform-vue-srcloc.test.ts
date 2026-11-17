@@ -11,7 +11,46 @@ function attributes(code: string): string[] {
 }
 
 describe('injectVueSourceLocations', () => {
-  it('marks native elements with their own line and column, skipping components and templates', () => {
+  it('marks library and auto-imported components so their root element points at the usage', () => {
+    const source = `<template>
+  <VCard class="pa-4">
+    <VBtn color="primary" type="submit">Log in</VBtn>
+    <v-text-field label="Email" />
+    <AppTextField label="Name" />
+    <OrderButton />
+    <order-button />
+    <LocalCard />
+    <component :is="tag" />
+    <Transition><p>Hi</p></Transition>
+    <RouterView />
+    <router-view />
+  </VCard>
+</template>
+
+<script setup lang="ts">
+import OrderButton from './components/OrderButton.vue';
+import LocalCard, { helper } from '@/components/LocalCard.vue';
+import { VBtn } from 'vuetify/components';
+</script>
+`;
+
+    const result = injectVueSourceLocations(
+      source,
+      '/repo/src/Login.vue',
+      'src/Login.vue',
+      compiler,
+    );
+
+    expect(attributes(result?.code ?? '')).toEqual([
+      'VCard src/Login.vue:2:3',
+      'VBtn src/Login.vue:3:5',
+      'v-text-field src/Login.vue:4:5',
+      'AppTextField src/Login.vue:5:5',
+      'p src/Login.vue:10:17',
+    ]);
+  });
+
+  it('marks native elements with their own line and column, skipping local components and templates', () => {
     const source = `<template>
   <div class="card">
     <OrderButton />
@@ -26,6 +65,7 @@ describe('injectVueSourceLocations', () => {
 </template>
 
 <script setup lang="ts">
+import OrderButton from './OrderButton.vue';
 const items = ['a'];
 const open = true;
 </script>
@@ -40,7 +80,9 @@ const open = true;
       'li src/App.vue:7:7',
       'img src/App.vue:10:5',
     ]);
-    expect(result?.code).toContain('<script setup lang="ts">\nconst items');
+    expect(result?.code).toContain(
+      '<script setup lang="ts">\nimport OrderButton from \'./OrderButton.vue\';\nconst items',
+    );
     expect(result?.map.mappings.length).toBeGreaterThan(0);
   });
 

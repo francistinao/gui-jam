@@ -44,3 +44,12 @@ export function resolveOverlay(
   }
   return null;
 }
+
+const MACRO_QUERIES = ['definePage', 'macro'];
+
+export function hotReloadable(url: string): boolean {
+  const query = url.split('?', 2)[1];
+  if (query === undefined) return true;
+  const keys = [...new URLSearchParams(query).keys()];
+  return !keys.some((key) => MACRO_QUERIES.includes(key));
+}

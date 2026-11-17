@@ -17,7 +17,7 @@ import {
 } from 'vite';
 import { findDaemonBinary, platformKey } from './daemon-binary.js';
 import { DaemonClient } from './daemon-client.js';
-import { resolveOverlay } from './overlay-resolve.js';
+import { hotReloadable, resolveOverlay } from './overlay-resolve.js';
 import { Pages } from './pages.js';
 import {
   checkWidgetRequest,
@@ -301,7 +301,10 @@ export function guijam(options: GuijamOptions = {}): Plugin<GuijamApi> {
     await syncCandidates(id, content);
     if (modules.length === 0) return { updateId, status: 'ok', latencyMs: 0, errors: [] };
 
-    const reloads = [...(content === undefined ? [] : tailwindRootModules(client)), ...modules];
+    const reloads = [
+      ...(content === undefined ? [] : tailwindRootModules(client)),
+      ...modules.filter((mod) => hotReloadable(mod.url)),
+    ];
     const result = tracker.begin(updateId);
     client.hot.send('gj:update-start', {
       updateId,
