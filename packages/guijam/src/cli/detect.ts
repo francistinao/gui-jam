@@ -253,9 +253,14 @@ export function runScriptCommand(packageManager: PackageManager, script: string)
 }
 
 export function describeProject(project: Project): string {
-  const version = project.viteVersion ?? project.frameworkVersion;
   const bundler =
-    version === undefined ? project.frameworkLabel : `${project.frameworkLabel} ${version}`;
+    project.framework === 'vite' && project.viteVersion !== undefined
+      ? `${project.frameworkLabel} ${project.viteVersion}`
+      : project.viteVersion !== undefined
+        ? `${project.frameworkLabel} on Vite ${project.viteVersion}`
+        : project.frameworkVersion !== undefined
+          ? `${project.frameworkLabel} ${project.frameworkVersion}`
+          : project.frameworkLabel;
   const parts = [project.ui, bundler, project.styling, project.packageManager];
   return [...new Set(parts.filter((part): part is string => part !== undefined))].join(' · ');
 }

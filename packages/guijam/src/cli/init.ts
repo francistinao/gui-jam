@@ -30,7 +30,7 @@ export interface InitOptions {
   highlight: (text: string) => string;
 }
 
-const JSX_UI = new Set(['React', 'Preact', 'Solid']);
+const MAPPED_UI = new Set(['React', 'Preact', 'Solid', 'Vue', 'Svelte']);
 const OUTPUT_TAIL_LINES = 20;
 
 class Cancelled extends Error {}
@@ -114,25 +114,25 @@ async function wireStep(project: Project): Promise<boolean> {
   const shown = (file: string): string => relative(project.root, file) || file;
   switch (result.status) {
     case 'added':
-      log.success(`Added guijam() to ${shown(result.file)}`);
+      log.success(`Added GUIJam to ${shown(result.file)}`);
       break;
     case 'present':
-      log.success(`${shown(result.file)} already loads guijam()`);
+      log.success(`${shown(result.file)} already loads GUIJam`);
       break;
     case 'created':
-      log.success(`Created ${shown(result.file)} with guijam()`);
+      log.success(`Created ${shown(result.file)} with GUIJam`);
       break;
     case 'manual':
-      log.warn(`${result.reason} Add guijam() as its first plugin:`);
+      log.warn(`${result.reason} Add GUIJam yourself:`);
       note(result.snippet, shown(result.file));
       return false;
     case 'unsupported':
       log.warn(result.reason);
       return false;
   }
-  if (!JSX_UI.has(project.ui ?? '')) {
+  if (project.framework !== 'astro' && !MAPPED_UI.has(project.ui ?? '')) {
     log.info(
-      `GUIJam links elements to JSX source for now. ${project.ui ?? 'Plain HTML'} support is in progress, so its elements won't map to source yet.`,
+      `GUIJam maps elements to source in React, Preact, Solid, Vue, Svelte and Astro. ${project.ui ?? 'Plain HTML'} elements won't map to source yet.`,
     );
   }
   return true;
@@ -377,7 +377,7 @@ export async function init(options: InitOptions): Promise<number> {
     );
     outro(
       wired && ready
-        ? "You're set. Happy jamming!"
+        ? "You're set. Happy jamming! - Francis Tin-ao"
         : 'Almost there. Finish the steps flagged above.',
     );
     return 0;

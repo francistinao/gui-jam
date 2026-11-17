@@ -95,6 +95,9 @@ describe('detectProject', () => {
       viteVersion: '7.1.0',
     });
     expect(detectProject(laravel, {}).frameworkLabel).toBe('Laravel + Vite');
+    expect(describeProject(detectProject(kit, {}))).toBe(
+      'Svelte · SvelteKit on Vite 7.1.0 · CSS · npm',
+    );
     expect(detectProject(router, {})).toMatchObject({
       framework: 'react-router',
       frameworkLabel: 'React Router',

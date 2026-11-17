@@ -58,7 +58,8 @@ test('init wires a fresh app once, saves the AI tool, and the toolbar loads', as
 
   const first = await init(root, configHome);
 
-  expect(first).toContain('Added guijam() to vite.config.ts');
+  expect(first).toContain('Added GUIJam to vite.config.ts');
+  expect(first).toContain("You're set. Happy jamming! - Francis Tin-ao");
   const config = await readFile(join(root, 'vite.config.ts'), 'utf8');
   expect(config.match(/guijam\(\)/g)).toHaveLength(1);
   expect(config).toContain("import { guijam } from 'guijam/vite';");
@@ -69,7 +70,7 @@ test('init wires a fresh app once, saves the AI tool, and the toolbar loads', as
 
   const second = await init(root, configHome);
 
-  expect(second).toContain('vite.config.ts already loads guijam()');
+  expect(second).toContain('vite.config.ts already loads GUIJam');
   expect(await readFile(join(root, 'vite.config.ts'), 'utf8')).toBe(config);
   expect(await readFile(join(root, '.gitignore'), 'utf8')).toBe('node_modules\n.guijam/\n');
 
