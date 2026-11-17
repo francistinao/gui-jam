@@ -51,7 +51,7 @@ describe('checkWidgetRequest', () => {
 
 describe('replyWindowMs', () => {
   it('waits longer for a generation than for edits', () => {
-    expect(replyWindowMs('generate.request')).toBe(330_000);
+    expect(replyWindowMs('generate.request')).toBe(360_000);
     expect(replyWindowMs('generate.cancel')).toBeUndefined();
     expect(replyWindowMs('finetune.preview')).toBeUndefined();
   });

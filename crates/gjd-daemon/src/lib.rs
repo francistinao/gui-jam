@@ -4,11 +4,14 @@ pub mod daemon;
 pub mod diff;
 pub mod gateway;
 pub mod generate;
+pub mod html_text;
 pub mod index;
+pub mod links;
 pub mod r0;
 pub mod references;
 pub mod route;
 pub mod run_dir;
+pub mod screenshot;
 
 use std::fmt::Write as _;
 use std::io;

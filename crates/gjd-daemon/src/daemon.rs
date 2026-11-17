@@ -9,10 +9,10 @@ use gjd_core::codemod::{CodemodError, finetune_op};
 use gjd_core::content_hash;
 use gjd_core::contracts::{
     CodeChange, CommitDone, EditOp, ElementStyle, ErrorCode, ErrorPayload, FinetunePreview,
-    FinetunePreviewed, GenerateDone, GenerateDoneDroppedItem, GenerateRequest, GuijamMessage,
-    HelloOk, OverlayClear, OverlaySet, Route, RouteTier, RunRef, SourceRef, UndoDone, UpdateResult,
-    UpdateResultStatus, UpdateResultUpdateId, Variant, VariantAssetsItemFormat, VariantPreview,
-    VariantSelect, VariantSelected, VariantSet,
+    FinetunePreviewed, GenerateDone, GenerateDoneDroppedItem, GenerateDoneNotesItem,
+    GenerateRequest, GuijamMessage, HelloOk, OverlayClear, OverlaySet, Route, RouteTier, RunRef,
+    SourceRef, UndoDone, UpdateResult, UpdateResultStatus, UpdateResultUpdateId, Variant,
+    VariantAssetsItemFormat, VariantPreview, VariantSelect, VariantSelected, VariantSet,
 };
 use gjd_core::journal::{CommitError, FileChange, Journal};
 use gjd_core::jsx::JsxError;
@@ -32,9 +32,11 @@ use crate::config;
 use crate::diff::code_changes;
 use crate::generate::{self, Progress, Step, TierConfig};
 use crate::index::ProjectIndex;
+use crate::links::{self, Found};
 use crate::r0;
 use crate::references;
 use crate::route::{self, Tier};
+use crate::screenshot::{self, Browser};
 
 const UPDATE_TIMEOUT: Duration = Duration::from_secs(5);
 const AUTH_CACHE: Duration = Duration::from_mins(5);
@@ -378,11 +380,20 @@ fn inspiration_count(request: &GenerateRequest) -> usize {
         .map_or(0, |attachments| attachments.images.len())
 }
 
-fn visuals(request: &GenerateRequest) -> generate::Visuals {
-    generate::Visuals {
+fn extras(request: &GenerateRequest, links: &Found) -> generate::Extras {
+    generate::Extras {
         sketch: request.sketch.is_some(),
         inspiration: inspiration_count(request),
+        links: links.links.len(),
     }
+}
+
+fn notes(lines: Vec<String>) -> Vec<GenerateDoneNotesItem> {
+    lines
+        .into_iter()
+        .take(links::MAX_NOTES)
+        .filter_map(|line| GenerateDoneNotesItem::try_from(line).ok())
+        .collect()
 }
 
 fn request_images(request: &GenerateRequest) -> Vec<ImageInput> {
@@ -458,6 +469,7 @@ struct VariantRun {
 struct Job<'a> {
     request: &'a GenerateRequest,
     prompt: &'a str,
+    links: &'a Found,
     source: &'a str,
     style: &'a ElementStyle,
     started: Instant,
@@ -953,10 +965,17 @@ impl Daemon {
         let exact = r0::parse_property_edits(&prompt, &style)
             .and_then(|props| finetune_op(&style, &props, &theme).ok());
         let force_ai = request.force_ai.unwrap_or(false);
-        let decision = route::classify(&prompt, exact.is_some(), force_ai, visuals(&request).any());
+        let found = links::find(&prompt);
+        let decision = route::classify(
+            &prompt,
+            exact.is_some(),
+            force_ai,
+            extras(&request, &found).any(),
+        );
         let job = Job {
             request: &request,
             prompt: &prompt,
+            links: &found,
             source: &source,
             style: &style,
             started,
@@ -1046,17 +1065,22 @@ impl Daemon {
         } = self.prepare(job, tier).await?;
         let provider_name = provider.id().display_name();
         let model_label = model.as_deref().unwrap_or("default model");
+        let linked = self.read_links(job, &*provider, &mut progress).await?;
         let references = self.references(job).await;
+        let mut images = request_images(job.request);
+        images.extend(linked.images);
+        let timeout = generate::budget(tier, images.len(), job.links.links.len());
         let generation = GenerationRequest {
             model: model.clone(),
             system_prompt: generate::SYSTEM_PROMPT.to_owned(),
             user_prompt: format!(
-                "{}{references}",
-                generate::user_prompt(job.style, job.source, job.prompt, tier)
+                "{}{references}{}",
+                generate::user_prompt(job.style, job.source, job.prompt, tier),
+                linked.section
             ),
-            images: request_images(job.request),
+            images,
             tools: ToolPolicy::None,
-            timeout: generate::budget(tier, request_images(job.request).len()),
+            timeout,
             cwd: self.project.path().to_path_buf(),
             events: None,
         };
@@ -1093,7 +1117,7 @@ impl Daemon {
                 answer: Some(answer),
                 variants: Vec::new(),
                 dropped: Vec::new(),
-                notes: Vec::new(),
+                notes: notes(linked.notes),
                 update: None,
             });
         }
@@ -1121,9 +1145,69 @@ impl Daemon {
             answer: None,
             variants,
             dropped,
-            notes: Vec::new(),
+            notes: notes(linked.notes),
             update,
         })
+    }
+
+    async fn read_links(
+        &self,
+        job: &Job<'_>,
+        provider: &dyn ProviderAdapter,
+        progress: &mut Progress,
+    ) -> Result<links::Rendered, Failure> {
+        if job.links.is_empty() {
+            return Ok(links::Rendered::default());
+        }
+        let images = provider.capabilities().image_input;
+        let mut lines = Vec::new();
+        let browser = match screenshot::find_browser() {
+            Browser::Path(path) => Some(path),
+            Browser::Missing if images => {
+                lines.push(format!(
+                    "No Chrome, Brave, Edge or Chromium was found, so links were read without screenshots. Set {} to a browser to add them.",
+                    screenshot::BROWSER_ENV
+                ));
+                None
+            }
+            Browser::Missing | Browser::Off => None,
+        };
+        if !images {
+            lines.push(format!(
+                "{} can't read images, so links were read without screenshots.",
+                provider.id().display_name()
+            ));
+        }
+        let options = links::Options {
+            images,
+            browser,
+            limit: links::READ_LIMIT,
+        };
+        progress.start(Step::Links);
+        self.report(progress);
+        let (events, mut received) = mpsc::unbounded_channel();
+        let reading = links::read_all(job.links, &options, &events, job.cancel);
+        tokio::pin!(reading);
+        let reports = loop {
+            tokio::select! {
+                reports = &mut reading => break reports,
+                Some(detail) = received.recv() => {
+                    progress.detail(detail);
+                    self.report(progress);
+                }
+            }
+        };
+        let Some(reports) = reports else {
+            return Err(ProviderError::Cancelled.into());
+        };
+        let mut rendered = links::render(
+            reports,
+            job.links.skipped,
+            request_images(job.request).len() + 1,
+        );
+        lines.append(&mut rendered.notes);
+        rendered.notes = lines;
+        Ok(rendered)
     }
 
     async fn check_and_hold(
@@ -1191,8 +1275,12 @@ impl Daemon {
             &job.request.run_id,
             job.style,
             &self.stylesheet_names(),
-            visuals(job.request),
-            generate::budget(tier, request_images(job.request).len()),
+            extras(job.request, job.links),
+            generate::budget(
+                tier,
+                request_images(job.request).len(),
+                job.links.links.len(),
+            ),
         );
         progress.start(Step::Read);
         progress.detail("Finding your AI tool…".to_owned());

@@ -37,12 +37,27 @@ const sizeOf = (image) => {
   return null;
 };
 const sketched = text.includes('<sketch');
+const field = (block, name) => new RegExp(`^${name}: (.*)$`, 'm').exec(block)?.[1] ?? null;
+const links = [
+  ...text.matchAll(/<link url="([^"]*)"((?: \w+="[^"]*")*)>\n([\s\S]*?)<\/link>/g),
+].map(([, url, attrs, body]) => ({
+  url,
+  final: / final="([^"]*)"/.exec(attrs)?.[1] ?? null,
+  error: / error="([^"]*)"/.exec(attrs)?.[1] ?? null,
+  title: field(body, 'Title'),
+  colors: field(body, 'Colors'),
+  variables: field(body, 'Color variables'),
+  fonts: field(body, 'Fonts'),
+  image: /^(Image \d+ is .*)$/m.exec(body)?.[1] ?? null,
+  text: /^Text:\n([\s\S]*)$/.exec(body.slice(body.indexOf('Text:\n')))?.[1]?.trim() ?? null,
+}));
 log({
   args,
   request,
   images: images.map((image) => image.source.media_type),
   imageSizes: images.map(sizeOf),
   inspiration: /<inspiration images="([^"]+)">/.exec(text)?.[1] ?? null,
+  links,
   assets: [...text.matchAll(/ · asset (\S+)/g)].map((match) => match[1]),
 });
 

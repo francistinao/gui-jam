@@ -392,3 +392,69 @@ export function formatElapsed(ms: number): string {
   const minutes = Math.floor(seconds / 60);
   return `${minutes} min ${String(seconds % 60).padStart(2, '0')} s`;
 }
+
+export const MAX_LINKS = 3;
+const TRAILING = /[.,;:!?'"`*]+$/;
+const LEADING = /^[([<"'`]+/;
+const PAIRS: readonly (readonly [string, string])[] = [
+  ['(', ')'],
+  ['[', ']'],
+  ['{', '}'],
+  ['<', '>'],
+];
+const LABEL_CHARS = 40;
+
+export interface PromptLink {
+  href: string;
+  label: string;
+}
+
+export interface PromptLinks {
+  links: PromptLink[];
+  skipped: number;
+}
+
+function count(text: string, char: string): number {
+  return text.split(char).length - 1;
+}
+
+function trimTrailing(text: string): string {
+  let current = text;
+  for (;;) {
+    let next = current.replace(TRAILING, '');
+    for (const [open, close] of PAIRS) {
+      if (next.endsWith(close) && count(next, close) > count(next, open)) next = next.slice(0, -1);
+    }
+    if (next === current) return next;
+    current = next;
+  }
+}
+
+function candidate(token: string): string | null {
+  const starts = [token.indexOf('https://'), token.indexOf('http://')].filter((at) => at >= 0);
+  if (starts.length > 0) return trimTrailing(token.slice(Math.min(...starts)));
+  const bare = trimTrailing(token.replace(LEADING, ''));
+  return bare.length > 4 && bare.slice(0, 4).toLowerCase() === 'www.' ? `https://${bare}` : null;
+}
+
+function linkLabel(url: URL): string {
+  const host = url.host.replace(/^www\./, '');
+  const full = `${host}${url.pathname.replace(/\/+$/, '')}`;
+  return full.length > LABEL_CHARS ? `${full.slice(0, LABEL_CHARS - 1)}…` : full;
+}
+
+export function linksIn(prompt: string): PromptLinks {
+  const links: PromptLink[] = [];
+  for (const token of prompt.split(/\s+/)) {
+    const text = candidate(token);
+    if (!text || !URL.canParse(text)) continue;
+    const url = new URL(text);
+    if ((url.protocol !== 'http:' && url.protocol !== 'https:') || !url.hostname) continue;
+    if (url.hostname === 'www.') continue;
+    url.hash = '';
+    if (!links.some((link) => link.href === url.href)) {
+      links.push({ href: url.href, label: linkLabel(url) });
+    }
+  }
+  return { links: links.slice(0, MAX_LINKS), skipped: Math.max(0, links.length - MAX_LINKS) };
+}

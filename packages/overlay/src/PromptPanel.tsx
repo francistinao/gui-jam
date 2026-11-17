@@ -1,4 +1,4 @@
-import { Circle, CircleCheck, ImagePlus, LoaderCircle, X } from 'lucide-react';
+import { Circle, CircleCheck, ImagePlus, Link2, LoaderCircle, X } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { AnswerPanel } from './AnswerPanel';
 import { ACCEPTED_TYPES, type Attachment, imageFiles, MAX_ATTACHMENTS } from './attachments';
@@ -6,7 +6,7 @@ import type { Controller, ProgressStep, WidgetState } from './controller';
 import { Button } from './figui/button';
 import { cn } from './figui/cn';
 import { INPUT_BASE_CLASS } from './figui/text-input';
-import { formatElapsed, stillWorking } from './model';
+import { formatElapsed, linksIn, MAX_LINKS, stillWorking } from './model';
 import { Popover, PopoverHeader } from './Popover';
 import { type Store, useStore } from './store';
 import { VariantsPanel } from './VariantsPanel';
@@ -119,6 +119,32 @@ function Thumbnails({
   );
 }
 
+function LinkChips({ prompt }: { prompt: string }) {
+  const { links, skipped } = linksIn(prompt);
+  if (links.length === 0) return null;
+  return (
+    <div className="flex flex-col gap-1">
+      <ul aria-label="Links GUIJam will read" className="m-0 flex list-none flex-wrap gap-1 p-0">
+        {links.map((link) => (
+          <li
+            key={link.href}
+            title={link.href}
+            className="typography-body-small flex max-w-full items-center gap-1 rounded-full bg-grey-100 px-2 py-0.5 text-grey-600"
+          >
+            <Link2 aria-hidden="true" className="size-3 shrink-0" />
+            <span className="truncate">{link.label}</span>
+          </li>
+        ))}
+      </ul>
+      {skipped > 0 ? (
+        <p role="note" className="typography-body-small m-0 text-grey-500">
+          {`Only the first ${MAX_LINKS} links are read.`}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
 export function PromptPanel({ store, controller }: PanelProps) {
   const selection = useStore(store, (state) => state.selection);
   const anchor = useStore(store, (state) => state.anchor);
@@ -210,6 +236,7 @@ export function PromptPanel({ store, controller }: PanelProps) {
               }
             }}
           />
+          <LinkChips prompt={prompt} />
           <Thumbnails
             attachments={job.attachments}
             disabled={status === 'running'}
@@ -255,7 +282,7 @@ export function PromptPanel({ store, controller }: PanelProps) {
                   {stillWorking(now - (generation.startedAt ?? now), generation.timeoutMs, {
                     sketch: sketched,
                     images: job.attachments.length,
-                    links: 0,
+                    links: linksIn(prompt).links.length,
                   })}
                 </span>
                 <Button

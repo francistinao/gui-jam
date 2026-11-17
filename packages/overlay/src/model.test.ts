@@ -12,6 +12,8 @@ import {
   formatElapsed,
   hexOfComputedColor,
   invertChanges,
+  linksIn,
+  MAX_LINKS,
   OPACITY_RANGE,
   panelSections,
   parseHex,
@@ -370,5 +372,46 @@ describe('formatElapsed', () => {
     expect(formatElapsed(59_999)).toBe('59 s');
     expect(formatElapsed(60_000)).toBe('1 min 00 s');
     expect(formatElapsed(125_000)).toBe('2 min 05 s');
+  });
+});
+
+describe('linksIn', () => {
+  const hrefs = (prompt: string) => linksIn(prompt).links.map((link) => link.href);
+
+  it.each([
+    ['make it like https://dribbble.com/shots/1.', ['https://dribbble.com/shots/1']],
+    ['see (https://example.com/a), then', ['https://example.com/a']],
+    ['[ref](https://example.com/b)', ['https://example.com/b']],
+    ['<https://example.com/c>', ['https://example.com/c']],
+    ['"https://example.com/d"', ['https://example.com/d']],
+    ['https://en.wikipedia.org/wiki/Foo_(bar)', ['https://en.wikipedia.org/wiki/Foo_(bar)']],
+    ['www.example.com/e!', ['https://www.example.com/e']],
+    ['(www.example.com)', ['https://www.example.com/']],
+    ['http://127.0.0.1:4173/page?x=1#top', ['http://127.0.0.1:4173/page?x=1']],
+    ['ftp://example.com/file', []],
+    ['javascript:alert(1) mailto:a@b.co', []],
+    ['https:// www. http://', []],
+    ['no links at all', []],
+    ['', []],
+    ['https://a.com https://a.com/ https://a.com#x', ['https://a.com/']],
+  ])('%s', (prompt, expected) => {
+    expect(hrefs(prompt)).toEqual(expected);
+  });
+
+  it('keeps the first three and counts the rest', () => {
+    const found = linksIn('https://a.com https://b.com https://c.com https://d.com https://e.com');
+    expect(found.links).toHaveLength(MAX_LINKS);
+    expect(found.links[2]?.href).toBe('https://c.com/');
+    expect(found.skipped).toBe(2);
+  });
+
+  it('labels links by host and path without www or a trailing slash', () => {
+    const [shot, local, long] = linksIn(
+      `https://www.dribbble.com/shots/123/ http://127.0.0.1:4173/ https://example.com/${'a'.repeat(80)}`,
+    ).links;
+    expect(shot?.label).toBe('dribbble.com/shots/123');
+    expect(local?.label).toBe('127.0.0.1:4173');
+    expect(long?.label).toHaveLength(40);
+    expect(long?.label.endsWith('…')).toBe(true);
   });
 });
