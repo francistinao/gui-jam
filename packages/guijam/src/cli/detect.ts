@@ -7,6 +7,8 @@ export type FrameworkId =
   | 'vite'
   | 'sveltekit'
   | 'react-router'
+  | 'solid-start'
+  | 'solid-start-vinxi'
   | 'nuxt'
   | 'next'
   | 'astro'
@@ -17,6 +19,7 @@ export const VITE_FRAMEWORKS: ReadonlySet<FrameworkId> = new Set([
   'vite',
   'sveltekit',
   'react-router',
+  'solid-start',
 ]);
 
 export interface Project {
@@ -174,6 +177,15 @@ function frameworkOf(
   }
   if ('@sveltejs/kit' in deps) {
     return { framework: 'sveltekit', label: 'SvelteKit', configFile: viteConfig };
+  }
+  if ('@solidjs/start' in deps) {
+    return 'vinxi' in deps
+      ? {
+          framework: 'solid-start-vinxi',
+          label: 'SolidStart 1 (vinxi)',
+          configFile: findConfig(root, 'app.config', CONFIG_EXTENSIONS),
+        }
+      : { framework: 'solid-start', label: 'SolidStart', configFile: viteConfig };
   }
   if ('@react-router/dev' in deps) {
     return { framework: 'react-router', label: 'React Router', configFile: viteConfig };

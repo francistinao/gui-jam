@@ -75,6 +75,14 @@ describe('detectProject', () => {
         devDependencies: { '@react-router/dev': '8.5.1', vite: '^8.3.0' },
       },
     );
+    const start = project(
+      { 'vite.config.ts': '' },
+      { dependencies: { '@solidjs/start': '2.2.1', 'solid-js': '1.9.18', vite: '^8.3.0' } },
+    );
+    const startOnVinxi = project(
+      { 'app.config.ts': '' },
+      { dependencies: { '@solidjs/start': '1.5.1', 'solid-js': '1.9.18', vinxi: '^0.5.0' } },
+    );
     const next = project(
       { 'next.config.ts': '' },
       { dependencies: { next: '16.1.0', react: '19.2.0' } },
@@ -93,6 +101,17 @@ describe('detectProject', () => {
       ui: 'React',
       viteVersion: '8.3.0',
       configFile: join(router, 'vite.config.ts'),
+    });
+    expect(detectProject(start, {})).toMatchObject({
+      framework: 'solid-start',
+      frameworkLabel: 'SolidStart',
+      ui: 'Solid',
+      viteVersion: '8.3.0',
+    });
+    expect(detectProject(startOnVinxi, {})).toMatchObject({
+      framework: 'solid-start-vinxi',
+      configFile: join(startOnVinxi, 'app.config.ts'),
+      viteVersion: undefined,
     });
     expect(detectProject(next, {})).toMatchObject({
       framework: 'next',

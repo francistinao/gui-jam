@@ -17,7 +17,7 @@ import {
 } from 'vite';
 import { findDaemonBinary, platformKey } from './daemon-binary.js';
 import { DaemonClient } from './daemon-client.js';
-import { hotReloadable, resolveOverlay } from './overlay-resolve.js';
+import { hotReloadable, overlayFile, resolveOverlay } from './overlay-resolve.js';
 import { Pages } from './pages.js';
 import {
   checkWidgetRequest,
@@ -61,6 +61,7 @@ const FRAMEWORK_CLIENT_ENTRIES: readonly { plugin: string; entry: RegExp }[] = [
     entry: /\/@sveltejs\/kit\/src\/runtime\/client\/entry\.js$/,
   },
   { plugin: 'react-router', entry: /\/entry\.client\.[cm]?[jt]sx?$/ },
+  { plugin: 'solid-start', entry: /\/entry-client\.[cm]?[jt]sx?$/ },
 ];
 const ASSET_FILE = /\.(?:svg|webp|png|jpe?g|gif|avif|ico)$/i;
 const SCRIPT_MODULE = /\.[cm]?[jt]sx?$/;
@@ -340,13 +341,14 @@ export function guijam(options: GuijamOptions = {}): Plugin<GuijamApi> {
       request: (message) => relay(message),
     },
 
-    async hotUpdate({ file, read, modules }) {
+    async hotUpdate({ type, file, read, modules }) {
       if (this.environment.name !== 'client') return;
       const id = normalizePath(file);
       if (overlays.has(id)) return [];
       const shown = settled.get(id);
       if (shown === undefined) return;
       settled.delete(id);
+      if (type !== 'update') return;
       if ((await read()) === shown) return [];
       for (const mod of modules.filter((entry) => hotReloadable(entry.url))) {
         await this.environment.reloadModule(mod);
@@ -446,7 +448,7 @@ export function guijam(options: GuijamOptions = {}): Plugin<GuijamApi> {
         const url = inside.startsWith('..') ? `/@fs${file}` : `/${normalizePath(inside)}`;
         return `export default ${JSON.stringify(url)};`;
       }
-      return overlays.get(id) ?? null;
+      return overlays.get(overlayFile(id)) ?? null;
     },
 
     transform: {
@@ -476,7 +478,7 @@ export function guijam(options: GuijamOptions = {}): Plugin<GuijamApi> {
             : null;
         }
         if (JSX_MODULE.test(id)) {
-          const projectPath = normalizePath(relative(root, id));
+          const projectPath = normalizePath(relative(root, file));
           const inProject = !projectPath.startsWith('..') && !id.includes('/node_modules/');
           if (inProject) return injectSourceLocations(code, id, projectPath, prepend);
           if (prepend === '') return null;

@@ -50,6 +50,7 @@ const COMING_SOON: Record<string, string> = {
   next: 'Next.js support is on the roadmap.',
   astro: 'Astro support is on the roadmap.',
   angular: 'Angular support is on the roadmap.',
+  'solid-start-vinxi': 'SolidStart 1 runs on vinxi; upgrade to SolidStart 2, which runs on Vite.',
 };
 
 function guijamImportOf(program: Program): string | undefined {

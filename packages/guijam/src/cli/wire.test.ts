@@ -176,6 +176,19 @@ export default defineConfig({
     }
   });
 
+  it('explains that SolidStart 1 runs on vinxi rather than Vite', async () => {
+    const root = app(
+      { 'app.config.ts': 'export default {};\n' },
+      { '@solidjs/start': '1.5.1', vinxi: '^0.5.0' },
+    );
+
+    expect(await wireProject(detectProject(root, {}))).toEqual({
+      status: 'unsupported',
+      reason:
+        "GUIJam doesn't plug into SolidStart 1 (vinxi) yet. SolidStart 1 runs on vinxi; upgrade to SolidStart 2, which runs on Vite.",
+    });
+  });
+
   it('leaves frameworks without an adapter untouched', async () => {
     const root = app({ 'next.config.mjs': 'export default {};\n' }, { next: '^16.0.0' });
 

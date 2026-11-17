@@ -46,10 +46,23 @@ export function resolveOverlay(
 }
 
 const MACRO_QUERIES = ['definePage', 'macro'];
+const SOURCE_VIEW_QUERIES = ['pick'];
+
+function queryKeys(query: string): string[] {
+  return [...new URLSearchParams(query).keys()];
+}
+
+export function overlayFile(id: string): string {
+  const [file = id, query] = id.split('?', 2);
+  if (query === undefined) return id;
+  const keys = queryKeys(query);
+  const view = keys.some((key) => SOURCE_VIEW_QUERIES.includes(key));
+  const plain = keys.every((key) => SOURCE_VIEW_QUERIES.includes(key) || key.startsWith('lang.'));
+  return view && plain ? file : id;
+}
 
 export function hotReloadable(url: string): boolean {
   const query = url.split('?', 2)[1];
   if (query === undefined) return true;
-  const keys = [...new URLSearchParams(query).keys()];
-  return !keys.some((key) => MACRO_QUERIES.includes(key));
+  return !queryKeys(query).some((key) => MACRO_QUERIES.includes(key));
 }

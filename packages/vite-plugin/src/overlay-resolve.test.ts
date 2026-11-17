@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { hotReloadable, resolveOverlay } from './overlay-resolve.js';
+import { hotReloadable, overlayFile, resolveOverlay } from './overlay-resolve.js';
 
 const ROOT = '/repo/app';
 
@@ -44,6 +44,26 @@ describe('resolveOverlay', () => {
     expect(resolveOverlay('react', importer, lookup([organism]))).toBe(null);
     expect(resolveOverlay('./organisms/Missing', importer, lookup([organism]))).toBe(null);
     expect(resolveOverlay('./organisms/PricingSection', undefined, lookup([organism]))).toBe(null);
+  });
+});
+
+describe('overlayFile', () => {
+  it.each([
+    ['/app/src/routes/index.tsx', '/app/src/routes/index.tsx'],
+    ['/app/src/routes/index.tsx?pick=default&pick=$css&lang.tsx', '/app/src/routes/index.tsx'],
+    ['/app/src/routes/index.tsx?pick=route', '/app/src/routes/index.tsx'],
+    [
+      '/app/src/App.vue?vue&type=style&index=0&lang.css',
+      '/app/src/App.vue?vue&type=style&index=0&lang.css',
+    ],
+    [
+      '/app/src/Card.svelte?svelte&type=style&lang.css',
+      '/app/src/Card.svelte?svelte&type=style&lang.css',
+    ],
+    ['/app/src/routes/index.tsx?pick=default&raw', '/app/src/routes/index.tsx?pick=default&raw'],
+    ['/app/src/logo.svg?url', '/app/src/logo.svg?url'],
+  ])('%s reads the overlay of %s', (id, expected) => {
+    expect(overlayFile(id)).toBe(expected);
   });
 });
 

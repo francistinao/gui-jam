@@ -21,10 +21,8 @@ export interface FixtureServer {
   url: string;
 }
 
-async function loadFixtureVite(): Promise<typeof Vite> {
-  const vitePackageJson = createRequire(join(FIXTURE_DIR, 'package.json')).resolve(
-    'vite/package.json',
-  );
+async function loadFixtureVite(root: string): Promise<typeof Vite> {
+  const vitePackageJson = createRequire(join(root, 'package.json')).resolve('vite/package.json');
   return import(pathToFileURL(join(dirname(vitePackageJson), 'dist/node/index.js')).href);
 }
 
@@ -32,7 +30,7 @@ export async function startFixtureServer(
   configFile?: string,
   root = FIXTURE_DIR,
 ): Promise<FixtureServer> {
-  const vite = await loadFixtureVite();
+  const vite = await loadFixtureVite(root);
   const server = await vite.createServer({
     root,
     logLevel: 'warn',
