@@ -1,0 +1,20 @@
+{
+  "name": "small-vue-tailwind4",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build"
+  },
+  "dependencies": {
+    "vue": "3.5.44"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "4.3.5",
+    "@vitejs/plugin-vue": "6.0.10",
+    "guijam": "workspace:*",
+    "tailwindcss": "4.3.5",
+    "vite": "8.3.8"
+  }
+}

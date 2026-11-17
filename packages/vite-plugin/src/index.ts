@@ -3,7 +3,7 @@ import { existsSync } from 'node:fs';
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { dirname, join, relative, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import type { GuijamMessage, UpdateError, UpdateResult } from '@guijam/contracts-ts';
 import MagicString from 'magic-string';
 import {
@@ -30,6 +30,7 @@ import {
   terminalLine,
 } from './relay.js';
 import { injectSourceLocations } from './transform-srcloc.js';
+import { injectVueSourceLocations, type VueSfcCompiler } from './transform-vue-srcloc.js';
 import { createUpdateTracker, isUpdateResult } from './update-tracker.js';
 
 export type { GuijamMessage, UpdateResult } from '@guijam/contracts-ts';
@@ -50,6 +51,7 @@ const WIDGET_URL = '/@guijam/widget.js';
 const WIDGET_FILE = fileURLToPath(new URL('./widget.js', import.meta.url));
 const UPDATE_TIMEOUT_MS = 3000;
 const JSX_MODULE = /\.[jt]sx$/;
+const VUE_MODULE = /\.vue$/;
 const ASSET_FILE = /\.(?:svg|webp|png|jpe?g|gif|avif|ico)$/i;
 const SCRIPT_MODULE = /\.[cm]?[jt]sx?$/;
 const CLIENT_IMPORT = `import '${CLIENT_ID}';\n`;
@@ -123,6 +125,27 @@ export function guijam(options: GuijamOptions = {}): Plugin<GuijamApi> {
         `[guijam] could not release the preview of run ${runId}: ${error instanceof Error ? error.message : String(error)}`,
       );
     });
+  }
+
+  let vueCompiler: Promise<VueSfcCompiler | null> | undefined;
+
+  function loadVueCompiler(): Promise<VueSfcCompiler | null> {
+    vueCompiler ??= (async () => {
+      try {
+        const entry = createRequire(join(root, 'package.json')).resolve('vue/compiler-sfc');
+        const loaded = (await import(pathToFileURL(entry).href)) as Partial<VueSfcCompiler> & {
+          default?: Partial<VueSfcCompiler>;
+        };
+        const parse = loaded.parse ?? loaded.default?.parse;
+        return parse ? { parse } : null;
+      } catch (error) {
+        devServer?.config.logger.warn(
+          `[guijam] could not load vue/compiler-sfc, so .vue elements have no source locations: ${error instanceof Error ? error.message : String(error)}`,
+        );
+        return null;
+      }
+    })();
+    return vueCompiler;
   }
 
   function socketId(client: PageClient): string {
@@ -397,11 +420,17 @@ export function guijam(options: GuijamOptions = {}): Plugin<GuijamApi> {
 
     transform: {
       order: 'pre',
-      handler(code, id) {
+      async handler(code, id) {
         const prepend =
           this.environment.name === 'client' && scriptEntries.has(id.split('?', 1)[0] ?? id)
             ? CLIENT_IMPORT
             : '';
+        if (VUE_MODULE.test(id)) {
+          const projectPath = normalizePath(relative(root, id));
+          if (projectPath.startsWith('..') || id.includes('/node_modules/')) return null;
+          const compiler = await loadVueCompiler();
+          return compiler ? injectVueSourceLocations(code, projectPath, compiler) : null;
+        }
         if (JSX_MODULE.test(id)) {
           const projectPath = normalizePath(relative(root, id));
           if (projectPath.startsWith('..') || id.includes('/node_modules/')) return null;

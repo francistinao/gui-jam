@@ -25,5 +25,12 @@
     "typescript": "7.0.2",
     "vite": "8.3.8",
     "vitest": "5.1.0"
+  },
+  "pnpm": {
+    "overrides": {
+      "@babel/parser": "7.29.12",
+      "@babel/types": "7.29.11",
+      "@babel/helper-string-parser": "7.29.11"
+    }
   }
 }
