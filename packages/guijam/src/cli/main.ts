@@ -35,7 +35,7 @@ function packageVersion(): string {
 }
 
 function missingGjd(): string {
-  return `No gjd binary for ${platformKey()}. GUIJam ships gjd for macOS and Linux (arm64, x64). Reinstall guijam, or set GUIJAM_GJD_BIN to a gjd binary.`;
+  return `No gjd binary for ${platformKey()}. GUIJam ships gjd for macOS and Linux (arm64, x64) and Windows (x64). Reinstall guijam, or set GUIJAM_GJD_BIN to a gjd binary.`;
 }
 
 function parse(argv: string[]) {

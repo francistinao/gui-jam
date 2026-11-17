@@ -310,7 +310,8 @@ export function shiftedLine(
 }
 
 export function changesIn<T extends { file: string }>(file: string, changes: readonly T[]): T[] {
-  return changes.filter((change) => change.file === file);
+  const slashed = (path: string) => path.replaceAll('\\', '/');
+  return changes.filter((change) => slashed(change.file) === slashed(file));
 }
 
 export function invertChanges<

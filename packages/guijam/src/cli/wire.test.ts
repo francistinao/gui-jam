@@ -11,6 +11,7 @@ import {
   callsGuijam,
   hasNuxtModule,
   isWired,
+  sourceText,
   wireProject,
 } from './wire.js';
 
@@ -381,5 +382,17 @@ describe('addNuxtModule', () => {
     expect(hasNuxtModule('export default defineNuxtConfig({ modules: getModules() });\n')).toBe(
       false,
     );
+  });
+});
+
+describe('sourceText', () => {
+  it('edits CRLF files with a byte order mark and writes them back the same way', () => {
+    const source = sourceText('\uFEFFexport default {\r\n  plugins: [],\r\n};\r\n');
+
+    expect(source.code).toBe('export default {\n  plugins: [],\n};\n');
+    expect(source.restore('export default {\n  plugins: [guijam()],\n};\n')).toBe(
+      '\uFEFFexport default {\r\n  plugins: [guijam()],\r\n};\r\n',
+    );
+    expect(sourceText('a\n').restore('a\nb\n')).toBe('a\nb\n');
   });
 });

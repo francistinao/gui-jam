@@ -32,6 +32,7 @@ const MAX_SCAN_DEPTH = 6;
 const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]', '::1']);
 const relays = new Map<string, Promise<NextRelay>>();
 const LOCK_WAIT_MS = 15_000;
+const CLAIM_TIMEOUT_MS = 30_000;
 const LOCK_POLL_MS = 50;
 
 function isAlive(pid: number): boolean {
@@ -60,7 +61,7 @@ function lockHolder(root: string): number | undefined {
   }
 }
 
-async function takeLock(root: string): Promise<boolean> {
+async function takeLock(root: string, retry = true): Promise<boolean> {
   try {
     const handle = await open(lockFile(root), 'wx');
     await handle.writeFile(String(process.pid));
@@ -68,9 +69,9 @@ async function takeLock(root: string): Promise<boolean> {
     return true;
   } catch {
     const holder = lockHolder(root);
-    if (holder !== undefined && holder !== process.pid && isAlive(holder)) return false;
-    await rm(lockFile(root), { force: true });
-    return takeLock(root);
+    if (!retry || (holder !== undefined && holder !== process.pid && isAlive(holder))) return false;
+    await rm(lockFile(root), { force: true, maxRetries: 5, retryDelay: 50 });
+    return takeLock(root, false);
   }
 }
 
@@ -247,7 +248,8 @@ async function serve(options: NextRelayOptions): Promise<NextRelay> {
 async function claim(options: NextRelayOptions): Promise<NextRelay> {
   const { root } = options;
   await mkdir(runDir(root), { recursive: true });
-  for (;;) {
+  const deadline = Date.now() + CLAIM_TIMEOUT_MS;
+  while (Date.now() < deadline) {
     const running = await liveRelay(root);
     if (running) return running;
     if (await takeLock(root)) {
@@ -257,6 +259,7 @@ async function claim(options: NextRelayOptions): Promise<NextRelay> {
     const started = await waitForRelay(root);
     if (started) return started;
   }
+  throw new Error(`no GUIJam relay started for this project within ${CLAIM_TIMEOUT_MS / 1000} s`);
 }
 
 export function startNextRelay(options: NextRelayOptions): Promise<NextRelay> {

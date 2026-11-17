@@ -235,7 +235,7 @@ function failure(reply: GuijamMessage): Notice {
 }
 
 function appliedTo(selection: Selection): string {
-  return `Applied to ${selection.file.split('/').pop() ?? selection.file}.`;
+  return `Applied to ${selection.file.split(/[\\/]/).pop() ?? selection.file}.`;
 }
 
 export type Controller = ReturnType<typeof createController>;

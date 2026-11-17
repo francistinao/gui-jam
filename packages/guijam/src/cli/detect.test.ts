@@ -123,6 +123,16 @@ describe('detectProject', () => {
     expect(describeProject(detectProject(next, {}))).toBe('React · Next.js 16.1.0 · CSS · npm');
   });
 
+  it('reads a package.json that a Windows editor saved with a byte order mark', () => {
+    const root = project({ 'vite.config.ts': 'export default {};' }, {});
+    writeFileSync(
+      join(root, 'package.json'),
+      `\uFEFF${JSON.stringify({ devDependencies: { vite: '^8.3.0' } }, null, 2).replaceAll('\n', '\r\n')}`,
+    );
+
+    expect(detectProject(root, {})).toMatchObject({ framework: 'vite', viteVersion: '8.3.0' });
+  });
+
   it('explains a missing package.json', () => {
     const root = mkdtempSync(join(tmpdir(), 'guijam-detect-'));
     dirs.push(root);

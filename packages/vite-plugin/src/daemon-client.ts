@@ -87,6 +87,7 @@ export class DaemonClient {
   #reconnectTimer: NodeJS.Timeout | undefined;
   #stopped = false;
   #outageReported = false;
+  #unreachablePid: number | undefined;
 
   constructor(options: DaemonClientOptions) {
     this.#options = options;
@@ -130,7 +131,13 @@ export class DaemonClient {
       const socket = new WebSocket(`ws://127.0.0.1:${info.port}/ws`, {
         headers: { Authorization: `Bearer ${info.token}` },
       });
-      await opened(socket);
+      try {
+        await opened(socket);
+      } catch (error) {
+        this.#unreachablePid = info.pid;
+        throw error;
+      }
+      this.#unreachablePid = undefined;
       if (this.#stopped) {
         socket.close();
         return;
@@ -153,13 +160,18 @@ export class DaemonClient {
 
   async #daemonInfo(): Promise<DaemonInfo> {
     const existing = await this.#readInfo();
-    if (existing && isAlive(existing.pid)) return existing;
+    const alive = existing !== undefined && isAlive(existing.pid);
+    if (existing && alive && existing.pid !== this.#unreachablePid) return existing;
     await this.#spawnDaemon();
     const deadline = Date.now() + SPAWN_WAIT_MS;
     while (Date.now() < deadline) {
       const info = await this.#readInfo();
       if (info && info.pid !== existing?.pid) return info;
       await new Promise((resolve) => setTimeout(resolve, SPAWN_POLL_MS));
+    }
+    if (existing && alive) {
+      this.#unreachablePid = undefined;
+      return existing;
     }
     throw new DaemonUnavailableError(`gjd did not start within ${SPAWN_WAIT_MS} ms`);
   }
@@ -181,7 +193,7 @@ export class DaemonClient {
       const child = spawn(
         this.#options.binary,
         ['daemon', 'run', '--project', this.#options.root],
-        { detached: true, stdio: ['ignore', log.fd, log.fd] },
+        { detached: true, windowsHide: true, stdio: ['ignore', log.fd, log.fd] },
       );
       await new Promise<void>((resolve, reject) => {
         child.once('spawn', resolve);

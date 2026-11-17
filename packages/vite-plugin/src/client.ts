@@ -10,9 +10,13 @@ interface PendingUpdate extends UpdateStart {
 
 function toUpdateError(err: ErrorPayload['err'], urls: readonly string[]): UpdateError {
   const file = err.loc?.file ?? err.id;
+  const slashed =
+    file === undefined ? undefined : `/${file.replaceAll('\\', '/').replace(/^\/+/, '')}`;
   const error: UpdateError = {
     message: err.message,
-    attributed: file !== undefined && urls.some((url) => file.endsWith(url.split('?')[0] ?? url)),
+    attributed:
+      slashed !== undefined &&
+      urls.some((url) => slashed.endsWith((url.split('?')[0] ?? url).replace(/^\/@fs(?=\/)/, ''))),
   };
   if (file !== undefined) error.file = file;
   if (err.loc?.line !== undefined) error.line = err.loc.line;

@@ -2,8 +2,8 @@ import { existsSync, readFileSync } from 'node:fs';
 import { dirname, relative } from 'node:path';
 import {
   candidatesDirOf,
+  insideProject,
   overlayFileOf,
-  projectPathOf,
   TAILWIND_ROOT,
   toPosix,
 } from './next-paths.js';
@@ -39,8 +39,8 @@ function overlayOf(path: string): string | undefined {
 export default function guijamLoader(this: LoaderContext, source: string): string {
   const { root } = optionsOf(this);
   const file = this.resourcePath;
-  const projectPath = projectPathOf(root, file);
-  if (projectPath.startsWith('..') || projectPath.includes('node_modules/')) return source;
+  const projectPath = insideProject(root, file);
+  if (projectPath === undefined || projectPath.includes('node_modules/')) return source;
   if (STYLESHEET.test(file)) {
     if (!TAILWIND_ROOT.test(source)) return source;
     const candidates = toPosix(relative(dirname(file), candidatesDirOf(root)));

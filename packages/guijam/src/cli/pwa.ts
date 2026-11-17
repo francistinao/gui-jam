@@ -2,6 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { basename } from 'node:path';
 import { type Expression, type ObjectExpression, parseSync, Visitor } from 'oxc-parser';
 import type { Project } from './detect.js';
+import { sourceText } from './wire.js';
 
 const PWA_SOURCE = 'vite-plugin-pwa';
 
@@ -52,7 +53,7 @@ export async function projectRunsDevServiceWorker(project: Project): Promise<boo
   if (project.configFile === undefined) return false;
   try {
     return runsDevServiceWorker(
-      await readFile(project.configFile, 'utf8'),
+      sourceText(await readFile(project.configFile, 'utf8')).code,
       basename(project.configFile),
     );
   } catch {

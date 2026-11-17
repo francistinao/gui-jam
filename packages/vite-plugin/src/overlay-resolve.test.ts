@@ -23,6 +23,14 @@ describe('resolveOverlay', () => {
     expect(resolveOverlay(source, importer, lookup([organism]))).toBe(expected);
   });
 
+  it('finds an aliased import that Vite resolved to a Windows drive path', () => {
+    const windows = 'C:/repo/app/src/components/organisms/PricingSection.tsx';
+    const overlays = { ...lookup([windows]), root: 'C:/repo/app' };
+    expect(
+      resolveOverlay('C:/repo/app/src/components/organisms/PricingSection', undefined, overlays),
+    ).toBe(windows);
+  });
+
   it('resolves imports between new files relative to the importing overlay', () => {
     const atom = `${ROOT}/src/components/atoms/Price.tsx`;
     expect(resolveOverlay('../atoms/Price', `${organism}?t=1`, lookup([organism, atom]))).toBe(

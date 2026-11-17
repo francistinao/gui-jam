@@ -1,4 +1,3 @@
-import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { appendFile, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join, relative } from 'node:path';
@@ -16,6 +15,7 @@ import {
   useProvider,
 } from './gjd.js';
 import { PWA_HINT, projectRunsDevServiceWorker } from './pwa.js';
+import { spawnTool } from './spawn-tool.js';
 import { wireProject } from './wire.js';
 
 export interface InitOptions {
@@ -69,13 +69,13 @@ function capture(
   cwd: string,
 ): Promise<{ code: number; output: string }> {
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, { cwd, stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawnTool(command, args, { cwd, stdio: ['ignore', 'pipe', 'pipe'] });
     let output = '';
     const collect = (chunk: Buffer): void => {
       output += chunk.toString();
     };
-    child.stdout.on('data', collect);
-    child.stderr.on('data', collect);
+    child.stdout?.on('data', collect);
+    child.stderr?.on('data', collect);
     child.once('error', reject);
     child.once('close', (code) => resolve({ code: code ?? 1, output }));
   });
@@ -334,7 +334,8 @@ async function ignoreStep(root: string): Promise<void> {
   if (existsSync(file)) {
     const text = await readFile(file, 'utf8');
     if (/^\/?\.guijam\/?\s*$/m.test(text)) return;
-    await appendFile(file, `${text === '' || text.endsWith('\n') ? '' : '\n'}.guijam/\n`);
+    const eol = text.includes('\r\n') ? '\r\n' : '\n';
+    await appendFile(file, `${text === '' || text.endsWith('\n') ? '' : eol}.guijam/${eol}`);
     log.success('Added .guijam/ to .gitignore');
     return;
   }

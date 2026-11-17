@@ -1,5 +1,6 @@
 import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
+import { spawnTool } from './spawn-tool.js';
 
 const run = promisify(execFile);
 
@@ -130,7 +131,11 @@ export function runCommand(command: string, args: string[], cwd: string): Promis
 
 export function runAttached(commandLine: string, cwd: string): Promise<number> {
   const [command = '', ...args] = commandLine.trim().split(/\s+/);
-  return runCommand(command, args, cwd);
+  return new Promise((resolve, reject) => {
+    const child = spawnTool(command, args, { cwd, stdio: 'inherit' });
+    child.once('error', reject);
+    child.once('exit', (code) => resolve(code ?? 1));
+  });
 }
 
 export function providerHint(provider: ProviderInfo): string {

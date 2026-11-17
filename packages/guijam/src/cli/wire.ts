@@ -18,6 +18,20 @@ import {
 } from 'oxc-parser';
 import { type Project, VITE_FRAMEWORKS } from './detect.js';
 
+export interface SourceText {
+  code: string;
+  restore: (edited: string) => string;
+}
+
+export function sourceText(raw: string): SourceText {
+  const bom = raw.startsWith('\uFEFF') ? '\uFEFF' : '';
+  const crlf = raw.includes('\r\n');
+  return {
+    code: raw.slice(bom.length).replaceAll('\r\n', '\n'),
+    restore: (edited) => bom + (crlf ? edited.replaceAll('\n', '\r\n') : edited),
+  };
+}
+
 export const PLUGIN_SOURCE = 'guijam/vite';
 export const NUXT_MODULE = 'guijam/nuxt';
 export const ASTRO_INTEGRATION = 'guijam/astro';
@@ -401,7 +415,8 @@ async function wireNext(project: Project): Promise<WireResult> {
     );
     return { status: 'created', file };
   }
-  const outcome = addWithGuijam(await readFile(file, 'utf8'), basename(file));
+  const source = sourceText(await readFile(file, 'utf8'));
+  const outcome = addWithGuijam(source.code, basename(file));
   if (outcome.kind === 'manual') {
     return {
       status: 'manual',
@@ -410,7 +425,7 @@ async function wireNext(project: Project): Promise<WireResult> {
       snippet: nextConfigSnippet(),
     };
   }
-  if (outcome.kind === 'added') await writeFile(file, outcome.code);
+  if (outcome.kind === 'added') await writeFile(file, source.restore(outcome.code));
   return { status: outcome.kind, file };
 }
 
@@ -442,7 +457,8 @@ async function wireAstro(project: Project): Promise<WireResult> {
     );
     return { status: 'created', file };
   }
-  const outcome = addAstroIntegration(await readFile(file, 'utf8'), basename(file));
+  const source = sourceText(await readFile(file, 'utf8'));
+  const outcome = addAstroIntegration(source.code, basename(file));
   if (outcome.kind === 'manual') {
     return {
       status: 'manual',
@@ -451,7 +467,7 @@ async function wireAstro(project: Project): Promise<WireResult> {
       snippet: astroConfigSnippet(),
     };
   }
-  if (outcome.kind === 'added') await writeFile(file, outcome.code);
+  if (outcome.kind === 'added') await writeFile(file, source.restore(outcome.code));
   return { status: outcome.kind, file };
 }
 
@@ -559,7 +575,8 @@ async function wireNuxt(project: Project): Promise<WireResult> {
     );
     return { status: 'created', file };
   }
-  const outcome = addNuxtModule(await readFile(file, 'utf8'), basename(file));
+  const source = sourceText(await readFile(file, 'utf8'));
+  const outcome = addNuxtModule(source.code, basename(file));
   if (outcome.kind === 'manual') {
     return {
       status: 'manual',
@@ -568,7 +585,7 @@ async function wireNuxt(project: Project): Promise<WireResult> {
       snippet: nuxtConfigSnippet(),
     };
   }
-  if (outcome.kind === 'added') await writeFile(file, outcome.code);
+  if (outcome.kind === 'added') await writeFile(file, source.restore(outcome.code));
   return { status: outcome.kind, file };
 }
 
@@ -603,7 +620,8 @@ export async function wireProject(project: Project): Promise<WireResult> {
     return { status: 'created', file };
   }
   const file = project.configFile;
-  const outcome = addGuijamPlugin(await readFile(file, 'utf8'), basename(file));
+  const source = sourceText(await readFile(file, 'utf8'));
+  const outcome = addGuijamPlugin(source.code, basename(file));
   if (outcome.kind === 'manual') {
     return {
       status: 'manual',
@@ -612,14 +630,14 @@ export async function wireProject(project: Project): Promise<WireResult> {
       snippet: viteConfigSnippet(),
     };
   }
-  if (outcome.kind === 'added') await writeFile(file, outcome.code);
+  if (outcome.kind === 'added') await writeFile(file, source.restore(outcome.code));
   return { status: outcome.kind, file };
 }
 
 export async function isWired(project: Project): Promise<boolean> {
   if (project.configFile === undefined) return false;
   try {
-    const code = await readFile(project.configFile, 'utf8');
+    const { code } = sourceText(await readFile(project.configFile, 'utf8'));
     if (project.framework === 'nuxt') return hasNuxtModule(code, basename(project.configFile));
     if (project.framework === 'astro') {
       return callsGuijam(code, basename(project.configFile), ASTRO_HOOK);

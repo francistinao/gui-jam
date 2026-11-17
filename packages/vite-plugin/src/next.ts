@@ -129,7 +129,12 @@ export function withGuijam(config: NextConfigInput = {}, options: GuijamNextOpti
       nextVersion: nextVersion ?? 'unknown',
       pluginVersion: versionOf(root, 'guijam') ?? '0.0.0',
       ...(options.daemonBinary === undefined ? {} : { daemonBinary: options.daemonBinary }),
+    }).catch((error: unknown) => {
+      const reason = error instanceof Error ? error.message : String(error);
+      console.warn(`[guijam] GUIJam is off for this dev server: ${reason}.`);
+      return undefined;
     });
+    if (!relay) return resolved;
     return {
       ...resolved,
       env: { ...resolved.env, GUIJAM_RELAY_URL: relay.url, GUIJAM_WIDGET_URL: relay.widgetUrl },

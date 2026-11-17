@@ -1,4 +1,4 @@
-import { join, relative, sep } from 'node:path';
+import path, { join, sep } from 'node:path';
 
 export const TAILWIND_ROOT = /@import\s+["']tailwindcss["']|@tailwind\s+utilities/;
 
@@ -6,8 +6,20 @@ export function toPosix(path: string): string {
   return path.split(sep).join('/');
 }
 
-export function projectPathOf(root: string, file: string): string {
-  return toPosix(relative(root, file));
+export function insideProject(
+  root: string,
+  file: string,
+  paths: path.PlatformPath = path,
+): string | undefined {
+  const inside = paths.relative(root, file);
+  if (inside === '' || paths.isAbsolute(inside) || /^\.\.(?:[\\/]|$)/.test(inside)) {
+    return undefined;
+  }
+  return inside.split(paths.sep).join('/');
+}
+
+export function fsUrl(file: string): string {
+  return `/@fs/${file.replaceAll('\\', '/').replace(/^\/+/, '')}`;
 }
 
 export function runDir(root: string): string {

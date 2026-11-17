@@ -20,6 +20,7 @@ export interface OverlayLookup {
 }
 
 function bases(path: string, importer: string | undefined, root: string): string[] {
+  if (/^[A-Za-z]:[\\/]/.test(path)) return [normalizePath(path)];
   if (path.startsWith('/')) {
     return [normalizePath(path), normalizePath(resolve(root, `.${path}`))];
   }

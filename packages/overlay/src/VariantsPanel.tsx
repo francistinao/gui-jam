@@ -130,12 +130,12 @@ export function VariantsPanel({
         <dt className="text-grey-500">Style</dt>
         <dd>{variant.style}</dd>
         <dt className="text-grey-500">File</dt>
-        <dd className="truncate font-mono">{variant.file.split('/').pop()}</dd>
+        <dd className="truncate font-mono">{variant.file.split(/[\\/]/).pop()}</dd>
         {variant.created.length > 0 ? (
           <>
             <dt className="text-grey-500">Adds</dt>
             <dd className="truncate font-mono">
-              {variant.created.map((path) => path.split('/').pop()).join(', ')}
+              {variant.created.map((path) => path.split(/[\\/]/).pop()).join(', ')}
             </dd>
           </>
         ) : null}

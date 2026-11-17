@@ -237,8 +237,13 @@ export function bootToolbar(hot: ToolbarChannel, widgetUrl = WIDGET_URL): void {
     });
   }
 
+  const typing = (target: EventTarget | null): boolean =>
+    target instanceof HTMLElement &&
+    (target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName));
+
   document.addEventListener('keydown', (event) => {
-    if (!(event.altKey && event.shiftKey && event.code === 'KeyM')) return;
+    const chord = event.altKey && event.shiftKey && !event.ctrlKey && !event.metaKey;
+    if (!chord || event.code !== 'KeyM' || typing(event.composedPath()[0] ?? null)) return;
     hostElement.hidden = !hostElement.hidden;
     if (!hostElement.hidden || active === null || !widget) return;
     void widget.then((loaded) => {

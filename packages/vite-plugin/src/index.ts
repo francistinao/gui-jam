@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { existsSync } from 'node:fs';
+import { existsSync, realpathSync } from 'node:fs';
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { dirname, join, relative, resolve } from 'node:path';
@@ -16,6 +16,8 @@ import {
   version as viteVersion,
 } from 'vite';
 import { createBridge, type OverlayOptions } from './bridge.js';
+import { FileMap } from './file-map.js';
+import { fsUrl, insideProject } from './next-paths.js';
 import { hotReloadable, overlayFile, resolveOverlay } from './overlay-resolve.js';
 import { type AstroCompiler, injectAstroSourceLocations } from './transform-astro-srcloc.js';
 import { injectSourceLocations } from './transform-srcloc.js';
@@ -102,9 +104,9 @@ function toUpdateError(error: unknown, file: string): UpdateError {
 }
 
 export function guijam(options: GuijamOptions = {}): Plugin<GuijamApi> {
-  const overlays = new Map<string, string>();
-  const settled = new Map<string, string>();
-  const serverSettled = new Map<string, string>();
+  const overlays = new FileMap<string>();
+  const settled = new FileMap<string>();
+  const serverSettled = new FileMap<string>();
   const tailwindRootIds = new Set<string>();
   const tracker = createUpdateTracker(UPDATE_TIMEOUT_MS);
   let devServer: ViteDevServer | undefined;
@@ -165,12 +167,21 @@ export function guijam(options: GuijamOptions = {}): Plugin<GuijamApi> {
     return loading;
   }
 
+  function modulesOfFile(environment: DevEnvironment, id: string): Set<EnvironmentModuleNode> {
+    const graph = environment.moduleGraph;
+    const found = graph.getModulesByFile(id);
+    if ((found && found.size > 0) || process.platform !== 'win32' || !existsSync(id)) {
+      return found ?? new Set();
+    }
+    return graph.getModulesByFile(normalizePath(realpathSync.native(id))) ?? new Set();
+  }
+
   function tailwindRootFiles(): string[] {
     return [...new Set([...tailwindRootIds].map((id) => id.split('?', 1)[0] ?? id))];
   }
 
   async function syncCandidates(id: string, content: string | undefined): Promise<void> {
-    const name = relative(root, id).replaceAll(/[\\/]/g, '__');
+    const name = (insideProject(root, id) ?? id).replaceAll(/[\\/:]/g, '__');
     const path = join(candidatesDir, name);
     if (content === undefined) await rm(path, { force: true });
     else await writeFile(path, content);
@@ -195,7 +206,7 @@ export function guijam(options: GuijamOptions = {}): Plugin<GuijamApi> {
 
   function invalidateServerModules(environment: DevEnvironment, id: string): void {
     const invalidated = new Set<EnvironmentModuleNode>();
-    for (const mod of environment.moduleGraph.getModulesByFile(id) ?? []) {
+    for (const mod of modulesOfFile(environment, id)) {
       environment.moduleGraph.invalidateModule(mod, invalidated, Date.now(), true);
     }
     const evaluated = (environment as { runner?: { evaluatedModules?: RunnerModules } }).runner
@@ -266,7 +277,7 @@ export function guijam(options: GuijamOptions = {}): Plugin<GuijamApi> {
     else settled.delete(id);
     if (SERVER_RENDERED.test(id) && unchanged) serverSettled.set(id, previous);
     else serverSettled.delete(id);
-    const modules = [...(client.moduleGraph.getModulesByFile(id) ?? [])];
+    const modules = [...modulesOfFile(client, id)];
     if (SERVER_RENDERED.test(id)) {
       return showServerRendered(
         id,
@@ -406,8 +417,8 @@ export function guijam(options: GuijamOptions = {}): Plugin<GuijamApi> {
     load(id) {
       const file = id.split('?', 1)[0] ?? id;
       if (ASSET_FILE.test(file) && overlays.has(file)) {
-        const inside = relative(viteRoot, file);
-        const url = inside.startsWith('..') ? `/@fs${file}` : `/${normalizePath(inside)}`;
+        const inside = insideProject(viteRoot, file);
+        const url = inside === undefined ? fsUrl(file) : `/${inside}`;
         return `export default ${JSON.stringify(url)};`;
       }
       return overlays.get(overlayFile(id)) ?? null;
@@ -420,8 +431,8 @@ export function guijam(options: GuijamOptions = {}): Plugin<GuijamApi> {
         const entry = scriptEntries.has(file) || frameworkClientEntry?.test(file) === true;
         const prepend = this.environment.name === 'client' && entry ? CLIENT_IMPORT : '';
         if (VUE_MODULE.test(id)) {
-          const projectPath = normalizePath(relative(root, id));
-          if (projectPath.startsWith('..') || id.includes('/node_modules/')) return null;
+          const projectPath = insideProject(root, id);
+          if (projectPath === undefined || id.includes('/node_modules/')) return null;
           const parse = await loadParser('vue/compiler-sfc');
           return parse
             ? injectVueSourceLocations(code, id, projectPath, {
@@ -430,8 +441,8 @@ export function guijam(options: GuijamOptions = {}): Plugin<GuijamApi> {
             : null;
         }
         if (SVELTE_MODULE.test(id)) {
-          const projectPath = normalizePath(relative(root, id));
-          if (projectPath.startsWith('..') || id.includes('/node_modules/')) return null;
+          const projectPath = insideProject(root, id);
+          if (projectPath === undefined || id.includes('/node_modules/')) return null;
           const parse = await loadParser('svelte/compiler');
           return parse
             ? injectSvelteSourceLocations(code, id, projectPath, {
@@ -440,8 +451,8 @@ export function guijam(options: GuijamOptions = {}): Plugin<GuijamApi> {
             : null;
         }
         if (ASTRO_MODULE.test(id)) {
-          const projectPath = normalizePath(relative(root, id));
-          if (projectPath.startsWith('..') || id.includes('/node_modules/')) return null;
+          const projectPath = insideProject(root, id);
+          if (projectPath === undefined || id.includes('/node_modules/')) return null;
           const parse = await loadParser('@astrojs/compiler-rs', 'astro');
           return parse
             ? injectAstroSourceLocations(code, id, projectPath, {
@@ -450,9 +461,10 @@ export function guijam(options: GuijamOptions = {}): Plugin<GuijamApi> {
             : null;
         }
         if (JSX_MODULE.test(id)) {
-          const projectPath = normalizePath(relative(root, file));
-          const inProject = !projectPath.startsWith('..') && !id.includes('/node_modules/');
-          if (inProject) return injectSourceLocations(code, id, projectPath, prepend);
+          const projectPath = insideProject(root, file);
+          if (projectPath !== undefined && !id.includes('/node_modules/')) {
+            return injectSourceLocations(code, id, projectPath, prepend);
+          }
           if (prepend === '') return null;
         }
         if (prepend !== '') {

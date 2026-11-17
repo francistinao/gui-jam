@@ -90,7 +90,7 @@ function readManifest(root: string): Manifest {
   if (!existsSync(path)) {
     throw new Error(`No package.json in ${root}. Run this in your app's folder.`);
   }
-  const parsed: unknown = JSON.parse(readFileSync(path, 'utf8'));
+  const parsed: unknown = JSON.parse(readFileSync(path, 'utf8').replace(/^\uFEFF/, ''));
   if (!isRecord(parsed)) throw new Error(`${path} is not a JSON object.`);
   return parsed;
 }
@@ -122,7 +122,7 @@ function installedManifest(root: string, name: string): unknown {
     const path = join(dir, 'node_modules', name, 'package.json');
     if (existsSync(path)) {
       try {
-        return JSON.parse(readFileSync(path, 'utf8'));
+        return JSON.parse(readFileSync(path, 'utf8').replace(/^\uFEFF/, ''));
       } catch {
         return undefined;
       }
