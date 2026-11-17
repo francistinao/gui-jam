@@ -173,6 +173,13 @@ impl Journal {
         self.write_entry(&changes, "undo", &format!("undo {id}"), Some(id))
     }
 
+    pub fn paths(&self, id: &str) -> Result<Vec<String>, CommitError> {
+        let records = self.records()?;
+        committed_files(&records, id)
+            .map(|files| files.iter().map(|file| file.path.clone()).collect())
+            .ok_or_else(|| CommitError::UnknownEntry(id.to_owned()))
+    }
+
     pub fn recover(&self) -> Result<Vec<Recovery>, CommitError> {
         let records = self.records()?;
         let mut outcomes = Vec::new();
@@ -624,6 +631,7 @@ mod tests {
             .commit(&[change(BUTTON, original, "changed\n")], "finetune", "fill")
             .expect("committed");
 
+        assert_eq!(journal.paths(&id).expect("paths"), [BUTTON]);
         journal.undo(&id).expect("undone");
 
         assert_eq!(read(&dir, BUTTON), original);
@@ -653,6 +661,10 @@ mod tests {
 
         assert!(matches!(
             journal.undo("j-missing"),
+            Err(CommitError::UnknownEntry(_))
+        ));
+        assert!(matches!(
+            journal.paths("j-missing"),
             Err(CommitError::UnknownEntry(_))
         ));
     }

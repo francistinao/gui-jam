@@ -2047,16 +2047,32 @@ impl Daemon {
     }
 
     async fn undo(&self, journal_id: String) -> Result<UndoDone, Failure> {
-        let _write = self.write_lock.lock().await;
+        let write = self.write_lock.lock().await;
         let journal = Arc::clone(&self.journal);
         let target = journal_id.clone();
-        let undo_id = tokio::task::spawn_blocking(move || journal.undo(&target))
-            .await
-            .map_err(|error| Failure::new(ErrorCode::Internal, error.to_string()))??;
+        let (undo_id, paths) = tokio::task::spawn_blocking(move || {
+            let paths = journal.paths(&target)?;
+            Ok::<_, CommitError>((journal.undo(&target)?, paths))
+        })
+        .await
+        .map_err(|error| Failure::new(ErrorCode::Internal, error.to_string()))??;
+        drop(write);
+        for path in &paths {
+            self.refresh(path);
+        }
         Ok(UndoDone {
             journal_id: undo_id,
             undo_of: journal_id,
         })
+    }
+
+    fn refresh(&self, file: &str) {
+        if locked(&self.overlays).contains_key(file) {
+            return;
+        }
+        if let Some(link) = locked(&self.plugin).clone() {
+            let _ = link.send(overlay_message(None, file, None, None));
+        }
     }
 
     async fn show(&self, file: &str, content: Option<&str>) -> Result<UpdateResult, Failure> {

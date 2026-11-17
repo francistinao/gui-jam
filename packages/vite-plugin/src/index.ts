@@ -233,11 +233,6 @@ export function guijam(options: GuijamOptions = {}): Plugin<GuijamApi> {
     const client = devServer?.environments.client;
     const ok: UpdateResult = { updateId, status: 'ok', latencyMs: 0, errors: [] };
     if (!client) return ok;
-    if (content === undefined && previous !== undefined && previous === onDisk) {
-      serverSettled.set(id, previous);
-    } else {
-      serverSettled.delete(id);
-    }
     for (const environment of serverEnvironments()) invalidateServerModules(environment, id);
     await syncCandidates(id, content);
     if ((previous ?? onDisk) === (content ?? onDisk)) return ok;
@@ -262,15 +257,16 @@ export function guijam(options: GuijamOptions = {}): Plugin<GuijamApi> {
     const id = normalizePath(resolve(root, file));
     const updateId = randomUUID();
     const startedAt = performance.now();
+    const onDisk = !ASSET_FILE.test(id) && existsSync(id) ? await readFile(id, 'utf8') : undefined;
     const previous = overlays.get(id);
-
+    const unchanged = content === undefined && previous !== undefined && previous === onDisk;
     if (content === undefined) overlays.delete(id);
     else overlays.set(id, content);
-    settled.delete(id);
-    const modules = [...(client.moduleGraph.getModulesByFile(id) ?? [])];
-    const onDisk = !ASSET_FILE.test(id) && existsSync(id) ? await readFile(id, 'utf8') : undefined;
-    const unchanged = content === undefined && previous !== undefined && previous === onDisk;
     if (unchanged) settled.set(id, previous);
+    else settled.delete(id);
+    if (SERVER_RENDERED.test(id) && unchanged) serverSettled.set(id, previous);
+    else serverSettled.delete(id);
+    const modules = [...(client.moduleGraph.getModulesByFile(id) ?? [])];
     if (SERVER_RENDERED.test(id)) {
       return showServerRendered(
         id,
@@ -325,26 +321,21 @@ export function guijam(options: GuijamOptions = {}): Plugin<GuijamApi> {
       request: (message) => bridge.relay(message),
     },
 
-    async hotUpdate({ type, file, read, modules }) {
+    async hotUpdate({ file, modules }) {
       const id = normalizePath(file);
-      if (this.environment.name !== 'client') {
-        if (!SERVER_RENDERED.test(id)) return;
-        if (overlays.has(id)) return [];
-        const shown = serverSettled.get(id);
-        if (shown === undefined || type !== 'update') return;
-        if ((await read()) !== shown) {
-          serverSettled.delete(id);
-          return;
-        }
-        invalidateServerModules(this.environment, id);
+      const server = this.environment.name !== 'client';
+      if (server && !SERVER_RENDERED.test(id)) return;
+      if (overlays.has(id)) return [];
+      const shownFiles = server ? serverSettled : settled;
+      const shown = shownFiles.get(id);
+      if (shown === undefined) return;
+      const disk = existsSync(id) ? await readFile(id, 'utf8') : undefined;
+      if (disk === shown) {
+        if (server) invalidateServerModules(this.environment, id);
         return [];
       }
-      if (overlays.has(id)) return [];
-      const shown = settled.get(id);
-      if (shown === undefined) return;
-      settled.delete(id);
-      if (type !== 'update') return;
-      if ((await read()) === shown) return [];
+      shownFiles.delete(id);
+      if (server || disk === undefined) return;
       for (const mod of modules.filter((entry) => hotReloadable(entry.url))) {
         await this.environment.reloadModule(mod);
       }
