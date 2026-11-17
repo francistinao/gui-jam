@@ -191,7 +191,13 @@ export function PromptPanel({ store, controller }: PanelProps) {
       {answered ? (
         <AnswerPanel generation={generation} controller={controller} />
       ) : status === 'ready' ? (
-        <VariantsPanel generation={generation} busy={busy} controller={controller} />
+        <VariantsPanel
+          generation={generation}
+          busy={busy}
+          installing={job.installing}
+          installError={job.installError}
+          controller={controller}
+        />
       ) : (
         <form
           className={cn(

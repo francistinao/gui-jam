@@ -8,6 +8,7 @@ type HotContext = NonNullable<ImportMeta['hot']>;
 const WIDGET_URL = '/@guijam/widget.js';
 const REQUEST_TIMEOUT_MS = 20_000;
 const GENERATION_TIMEOUT_MS = 365_000;
+const INSTALL_TIMEOUT_MS = 275_000;
 
 export interface ToolSpec {
   tool: Tool;
@@ -69,10 +70,37 @@ function isWidgetModule(value: unknown): value is WidgetModule {
 }
 
 function timeoutFor(type: string): number {
-  return type === 'generate.request' ? GENERATION_TIMEOUT_MS : REQUEST_TIMEOUT_MS;
+  if (type === 'generate.request' || type === 'generate.attach') return GENERATION_TIMEOUT_MS;
+  if (type === 'dependencies.install') return INSTALL_TIMEOUT_MS;
+  return REQUEST_TIMEOUT_MS;
+}
+
+const PAGE_KEY = 'guijam:page';
+const JOBS_KEY = 'guijam:jobs';
+const PAGE_ID = /^[\w-]{1,100}$/;
+
+function pageId(): string {
+  try {
+    const known = sessionStorage.getItem(PAGE_KEY);
+    if (known && PAGE_ID.test(known)) return known;
+    const fresh = crypto.randomUUID();
+    sessionStorage.setItem(PAGE_KEY, fresh);
+    return fresh;
+  } catch {
+    return crypto.randomUUID();
+  }
+}
+
+function hasSavedJobs(): boolean {
+  try {
+    return Boolean(sessionStorage.getItem(JOBS_KEY));
+  } catch {
+    return false;
+  }
 }
 
 function createRequester(hot: HotContext): WidgetHost['request'] {
+  const page = pageId();
   let next = 1;
   const waiting = new Map<string, (reply: GuijamMessage) => void>();
   hot.on('gj:response', (reply) => {
@@ -101,7 +129,7 @@ function createRequester(hot: HotContext): WidgetHost['request'] {
         clearTimeout(timer);
         resolve(reply);
       });
-      hot.send('gj:request', { ...message, id });
+      hot.send('gj:request', { ...message, id, pageId: page });
     });
 }
 
@@ -194,6 +222,13 @@ export function bootToolbar(hot: HotContext): void {
           console.error('[guijam] the widget failed to load', error);
         },
       );
+    });
+  }
+
+  if (hasSavedJobs()) {
+    loadWidget().catch((error: unknown) => {
+      widget = undefined;
+      console.error('[guijam] the widget failed to load', error);
     });
   }
 

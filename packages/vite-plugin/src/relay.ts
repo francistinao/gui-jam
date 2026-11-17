@@ -9,13 +9,17 @@ const WIDGET_REQUEST_TYPES = [
   'generate.request',
   'generate.cancel',
   'variant.select',
+  'dependencies.install',
   'generate.discard',
 ] as const satisfies readonly GuijamMessage['type'][];
 
 const GENERATION_REPLY_MS = 360_000;
+const INSTALL_REPLY_MS = 270_000;
 
 export function replyWindowMs(type: GuijamMessage['type']): number | undefined {
-  return type === 'generate.request' ? GENERATION_REPLY_MS : undefined;
+  if (type === 'generate.request') return GENERATION_REPLY_MS;
+  if (type === 'dependencies.install') return INSTALL_REPLY_MS;
+  return undefined;
 }
 
 type WidgetRequestType = (typeof WIDGET_REQUEST_TYPES)[number];
@@ -91,4 +95,23 @@ export function requestRunId(data: unknown, requestType: string): string | undef
 
 export function generationRunId(data: unknown): string | undefined {
   return requestRunId(data, 'generate.request');
+}
+
+export function requestId(data: unknown): string | undefined {
+  if (typeof data !== 'object' || data === null) return undefined;
+  const { id } = data as { id?: unknown };
+  return typeof id === 'string' ? id : undefined;
+}
+
+const PAGE_ID = /^[\w-]{1,100}$/;
+
+export function splitPage(raw: unknown, fallback: string): { pageId: string; data: unknown } {
+  if (typeof raw !== 'object' || raw === null || !('pageId' in raw)) {
+    return { pageId: fallback, data: raw };
+  }
+  const { pageId, ...data } = raw as { pageId: unknown };
+  return {
+    pageId: typeof pageId === 'string' && PAGE_ID.test(pageId) ? pageId : fallback,
+    data,
+  };
 }

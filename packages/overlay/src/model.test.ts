@@ -15,6 +15,7 @@ import {
   invertChanges,
   linksIn,
   MAX_LINKS,
+  needsLine,
   OPACITY_RANGE,
   panelSections,
   parseHex,
@@ -25,6 +26,7 @@ import {
   splitPaths,
   stillWorking,
   unionRect,
+  withoutInstalled,
 } from './model';
 
 const token = (raw: string, group: StyleToken['group'], editable = true): StyleToken => ({
@@ -424,5 +426,36 @@ describe('linksIn', () => {
     expect(local?.label).toBe('127.0.0.1:4173');
     expect(long?.label).toHaveLength(40);
     expect(long?.label.endsWith('…')).toBe(true);
+  });
+});
+
+describe('withoutInstalled', () => {
+  const needs = {
+    command: 'pnpm add --save-exact three@0.187.0 @react-three/fiber@9.8.2',
+    packages: [
+      { name: 'three', version: '0.187.0' },
+      { name: '@react-three/fiber', version: '9.8.2' },
+    ],
+  };
+
+  it('drops installed packages and the needs once nothing is left', () => {
+    const variant = { label: 'Scene', needs };
+    expect(withoutInstalled(variant, new Set(['three'])).needs?.packages).toEqual([
+      { name: '@react-three/fiber', version: '9.8.2' },
+    ]);
+    const done = withoutInstalled(variant, new Set(['three', '@react-three/fiber']));
+    expect(done).toEqual({ label: 'Scene' });
+    expect('needs' in done).toBe(false);
+    const plain: { label: string; needs?: typeof needs } = { label: 'Plain' };
+    expect(withoutInstalled(plain, new Set(['three']))).toBe(plain);
+  });
+
+  it('says what a variant needs in plain words', () => {
+    expect(needsLine(needs)).toBe(
+      "Needs three 0.187.0, @react-three/fiber 9.8.2. It isn't previewed until you install them.",
+    );
+    expect(needsLine({ ...needs, packages: needs.packages.slice(0, 1) })).toBe(
+      "Needs three 0.187.0. It isn't previewed until you install it.",
+    );
   });
 });

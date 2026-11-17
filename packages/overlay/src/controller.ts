@@ -36,8 +36,10 @@ import {
   shiftedLine,
   type Tool,
   unionRect,
+  withoutInstalled,
 } from './model';
 import { collectPageOutline } from './page-outline';
+import type { Saved } from './persist';
 import { captureSketch } from './sketch';
 import type { Store } from './store';
 
@@ -122,6 +124,8 @@ export interface Job {
   previewed: boolean;
   attachments: Attachment[];
   attachError: string | null;
+  installing: boolean;
+  installError: string | null;
 }
 
 export interface WidgetState {
@@ -465,6 +469,10 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
         ...(forceAi ? { forceAi } : {}),
       },
     });
+    finishRun(runId, reply);
+  }
+
+  function finishRun(runId: string, reply: GuijamMessage): void {
     const owner = runs.get(runId);
     runs.delete(runId);
     const latest = jobById(owner ?? null);
@@ -504,6 +512,32 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
         };
       }),
     });
+  }
+
+  async function reattach(jobId: string, runId: string): Promise<void> {
+    runs.set(runId, jobId);
+    const reply = await host.request({ type: 'generate.attach', payload: { runId } });
+    finishRun(runId, reply);
+  }
+
+  async function reshow(job: Job): Promise<void> {
+    const variant = job.generation.variants[job.generation.active];
+    if (!job.generation.runId || !variant) return;
+    const reply = await host.request({
+      type: 'variant.select',
+      payload: { runId: job.generation.runId, changesetId: variant.changesetId },
+    });
+    if (reply.type === 'variant.selected') return;
+    setGeneration(job.id, {
+      ...IDLE_GENERATION,
+      prompt: job.generation.prompt,
+      error: {
+        kind: 'error',
+        message: 'Its variants were lost while the page reloaded.',
+        action: 'Generate again.',
+      },
+    });
+    updateJob(job.id, (entry) => ({ ...entry, previewed: false }));
   }
 
   async function showVariant(jobId: string, index: number): Promise<void> {
@@ -591,6 +625,8 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
       previewed: false,
       attachments: [],
       attachError: null,
+      installing: false,
+      installError: null,
     };
     store.set({ jobs: [...jobs, job] });
     await focusJob(job.id);
@@ -753,6 +789,62 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
         attachments: entry.attachments.filter((attachment) => attachment.id !== id),
         attachError: null,
       }));
+    },
+
+    async restore(saved: Saved): Promise<void> {
+      if (store.get().jobs.length > 0) return;
+      const jobs = saved.jobs.map((job) => {
+        const element = elementsAt(job.target.src)[0];
+        return { ...job, anchor: element ? rectOf(element) : job.anchor };
+      });
+      store.set({ jobs });
+      for (const job of jobs) {
+        if (job.generation.status === 'running' && job.generation.runId) {
+          void reattach(job.id, job.generation.runId);
+        }
+      }
+      const shown = jobs.find((job) => job.previewed && job.generation.status === 'ready');
+      if (shown) await reshow(shown);
+      if (saved.focus) await focusJob(saved.focus);
+    },
+
+    async installDependencies(): Promise<void> {
+      const job = focused();
+      const variant = job?.generation.variants[job.generation.active];
+      const runId = job?.generation.runId;
+      if (!job || !variant?.needs || !runId || job.installing) return;
+      updateJob(job.id, (entry) => ({ ...entry, installing: true, installError: null }));
+      const reply = await host.request({
+        type: 'dependencies.install',
+        payload: { runId, changesetId: variant.changesetId },
+      });
+      if (reply.type !== 'dependencies.installed') {
+        const problem = failure(reply);
+        updateJob(job.id, (entry) => ({
+          ...entry,
+          installing: false,
+          installError: [problem.message, problem.action].filter(Boolean).join(' '),
+        }));
+        return;
+      }
+      const installed = new Set(reply.payload.installed.map((entry) => entry.name));
+      store.set({
+        jobs: store.get().jobs.map((entry) =>
+          entry.id === job.id
+            ? {
+                ...entry,
+                installing: false,
+                previewed: true,
+                generation: {
+                  ...entry.generation,
+                  variants: entry.generation.variants.map((option) =>
+                    withoutInstalled(option, installed),
+                  ),
+                },
+              }
+            : { ...entry, previewed: false },
+        ),
+      });
     },
 
     async discardJob(): Promise<void> {

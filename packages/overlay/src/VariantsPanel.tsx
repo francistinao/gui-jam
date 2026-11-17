@@ -1,16 +1,73 @@
+import { LoaderCircle } from 'lucide-react';
 import type { Controller, Generation } from './controller';
 import { Button } from './figui/button';
 import { cn } from './figui/cn';
-import { droppedNote } from './model';
+import { droppedNote, type Needs, needsLine } from './model';
 import { CodeChanges, RunNotes } from './Popover';
 
 interface VariantsPanelProps {
   generation: Generation;
   busy: boolean;
+  installing: boolean;
+  installError: string | null;
   controller: Controller;
 }
 
-export function VariantsPanel({ generation, busy, controller }: VariantsPanelProps) {
+function InstallBox({
+  needs,
+  busy,
+  installing,
+  installError,
+  controller,
+}: {
+  needs: Needs;
+  busy: boolean;
+  installing: boolean;
+  installError: string | null;
+  controller: Controller;
+}) {
+  return (
+    <section
+      aria-label="Needs libraries"
+      className="flex flex-col gap-1.5 rounded-md bg-yellow-100 p-2"
+    >
+      <p className="typography-body-small m-0 text-grey-800">{needsLine(needs)}</p>
+      <code className="typography-body-small font-mono break-all text-grey-600">
+        {needs.command}
+      </code>
+      <p className="typography-body-small m-0 text-grey-500">
+        Undo removes the code, not the installed library.
+      </p>
+      {installError ? (
+        <p role="alert" className="typography-body-small m-0 text-red-700">
+          {installError}
+        </p>
+      ) : null}
+      <Button
+        className="self-start"
+        disabled={busy || installing}
+        onClick={() => void controller.installDependencies()}
+      >
+        {installing ? (
+          <>
+            <LoaderCircle aria-hidden="true" className="size-3.5 animate-spin" />
+            Installing…
+          </>
+        ) : (
+          'Install and preview'
+        )}
+      </Button>
+    </section>
+  );
+}
+
+export function VariantsPanel({
+  generation,
+  busy,
+  installing,
+  installError,
+  controller,
+}: VariantsPanelProps) {
   const { variants, active, dropped, route, elapsedMs, notes } = generation;
   const variant = variants[active];
   if (!variant) return null;
@@ -86,6 +143,15 @@ export function VariantsPanel({ generation, busy, controller }: VariantsPanelPro
       <p className="typography-body-small text-grey-600">
         <span className="font-[600] text-grey-800">{variant.label}.</span> {variant.rationale}
       </p>
+      {variant.needs ? (
+        <InstallBox
+          needs={variant.needs}
+          busy={busy}
+          installing={installing}
+          installError={installError}
+          controller={controller}
+        />
+      ) : null}
       <CodeChanges changes={variant.changes} />
       <p className="typography-body-small text-grey-500">{meta}</p>
       <footer className="flex items-center justify-end gap-2">
@@ -95,7 +161,10 @@ export function VariantsPanel({ generation, busy, controller }: VariantsPanelPro
         <Button variant="secondary" disabled={busy} onClick={() => void controller.editPrompt()}>
           Edit prompt
         </Button>
-        <Button disabled={busy} onClick={() => void controller.commitVariant()}>
+        <Button
+          disabled={busy || installing || variant.needs !== undefined}
+          onClick={() => void controller.commitVariant()}
+        >
           {`Use V${active + 1}`}
         </Button>
       </footer>

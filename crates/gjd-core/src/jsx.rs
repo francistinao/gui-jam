@@ -57,6 +57,32 @@ pub fn check_syntax(path: &str, source: &str) -> Result<(), JsxError> {
     first_error(&parsed.diagnostics, parsed.fatal_error)
 }
 
+pub fn imports(path: &str, source: &str) -> Result<Vec<String>, JsxError> {
+    let allocator = Allocator::default();
+    let parsed = Parser::new(&allocator, source, source_type(path)?).parse();
+    first_error(&parsed.diagnostics, parsed.fatal_error)?;
+    let record = &parsed.module_record;
+    let mut found: Vec<String> = record
+        .requested_modules
+        .keys()
+        .map(ToString::to_string)
+        .collect();
+    for dynamic in &record.dynamic_imports {
+        let request =
+            &source[dynamic.module_request.start as usize..dynamic.module_request.end as usize];
+        let literal = request
+            .trim()
+            .strip_prefix(['"', '\''])
+            .and_then(|rest| rest.strip_suffix(['"', '\'']));
+        if let Some(specifier) = literal {
+            found.push(specifier.to_owned());
+        }
+    }
+    found.sort();
+    found.dedup();
+    Ok(found)
+}
+
 pub fn find_element(
     path: &str,
     source: &str,
@@ -233,7 +259,7 @@ impl<'a> Visit<'a> for StringCollector {
 
 #[cfg(test)]
 mod tests {
-    use super::{ClassLiteral, ClassSource, JsxError, check_syntax, find_element};
+    use super::{ClassLiteral, ClassSource, JsxError, check_syntax, find_element, imports};
 
     const FILE: &str = "src/A.tsx";
 
@@ -351,5 +377,39 @@ mod tests {
             check_syntax("styles.css", "a {}"),
             Err(JsxError::UnsupportedFile(_))
         ));
+    }
+
+    #[test]
+    fn lists_static_re_exported_and_literal_dynamic_imports() {
+        let source = r#"import { Canvas } from '@react-three/fiber';
+import * as THREE from "three";
+import './styles.css';
+import type { Props } from './types';
+export { motion } from 'motion/react';
+export * from '../atoms';
+const lazy = () => import('gsap');
+const dynamic = (name: string) => import(name);
+export const A = () => <Canvas />;
+"#;
+
+        let found = imports("src/A.tsx", source).expect("parses");
+
+        assert_eq!(
+            found,
+            [
+                "../atoms",
+                "./styles.css",
+                "./types",
+                "@react-three/fiber",
+                "gsap",
+                "motion/react",
+                "three"
+            ]
+        );
+        assert!(imports("src/B.tsx", "export const B = () => <b>;").is_err());
+        assert_eq!(
+            imports("src/C.ts", "export const c = 1;").expect("no imports"),
+            Vec::<String>::new()
+        );
     }
 }

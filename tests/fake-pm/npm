@@ -1,0 +1,26 @@
+#!/usr/bin/env node
+const [command, name, field, format] = process.argv.slice(2);
+const VERSIONS = {
+  three: '0.187.0',
+  motion: '14.12.0',
+  gsap: '3.15.0',
+  '@gsap/react': '2.1.2',
+  '@react-three/fiber': '9.8.2',
+  '@react-three/drei': '10.7.9',
+};
+if (command !== 'view' || field !== 'time' || format !== '--json' || !VERSIONS[name]) {
+  process.stderr.write(`npm error 404 Not Found - ${name}\n`);
+  process.exit(1);
+}
+const old = new Date(Date.now() - 60 * 86_400_000).toISOString();
+const fresh = new Date(Date.now() - 2 * 86_400_000).toISOString();
+const [major, minor] = VERSIONS[name].split('.');
+process.stdout.write(
+  `${JSON.stringify({
+    created: old,
+    modified: fresh,
+    [VERSIONS[name]]: old,
+    [`${major}.${Number(minor) + 1}.0`]: fresh,
+    [`${major}.${minor}.0-beta.1`]: old,
+  })}\n`,
+);

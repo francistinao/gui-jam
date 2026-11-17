@@ -43,6 +43,16 @@ export type GuijamMessage =
       payload: VariantSelected;
     }
   | {
+      type: 'dependencies.install';
+      id?: string;
+      payload: DependenciesInstall;
+    }
+  | {
+      type: 'dependencies.installed';
+      id?: string;
+      payload: DependenciesInstalled;
+    }
+  | {
       type: 'generate.discard';
       id?: string;
       payload: RunRef;
@@ -51,6 +61,21 @@ export type GuijamMessage =
       type: 'generate.discarded';
       id?: string;
       payload: RunRef;
+    }
+  | {
+      type: 'generate.attach';
+      id?: string;
+      payload: GenerateAttach;
+    }
+  | {
+      type: 'preview.release';
+      id?: string;
+      payload: PreviewRelease;
+    }
+  | {
+      type: 'preview.released';
+      id?: string;
+      payload: PreviewRelease;
     }
   | ErrorMessage;
 export type ErrorCode =
@@ -507,6 +532,19 @@ export interface VariantPreview {
   file: string;
   changes: CodeChange[];
   created: string[];
+  needs?: DependencyNeeds;
+}
+export interface DependencyNeeds {
+  command: string;
+  packages:
+    | [Package]
+    | [Package, Package]
+    | [Package, Package, Package]
+    | [Package, Package, Package, Package];
+}
+export interface Package {
+  name: string;
+  version: string;
 }
 export interface GenerateCancelMessage {
   type: 'generate.cancel';
@@ -537,6 +575,21 @@ export interface VariantSelect {
 export interface VariantSelected {
   changesetId: string;
   update: UpdateResult;
+}
+export interface DependenciesInstall {
+  runId: string;
+  changesetId: string;
+}
+export interface DependenciesInstalled {
+  changesetId: string;
+  installed: Package[];
+  update: UpdateResult;
+}
+export interface GenerateAttach {
+  runId: string;
+}
+export interface PreviewRelease {
+  runId: string;
 }
 export interface ErrorMessage {
   type: 'error';

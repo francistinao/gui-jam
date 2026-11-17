@@ -1,0 +1,31 @@
+#!/usr/bin/env node
+import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+
+const [command, ...rest] = process.argv.slice(2);
+if (process.env.GUIJAM_FAKE_PM_LOG) {
+  appendFileSync(process.env.GUIJAM_FAKE_PM_LOG, `${JSON.stringify({ cwd: process.cwd(), args: process.argv.slice(2) })}\n`);
+}
+if (command !== 'add' || rest[0] !== '--save-exact') {
+  process.stderr.write(`fake pnpm: unexpected ${process.argv.slice(2).join(' ')}\n`);
+  process.exit(1);
+}
+if (existsSync(`${process.env.GUIJAM_FAKE_PM_LOG}.fail`)) {
+  process.stdout.write('Progress: resolved 1, reused 0, downloaded 0, added 0\n');
+  process.stderr.write(`ERR_PNPM_FETCH_404 GET https://registry.npmjs.org/${rest[1]}: Not Found - 404\n`);
+  process.exit(1);
+}
+const manifestPath = join(process.cwd(), 'package.json');
+const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+for (const spec of rest.slice(1)) {
+  const at = spec.lastIndexOf('@');
+  const name = spec.slice(0, at);
+  const version = spec.slice(at + 1);
+  const dir = join(process.cwd(), 'node_modules', name);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, 'package.json'), JSON.stringify({ name, version, type: 'module', main: 'index.js' }));
+  writeFileSync(join(dir, 'index.js'), `export const REVISION = '${version.split('.')[1]}';\n`);
+  manifest.dependencies = { ...manifest.dependencies, [name]: version };
+}
+writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+process.stdout.write('Done\n');

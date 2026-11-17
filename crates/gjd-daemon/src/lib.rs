@@ -6,6 +6,8 @@ pub mod gateway;
 pub mod generate;
 pub mod html_text;
 pub mod index;
+pub mod install;
+pub mod libraries;
 pub mod links;
 pub mod project;
 pub mod r0;

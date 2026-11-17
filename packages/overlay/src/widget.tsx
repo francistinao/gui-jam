@@ -3,6 +3,7 @@ import { App } from './App';
 import { createController, initialState, type WidgetState } from './controller';
 import { createDrawLayer } from './draw-layer';
 import type { Widget, WidgetHost } from './host';
+import { load, save } from './persist';
 import { createSelectLayer } from './select-layer';
 import { createStore } from './store';
 import css from './styles.css?inline';
@@ -82,6 +83,16 @@ export function mount(host: WidgetHost): Widget {
   window.addEventListener('scroll', controller.reanchor, { capture: true, passive: true });
   window.addEventListener('resize', controller.reanchor, { passive: true });
 
+  let saved = { jobs: store.get().jobs, focus: store.get().focus };
+  store.subscribe(() => {
+    const { jobs, focus } = store.get();
+    if (jobs === saved.jobs && focus === saved.focus) return;
+    saved = { jobs, focus };
+    save(jobs, focus);
+  });
+
   createRoot(container).render(<App store={store} controller={controller} />);
+  const restored = load();
+  if (restored) void controller.restore(restored).then(repaint);
   return { setTool };
 }

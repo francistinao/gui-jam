@@ -4,7 +4,9 @@ import {
   errorReply,
   generationRunId,
   replyWindowMs,
+  requestId,
   requestRunId,
+  splitPage,
   terminalLine,
 } from './relay.js';
 
@@ -52,6 +54,7 @@ describe('checkWidgetRequest', () => {
 describe('replyWindowMs', () => {
   it('waits longer for a generation than for edits', () => {
     expect(replyWindowMs('generate.request')).toBe(360_000);
+    expect(replyWindowMs('dependencies.install')).toBe(270_000);
     expect(replyWindowMs('generate.cancel')).toBeUndefined();
     expect(replyWindowMs('finetune.preview')).toBeUndefined();
   });
@@ -125,5 +128,26 @@ describe('generationRunId', () => {
     expect(generationRunId({ type: 'generate.cancel', payload: { runId: 'r1' } })).toBeUndefined();
     expect(generationRunId({ type: 'generate.request', payload: { runId: 7 } })).toBeUndefined();
     expect(generationRunId('generate.request')).toBeUndefined();
+  });
+});
+
+describe('splitPage', () => {
+  it('takes the page id off the request and falls back to the socket', () => {
+    expect(splitPage({ type: 'x', id: 'w1', pageId: 'page-1' }, 'socket-1')).toEqual({
+      pageId: 'page-1',
+      data: { type: 'x', id: 'w1' },
+    });
+    expect(splitPage({ type: 'x' }, 'socket-1')).toEqual({
+      pageId: 'socket-1',
+      data: { type: 'x' },
+    });
+    expect(splitPage({ type: 'x', pageId: 'bad id!' }, 'socket-1')).toEqual({
+      pageId: 'socket-1',
+      data: { type: 'x' },
+    });
+    expect(splitPage({ type: 'x', pageId: 7 }, 'socket-1').pageId).toBe('socket-1');
+    expect(splitPage('text', 'socket-1')).toEqual({ pageId: 'socket-1', data: 'text' });
+    expect(requestId({ id: 'w3' })).toBe('w3');
+    expect(requestId({ id: 3 })).toBeUndefined();
   });
 });

@@ -18,12 +18,15 @@ import {
 import { findDaemonBinary, platformKey } from './daemon-binary.js';
 import { DaemonClient } from './daemon-client.js';
 import { resolveOverlay } from './overlay-resolve.js';
+import { Pages } from './pages.js';
 import {
   checkWidgetRequest,
   errorReply,
   generationRunId,
   replyWindowMs,
+  requestId,
   requestRunId,
+  splitPage,
   terminalLine,
 } from './relay.js';
 import { injectSourceLocations } from './transform-srcloc.js';
@@ -100,22 +103,34 @@ export function guijam(options: GuijamOptions = {}): Plugin<GuijamApi> {
   let root = process.cwd();
   let candidatesDir = '';
   let scriptEntries = new Set<string>();
-  const runPages = new Map<string, PageClient>();
-  const pageRuns = new Map<PageClient, Set<string>>();
+  const pages = new Pages<PageClient>(dropRun, releaseRun);
+  const socketIds = new WeakMap<PageClient, string>();
 
-  function forgetPage(client: PageClient): void {
-    const runs = pageRuns.get(client);
-    pageRuns.delete(client);
-    if (!daemon || !runs) return;
-    for (const runId of runs) {
-      for (const type of ['generate.cancel', 'generate.discard'] as const) {
-        daemon.request({ type, payload: { runId } }).catch((error: unknown) => {
-          devServer?.config.logger.warn(
-            `[guijam] could not drop run ${runId} of a closed page: ${error instanceof Error ? error.message : String(error)}`,
-          );
-        });
-      }
+  function dropRun(runId: string): void {
+    if (!daemon) return;
+    for (const type of ['generate.cancel', 'generate.discard'] as const) {
+      daemon.request({ type, payload: { runId } }).catch((error: unknown) => {
+        devServer?.config.logger.warn(
+          `[guijam] could not drop run ${runId} of a closed page: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      });
     }
+  }
+
+  function releaseRun(runId: string): void {
+    daemon?.request({ type: 'preview.release', payload: { runId } }).catch((error: unknown) => {
+      devServer?.config.logger.warn(
+        `[guijam] could not release the preview of run ${runId}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    });
+  }
+
+  function socketId(client: PageClient): string {
+    const known = socketIds.get(client);
+    if (known) return known;
+    const id = `socket-${randomUUID()}`;
+    socketIds.set(client, id);
+    return id;
   }
 
   function tailwindRootFiles(): string[] {
@@ -135,7 +150,7 @@ export function guijam(options: GuijamOptions = {}): Plugin<GuijamApi> {
           payload: await applyOverlay(message.payload.file, undefined),
         };
       case 'generate.progress':
-        runPages.get(message.payload.runId)?.send('gj:event', message);
+        pages.client(message.payload.runId)?.send('gj:event', message);
         return undefined;
       default:
         return undefined;
@@ -329,23 +344,34 @@ export function guijam(options: GuijamOptions = {}): Plugin<GuijamApi> {
         }, next);
       });
       server.environments.client.hot.on('vite:client:disconnect', (_data, client) => {
-        forgetPage(client);
+        pages.left(client);
       });
-      server.environments.client.hot.on('gj:request', async (data, client) => {
-        const runId = generationRunId(data);
-        if (runId !== undefined) {
-          runPages.set(runId, client);
-          const runs = pageRuns.get(client) ?? new Set<string>();
-          runs.add(runId);
-          pageRuns.set(client, runs);
+      server.environments.client.hot.on('gj:request', async (raw, client) => {
+        const { pageId, data } = splitPage(raw, socketId(client));
+        pages.seen(client, pageId);
+        const attaching = requestRunId(data, 'generate.attach');
+        if (attaching !== undefined) {
+          const kept = await pages.attach(attaching);
+          const id = requestId(data);
+          client.send(
+            'gj:response',
+            kept
+              ? { ...kept, ...(id === undefined ? {} : { id }) }
+              : errorReply(
+                  'UNKNOWN_CHANGESET',
+                  'This drawing stopped while the page was reloading.',
+                  id,
+                  'Generate it again.',
+                ),
+          );
+          return;
         }
         const discarded = requestRunId(data, 'generate.discard');
-        if (discarded !== undefined) pageRuns.get(client)?.delete(discarded);
-        try {
-          client.send('gj:response', await relay(data));
-        } finally {
-          if (runId !== undefined) runPages.delete(runId);
-        }
+        if (discarded !== undefined) pages.discarded(pageId, discarded);
+        const reply = relay(data);
+        const runId = generationRunId(data);
+        if (runId !== undefined) pages.started(pageId, runId, reply);
+        client.send('gj:response', await reply);
       });
       connectDaemon(server);
     },

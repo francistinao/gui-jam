@@ -462,3 +462,24 @@ export function linksIn(prompt: string): PromptLinks {
   }
   return { links: links.slice(0, MAX_LINKS), skipped: Math.max(0, links.length - MAX_LINKS) };
 }
+
+export interface Needs {
+  command: string;
+  packages: readonly { name: string; version: string }[];
+}
+
+export function withoutInstalled<T extends { needs?: Needs }>(
+  variant: T,
+  installed: ReadonlySet<string>,
+): T {
+  if (!variant.needs) return variant;
+  const { needs, ...rest } = variant;
+  const packages = needs.packages.filter((entry) => !installed.has(entry.name));
+  return (packages.length === 0 ? rest : { ...rest, needs: { ...needs, packages } }) as T;
+}
+
+export function needsLine(needs: Needs): string {
+  const names = needs.packages.map((entry) => `${entry.name} ${entry.version}`).join(', ');
+  const pronoun = needs.packages.length === 1 ? 'it' : 'them';
+  return `Needs ${names}. It isn't previewed until you install ${pronoun}.`;
+}

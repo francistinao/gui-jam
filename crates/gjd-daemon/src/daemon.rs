@@ -8,14 +8,15 @@ use std::time::{Duration, Instant};
 use gjd_core::codemod::{CodemodError, finetune_op};
 use gjd_core::content_hash;
 use gjd_core::contracts::{
-    CodeChange, CommitDone, EditOp, ElementStyle, ErrorCode, ErrorPayload, FinetunePreview,
-    FinetunePreviewed, GenerateDone, GenerateDoneDroppedItem, GenerateDoneNotesItem,
-    GenerateRequest, GuijamMessage, HelloOk, OverlayClear, OverlaySet, Route, RouteTier, RunRef,
-    SourceRef, UndoDone, UpdateResult, UpdateResultStatus, UpdateResultUpdateId, Variant,
-    VariantAssetsItemFormat, VariantPreview, VariantSelect, VariantSelected, VariantSet,
+    CodeChange, CommitDone, DependenciesInstall, DependenciesInstalled, DependencyNeeds, EditOp,
+    ElementStyle, ErrorCode, ErrorPayload, FinetunePreview, FinetunePreviewed, GenerateDone,
+    GenerateDoneDroppedItem, GenerateDoneNotesItem, GenerateRequest, GuijamMessage, HelloOk,
+    OverlayClear, OverlaySet, Package, Route, RouteTier, RunRef, SourceRef, UndoDone, UpdateResult,
+    UpdateResultStatus, UpdateResultUpdateId, Variant, VariantAssetsItemFormat, VariantPreview,
+    VariantSelect, VariantSelected, VariantSet,
 };
 use gjd_core::journal::{CommitError, FileChange, Journal};
-use gjd_core::jsx::{JsxError, check_syntax};
+use gjd_core::jsx::{JsxError, check_syntax, imports};
 use gjd_core::patch::{self, PatchError};
 use gjd_core::policy::{PolicyError, ProjectRoot};
 use gjd_core::style::inspect;
@@ -32,8 +33,10 @@ use crate::config;
 use crate::diff::code_changes;
 use crate::generate::{self, Progress, Step, TierConfig};
 use crate::index::ProjectIndex;
+use crate::install;
+use crate::libraries::{self, Need};
 use crate::links::{self, Found};
-use crate::project::{self, Project};
+use crate::project::{self, PackageManager, Project};
 use crate::r0;
 use crate::references;
 use crate::route::{self, Tier};
@@ -42,6 +45,10 @@ use crate::screenshot::{self, Browser};
 const UPDATE_TIMEOUT: Duration = Duration::from_secs(5);
 const AUTH_CACHE: Duration = Duration::from_mins(5);
 const DEFAULT_PROVIDER: ProviderId = ProviderId::ClaudeCode;
+const VERSION_CACHE: Duration = Duration::from_hours(1);
+const MAX_NEEDS: usize = 4;
+
+type VersionCache = HashMap<(String, Option<u64>), (String, Instant)>;
 
 fn locked<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
@@ -522,6 +529,7 @@ struct Changeset {
     summary: String,
     origin: &'static str,
     created: Vec<AssetFile>,
+    needs: Vec<Need>,
 }
 
 struct Run {
@@ -564,18 +572,105 @@ struct Held {
     style: String,
     rationale: String,
     assets: Vec<AssetFile>,
+    needs: Vec<Need>,
 }
 
 impl Held {
-    fn from_variant(variant: Variant, assets: Vec<AssetFile>) -> Self {
+    fn from_variant(variant: Variant, assets: Vec<AssetFile>, needs: Vec<Need>) -> Self {
         Self {
             label: variant.label.into(),
             system: variant.system,
             style: variant.style.into(),
             rationale: variant.rationale.into(),
             assets,
+            needs,
         }
     }
+}
+
+fn libraries_needed(
+    file: &str,
+    current: &str,
+    content: &str,
+    created: &[AssetFile],
+    project: &Project,
+    root: &Path,
+) -> Result<Vec<String>, String> {
+    let before = imports(file, current).unwrap_or_default();
+    let known: BTreeSet<&str> = before
+        .iter()
+        .filter(|specifier| !specifier.starts_with('.'))
+        .filter_map(|specifier| specifier.split('/').next())
+        .collect();
+    let allowed = libraries::allowed(project);
+    let sources = std::iter::once((file, content)).chain(
+        created
+            .iter()
+            .filter(|asset| {
+                Path::new(&asset.path).extension().is_some_and(|extension| {
+                    matches!(extension.to_str(), Some("tsx" | "jsx" | "ts" | "js"))
+                })
+            })
+            .map(|asset| (asset.path.as_str(), asset.preview.as_str())),
+    );
+    let mut needed: Vec<String> = Vec::new();
+    for (path, source) in sources {
+        let Ok(specifiers) = imports(path, source) else {
+            continue;
+        };
+        for specifier in specifiers
+            .iter()
+            .filter(|specifier| !before.contains(specifier))
+        {
+            let Some(package) = libraries::package_of(specifier) else {
+                continue;
+            };
+            let installed = project.dependencies.contains_key(package)
+                || root
+                    .join("node_modules")
+                    .join(package)
+                    .join("package.json")
+                    .is_file();
+            if installed
+                || specifier
+                    .split('/')
+                    .next()
+                    .is_some_and(|first| known.contains(first))
+            {
+                continue;
+            }
+            if !allowed.iter().any(|library| library.name == package) {
+                return Err(format!("It imports {package}, which isn't installed."));
+            }
+            if !needed.iter().any(|name| name == package) {
+                needed.push(package.to_owned());
+            }
+        }
+    }
+    if needed.len() > MAX_NEEDS {
+        return Err(format!(
+            "It needs {} libraries; {MAX_NEEDS} at most.",
+            needed.len()
+        ));
+    }
+    Ok(needed)
+}
+
+fn package(need: &Need) -> Option<Package> {
+    Some(Package {
+        name: need.name.clone().try_into().ok()?,
+        version: need.version.clone().try_into().ok()?,
+    })
+}
+
+fn dependency_needs(needs: &[Need], manager: PackageManager) -> Option<DependencyNeeds> {
+    if needs.is_empty() {
+        return None;
+    }
+    Some(DependencyNeeds {
+        command: install::command_line(manager, needs).try_into().ok()?,
+        packages: needs.iter().filter_map(package).collect(),
+    })
 }
 
 pub struct Daemon {
@@ -591,6 +686,7 @@ pub struct Daemon {
     variant_runs: Mutex<HashMap<String, VariantRun>>,
     preview: tokio::sync::Mutex<Option<String>>,
     provider: tokio::sync::Mutex<Option<(ProviderId, Discovery, Instant)>>,
+    versions: Mutex<VersionCache>,
     next_id: AtomicU64,
     connections: AtomicUsize,
     last_disconnect: Mutex<Instant>,
@@ -612,6 +708,7 @@ impl Daemon {
             variant_runs: Mutex::default(),
             preview: tokio::sync::Mutex::default(),
             provider: tokio::sync::Mutex::default(),
+            versions: Mutex::default(),
             next_id: AtomicU64::new(1),
             connections: AtomicUsize::new(0),
             last_disconnect: Mutex::new(Instant::now()),
@@ -726,21 +823,10 @@ impl Daemon {
                     }),
             ),
             GuijamMessage::GenerateCancel { id, payload } => self.cancel_run(id, payload),
-            GuijamMessage::VariantSelect { id, payload } => reply(
-                id,
-                self.select_variant(payload)
-                    .await
-                    .map(|selected| GuijamMessage::VariantSelected {
-                        id: None,
-                        payload: selected,
-                    }),
-            ),
-            GuijamMessage::GenerateDiscard { id, payload } => reply(
-                id,
-                self.discard_run(&payload.run_id)
-                    .await
-                    .map(|()| GuijamMessage::GenerateDiscarded { id: None, payload }),
-            ),
+            message @ (GuijamMessage::VariantSelect { .. }
+            | GuijamMessage::DependenciesInstall { .. }
+            | GuijamMessage::PreviewRelease { .. }
+            | GuijamMessage::GenerateDiscard { .. }) => self.handle_run_request(message).await,
             GuijamMessage::PluginHello { id, .. }
             | GuijamMessage::TailwindRoots { id, .. }
             | GuijamMessage::UpdateResult { id, .. }
@@ -748,6 +834,9 @@ impl Daemon {
             | GuijamMessage::GenerateDone { id, .. }
             | GuijamMessage::GenerateProgress { id, .. }
             | GuijamMessage::VariantSelected { id, .. }
+            | GuijamMessage::DependenciesInstalled { id, .. }
+            | GuijamMessage::GenerateAttach { id, .. }
+            | GuijamMessage::PreviewReleased { id, .. }
             | GuijamMessage::GenerateDiscarded { id, .. }
             | GuijamMessage::GenerateCancelled { id, .. }
             | GuijamMessage::OverlaySet { id, .. }
@@ -762,6 +851,40 @@ impl Daemon {
                 "the daemon does not accept this message",
             )
             .into_message(id),
+        }
+    }
+
+    async fn handle_run_request(&self, message: GuijamMessage) -> GuijamMessage {
+        match message {
+            GuijamMessage::VariantSelect { id, payload } => reply(
+                id,
+                self.select_variant(payload)
+                    .await
+                    .map(|selected| GuijamMessage::VariantSelected {
+                        id: None,
+                        payload: selected,
+                    }),
+            ),
+            GuijamMessage::DependenciesInstall { id, payload } => {
+                reply(id, self.install_dependencies(payload).await.map(installed))
+            }
+            GuijamMessage::PreviewRelease { id, payload } => reply(
+                id,
+                self.release_preview(&payload.run_id)
+                    .await
+                    .map(|()| GuijamMessage::PreviewReleased { id: None, payload }),
+            ),
+            GuijamMessage::GenerateDiscard { id, payload } => reply(
+                id,
+                self.discard_run(&payload.run_id)
+                    .await
+                    .map(|()| GuijamMessage::GenerateDiscarded { id: None, payload }),
+            ),
+            other => Failure::new(
+                ErrorCode::InvalidRequest,
+                "the daemon does not accept this message",
+            )
+            .into_message(message_id(&other)),
         }
     }
 
@@ -910,7 +1033,7 @@ impl Daemon {
         if only_if_free && holder.is_some() {
             return Ok(None);
         }
-        let (file, version, previews) = {
+        let (file, version, previews, waiting) = {
             let runs = locked(&self.variant_runs);
             let run = runs
                 .get(run_id)
@@ -925,15 +1048,21 @@ impl Daemon {
                 .get(&run.file)
                 .cloned()
                 .ok_or_else(|| unknown_changeset(changeset_id))?;
+            let waiting = !changeset.needs.is_empty();
             let previews: Vec<(String, String)> = changeset
                 .created
                 .iter()
+                .filter(|_| !waiting)
                 .map(|asset| (asset.path.clone(), asset.preview.clone()))
                 .collect();
-            (run.file.clone(), version, previews)
+            (run.file.clone(), version, previews, waiting)
         };
         let disk = self.read_project_file(&file).await?;
-        let content = materialize(&file, &version, &disk)?;
+        let content = if waiting {
+            disk.clone()
+        } else {
+            materialize(&file, &version, &disk)?
+        };
         let cleared: BTreeSet<String> = {
             let mut runs = locked(&self.variant_runs);
             let mut cleared = BTreeSet::new();
@@ -972,6 +1101,24 @@ impl Daemon {
             changeset_id: request.changeset_id,
             update,
         })
+    }
+
+    async fn release_preview(&self, run_id: &str) -> Result<(), Failure> {
+        let mut slot = self.preview.lock().await;
+        if slot.as_deref() != Some(run_id) {
+            return Ok(());
+        }
+        *slot = None;
+        let shown = locked(&self.variant_runs)
+            .get_mut(run_id)
+            .map(|run| (run.file.clone(), std::mem::take(&mut run.shown)));
+        if let Some((file, shown)) = shown {
+            self.show(&file, None).await?;
+            for path in &shown {
+                self.show(path, None).await?;
+            }
+        }
+        Ok(())
     }
 
     async fn discard_run(&self, run_id: &str) -> Result<(), Failure> {
@@ -1096,16 +1243,22 @@ impl Daemon {
             style: "Exact".to_owned(),
             rationale: "Made without a model call.".to_owned(),
             assets: Vec::new(),
+            needs: Vec::new(),
         };
         let (variants, first) = self.hold_variants(
             job.request,
             job.source,
             vec![(held, content, vec![op.clone()])],
             "R0",
+            job.project.package_manager,
         );
-        let update = self
-            .preview_run(&job.request.run_id, &first, job.cancel)
-            .await?;
+        let update = match first {
+            Some(first) => {
+                self.preview_run(&job.request.run_id, &first, job.cancel)
+                    .await?
+            }
+            None => None,
+        };
         Ok(GenerateDone {
             run_id: job.request.run_id.clone(),
             route: Route {
@@ -1209,9 +1362,13 @@ impl Daemon {
         let (variants, dropped, first) = self.check_and_hold(job, proposed, &route_label).await?;
         progress.start(Step::Preview);
         self.report(&progress);
-        let update = self
-            .preview_run(&job.request.run_id, &first, job.cancel)
-            .await?;
+        let update = match first {
+            Some(first) => {
+                self.preview_run(&job.request.run_id, &first, job.cancel)
+                    .await?
+            }
+            None => None,
+        };
         Ok(GenerateDone {
             run_id: job.request.run_id.clone(),
             route,
@@ -1294,7 +1451,14 @@ impl Daemon {
         job: &Job<'_>,
         proposed: Vec<Variant>,
         route_label: &str,
-    ) -> Result<(Vec<VariantPreview>, Vec<GenerateDoneDroppedItem>, String), Failure> {
+    ) -> Result<
+        (
+            Vec<VariantPreview>,
+            Vec<GenerateDoneDroppedItem>,
+            Option<String>,
+        ),
+        Failure,
+    > {
         let file = job.request.file.as_str();
         let existing = self.index.files().await;
         let assets_dir = assets::assets_dir(&existing);
@@ -1310,15 +1474,161 @@ impl Daemon {
         if job.cancel.is_cancelled() {
             return Err(ProviderError::Cancelled.into());
         }
-        let held = valid
-            .into_iter()
-            .map(|(variant, content, files)| {
-                let ops = edits_of(&variant.ops);
-                (Held::from_variant(variant, files), content, ops)
-            })
+        let mut dropped = dropped;
+        let mut wanting = Vec::new();
+        for (variant, content, files) in valid {
+            match libraries_needed(
+                file,
+                job.source,
+                &content,
+                &files,
+                job.project,
+                self.project.path(),
+            ) {
+                Ok(names) => wanting.push((variant, content, files, names)),
+                Err(reason) => dropped.push(GenerateDoneDroppedItem {
+                    label: Some(String::from(variant.label.clone())),
+                    reason,
+                }),
+            }
+        }
+        let names: BTreeSet<String> = wanting
+            .iter()
+            .flat_map(|(_, _, _, names)| names.iter().cloned())
             .collect();
-        let (variants, first) = self.hold_variants(job.request, job.source, held, route_label);
+        let versions = self.versions_for(&names, job.project).await;
+        let mut held: Vec<(Held, String, Vec<EditOp>)> = Vec::new();
+        for (variant, content, files, names) in wanting {
+            let found: Result<Vec<Need>, String> = names
+                .iter()
+                .map(|name| match versions.get(name) {
+                    Some(Ok(version)) => Ok(Need {
+                        name: name.clone(),
+                        version: version.clone(),
+                    }),
+                    Some(Err(reason)) => Err(format!("Couldn't look up {name} on npm: {reason}.")),
+                    None => Err(format!("Couldn't look up {name} on npm.")),
+                })
+                .collect();
+            match found {
+                Ok(needs) => {
+                    let ops = edits_of(&variant.ops);
+                    held.push((Held::from_variant(variant, files, needs), content, ops));
+                }
+                Err(reason) => dropped.push(GenerateDoneDroppedItem {
+                    label: Some(String::from(variant.label.clone())),
+                    reason,
+                }),
+            }
+        }
+        if held.is_empty() {
+            let reasons: Vec<&str> = dropped.iter().map(|item| item.reason.as_str()).collect();
+            return Err(
+                Failure::new(ErrorCode::ProviderInvalidOutput, reasons.join(" "))
+                    .with_action("Retry, or simplify the prompt."),
+            );
+        }
+        held.sort_by_key(|(variant, _, _)| !variant.needs.is_empty());
+        let (variants, first) = self.hold_variants(
+            job.request,
+            job.source,
+            held,
+            route_label,
+            job.project.package_manager,
+        );
         Ok((variants, dropped, first))
+    }
+
+    async fn versions_for(
+        &self,
+        names: &BTreeSet<String>,
+        project: &Project,
+    ) -> BTreeMap<String, Result<String, String>> {
+        let mut found = BTreeMap::new();
+        if names.is_empty() {
+            return found;
+        }
+        let Ok(npm) = which::which("npm") else {
+            return names
+                .iter()
+                .map(|name| (name.clone(), Err("npm isn't installed".to_owned())))
+                .collect();
+        };
+        let today = libraries::today();
+        let lookups = names.iter().map(|name| {
+            let npm = npm.clone();
+            let major = libraries::major_for(name, project).flatten();
+            async move {
+                let cached = locked(&self.versions)
+                    .get(&(name.clone(), major))
+                    .filter(|(_, at)| at.elapsed() < VERSION_CACHE)
+                    .map(|(version, _)| version.clone());
+                let version = match cached {
+                    Some(version) => Ok(version),
+                    None => install::lookup(&npm, name, major, today, install::LOOKUP_TIMEOUT)
+                        .await
+                        .map_err(|error| error.to_string()),
+                };
+                if let Ok(version) = &version {
+                    locked(&self.versions)
+                        .insert((name.clone(), major), (version.clone(), Instant::now()));
+                }
+                (name.clone(), version)
+            }
+        });
+        found.extend(futures_util::future::join_all(lookups).await);
+        found
+    }
+
+    async fn install_dependencies(
+        &self,
+        request: DependenciesInstall,
+    ) -> Result<DependenciesInstalled, Failure> {
+        let needs = locked(&self.changesets)
+            .get(&request.changeset_id)
+            .map(|changeset| changeset.needs.clone())
+            .ok_or_else(|| unknown_changeset(&request.changeset_id))?;
+        if !needs.is_empty() {
+            let files = self.index.files().await;
+            let manager = project::detect(self.project.path(), &files).package_manager;
+            let command = install::command_line(manager, &needs);
+            let binary = which::which(manager.command()).map_err(|_| {
+                Failure::new(
+                    ErrorCode::Internal,
+                    format!(
+                        "{} isn't installed, so GUIJam can't run {command}.",
+                        manager.command()
+                    ),
+                )
+            })?;
+            install::install(
+                &binary,
+                manager,
+                &needs,
+                self.project.path(),
+                install::INSTALL_TIMEOUT,
+            )
+            .await
+            .map_err(|error| {
+                Failure::new(ErrorCode::Internal, format!("{command} failed: {error}"))
+                    .with_action("Install it yourself, then pick the variant again.")
+            })?;
+            let installed: BTreeSet<&str> = needs.iter().map(|need| need.name.as_str()).collect();
+            for changeset in locked(&self.changesets).values_mut() {
+                changeset
+                    .needs
+                    .retain(|need| !installed.contains(need.name.as_str()));
+            }
+        }
+        let update = self
+            .show_variant(&request.run_id, &request.changeset_id, false)
+            .await?
+            .ok_or_else(|| unknown_changeset(&request.changeset_id))?;
+        Ok(DependenciesInstalled {
+            changeset_id: request.changeset_id,
+            installed: needs.iter().filter_map(package).collect(),
+            update,
+        })
     }
 
     async fn references(&self, job: &Job<'_>) -> String {
@@ -1353,7 +1663,8 @@ impl Daemon {
         );
         let folder = assets::prompt_note(&job.request.file, &assets::assets_dir(&files));
         let new_ui = project::new_ui_section(job.project, &files, &job.request.file);
-        format!("{sketch}{inspiration}{found}{folder}{new_ui}")
+        let libraries = libraries::prompt_section(job.project);
+        format!("{sketch}{inspiration}{found}{folder}{new_ui}{libraries}")
     }
 
     async fn prepare(&self, job: &Job<'_>, tier: &TierConfig) -> Result<Prepared, Failure> {
@@ -1447,7 +1758,8 @@ impl Daemon {
         current: &str,
         held: Vec<(Held, String, Vec<EditOp>)>,
         route_label: &str,
-    ) -> (Vec<VariantPreview>, String) {
+        manager: PackageManager,
+    ) -> (Vec<VariantPreview>, Option<String>) {
         let file = &request.file;
         let variants: Vec<VariantPreview> = held
             .into_iter()
@@ -1483,7 +1795,11 @@ impl Daemon {
                     "ai",
                     variant.assets,
                 );
+                if let Some(changeset) = locked(&self.changesets).get_mut(&changeset_id) {
+                    changeset.needs.clone_from(&variant.needs);
+                }
                 VariantPreview {
+                    needs: dependency_needs(&variant.needs, manager),
                     changes,
                     changeset_id,
                     created,
@@ -1508,7 +1824,8 @@ impl Daemon {
         );
         let first = variants
             .first()
-            .map_or_else(String::new, |variant| variant.changeset_id.clone());
+            .filter(|variant| variant.needs.is_none())
+            .map(|variant| variant.changeset_id.clone());
         (variants, first)
     }
 
@@ -1589,6 +1906,7 @@ impl Daemon {
                 summary,
                 origin,
                 created,
+                needs: Vec::new(),
             },
         );
         id
@@ -1787,11 +2105,29 @@ fn with_id(mut message: GuijamMessage, reply_to: Option<String>) -> GuijamMessag
         | GuijamMessage::GenerateProgress { id, .. }
         | GuijamMessage::VariantSelect { id, .. }
         | GuijamMessage::VariantSelected { id, .. }
+        | GuijamMessage::DependenciesInstall { id, .. }
+        | GuijamMessage::DependenciesInstalled { id, .. }
         | GuijamMessage::GenerateDiscard { id, .. }
         | GuijamMessage::GenerateDiscarded { id, .. }
+        | GuijamMessage::GenerateAttach { id, .. }
+        | GuijamMessage::PreviewRelease { id, .. }
+        | GuijamMessage::PreviewReleased { id, .. }
         | GuijamMessage::Error { id, .. } => *id = reply_to,
     }
     message
+}
+
+fn message_id(message: &GuijamMessage) -> Option<String> {
+    serde_json::to_value(message).ok().and_then(|value| {
+        value
+            .get("id")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned)
+    })
+}
+
+fn installed(payload: DependenciesInstalled) -> GuijamMessage {
+    GuijamMessage::DependenciesInstalled { id: None, payload }
 }
 
 fn no_longer_fits(path: &str) -> Failure {
@@ -2044,6 +2380,63 @@ mod tests {
                 failure.message
             );
         }
+    }
+
+    #[test]
+    fn new_imports_become_needs_installed_ones_pass_and_unknown_ones_drop() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::create_dir_all(dir.path().join("node_modules/gsap")).expect("gsap dir");
+        std::fs::write(dir.path().join("node_modules/gsap/package.json"), "{}").expect("gsap");
+        let mut project = react();
+        project.dependencies.extend([
+            ("react".to_owned(), "19.3.1".to_owned()),
+            ("motion".to_owned(), "14.0.0".to_owned()),
+        ]);
+        let current = "import { Card } from '@components/Card';\nimport { useState } from 'react';\nexport const B = () => <b />;\n";
+        let with = |imports: &str| format!("{imports}\n{current}");
+        let organism = crate::assets::AssetFile {
+            path: "src/components/organisms/Scene.tsx".to_owned(),
+            content: Vec::new(),
+            preview: "import { Canvas } from '@react-three/fiber';\nexport function Scene() { return <Canvas />; }\n".to_owned(),
+        };
+        let needed = |content: &str, created: &[crate::assets::AssetFile]| {
+            super::libraries_needed(FILE, current, content, created, &project, dir.path())
+        };
+
+        assert_eq!(needed(current, &[]), Ok(Vec::new()));
+        assert_eq!(
+            needed(
+                &with(
+                    "import * as THREE from 'three';\nimport 'three/examples/jsm/controls/OrbitControls.js';"
+                ),
+                &[]
+            ),
+            Ok(vec!["three".to_owned()])
+        );
+        assert_eq!(
+            needed(
+                &with("import { motion } from 'motion/react';\nimport gsap from 'gsap';"),
+                &[]
+            ),
+            Ok(Vec::new())
+        );
+        assert_eq!(
+            needed(&with("import { Button } from '@components/Button';"), &[]),
+            Ok(Vec::new())
+        );
+        assert_eq!(
+            needed(
+                &with("import { Scene } from './organisms/Scene';"),
+                std::slice::from_ref(&organism)
+            ),
+            Ok(vec!["@react-three/fiber".to_owned()])
+        );
+        assert_eq!(
+            needed(&with("import debounce from 'lodash';"), &[]),
+            Err("It imports lodash, which isn't installed.".to_owned())
+        );
+        let five = "import 'three';\nimport '@react-three/fiber';\nimport '@react-three/drei';\nimport '@gsap/react';\nimport 'three/addons';";
+        assert_eq!(needed(&with(five), &[]).map(|names| names.len()), Ok(4));
     }
 
     #[test]
