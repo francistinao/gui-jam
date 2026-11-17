@@ -57,6 +57,7 @@ log({
   images: images.map((image) => image.source.media_type),
   imageSizes: images.map(sizeOf),
   inspiration: /<inspiration images="([^"]+)">/.exec(text)?.[1] ?? null,
+  newUi: /<new-ui components="([^"]+)"/.exec(text)?.[1] ?? null,
   links,
   assets: [...text.matchAll(/ · asset (\S+)/g)].map((match) => match[1]),
 });
@@ -116,80 +117,134 @@ if (/slow/i.test(request)) {
     missing: [],
     ops: [{ kind: 'replace_snippet', file, base_hash: baseHash, find, replace }],
   });
+  const create = (path, content) => ({ kind: 'create_file', file: path, content });
+  const edit = (find, replace) => ({
+    kind: 'replace_snippet',
+    file,
+    base_hash: baseHash,
+    find,
+    replace,
+  });
+  const pricing = {
+    variants: [
+      {
+        ...variant('Pricing section', 'Split', 'Atoms, molecules and an organism.', '', ''),
+        ops: [
+          edit(
+            'export function OrderButton() {',
+            "import { PricingSection } from './organisms/PricingSection';\n\nexport function OrderButton() {",
+          ),
+          edit('  return (\n    <button', '  return (\n    <>\n    <button'),
+          edit('    </button>\n  );', '    </button>\n    <PricingSection />\n    </>\n  );'),
+          create(
+            'src/components/atoms/Price.tsx',
+            'interface PriceProps {\n  amount: string;\n}\n\nexport function Price({ amount }: PriceProps) {\n  return <span className="text-2xl font-semibold">{amount}</span>;\n}\n',
+          ),
+          create(
+            'src/components/molecules/PlanCard.tsx',
+            'import { Price } from \'../atoms/Price\';\n\ninterface PlanCardProps {\n  name: string;\n  amount: string;\n}\n\nexport function PlanCard({ name, amount }: PlanCardProps) {\n  return (\n    <article className="rounded-card bg-white p-4 shadow">\n      <h3>{name}</h3>\n      <Price amount={amount} />\n    </article>\n  );\n}\n',
+          ),
+          create(
+            'src/components/organisms/PricingSection.tsx',
+            'import { PlanCard } from \'../molecules/PlanCard\';\n\nexport function PricingSection() {\n  return (\n    <section aria-label="Pricing" className="flex gap-4">\n      <PlanCard name="Starter" amount="$9" />\n      <PlanCard name="Pro" amount="$19" />\n    </section>\n  );\n}\n',
+          ),
+        ],
+      },
+      {
+        ...variant('Rule breaker', 'Page', 'Puts the section in a page.', '', ''),
+        ops: [
+          edit('bg-brand', 'bg-sea'),
+          create(
+            'src/pages/Pricing.tsx',
+            'export function Pricing() {\n  return <section>Plans</section>;\n}\n',
+          ),
+        ],
+      },
+      variant(
+        'Inline price',
+        'Inline',
+        'Adds the price to the label.',
+        'Order now',
+        'Order now · from $9',
+      ),
+    ],
+  };
   print({
     type: 'result',
     subtype: 'success',
     is_error: false,
     total_cost_usd: 0,
-    structured_output: sketched
-      ? {
-          variants: [
-            {
-              ...variant(
-                cardText,
-                'Card',
-                `A card with a ${icon} icon, built from the sketch.`,
-                '<OrderButton />',
-                sketchedCard,
-              ),
-              ops: [
-                {
-                  kind: 'replace_snippet',
-                  file,
-                  base_hash: baseHash,
-                  find: "import { Counter } from './components/Counter';",
-                  replace: `import ${icon}Icon from './assets/icons/${icon}-icon.svg';\nimport { Counter } from './components/Counter';`,
-                },
-                {
-                  kind: 'replace_snippet',
-                  file,
-                  base_hash: baseHash,
-                  find: '<OrderButton />',
-                  replace: sketchedCard,
-                },
-              ],
-              assets: [
-                {
-                  name: `${icon}-icon`,
-                  format: 'svg',
-                  svg: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 9h12v5a5 5 0 0 1-5 5H9a5 5 0 0 1-5-5z" fill="#3b2418"/></svg>',
-                },
-              ],
-            },
-          ],
-        }
-      : headerImage
+    structured_output: /pricing/i.test(request)
+      ? pricing
+      : sketched
         ? {
             variants: [
-              variant(
-                'Header image',
-                'Icon',
-                'Adds the header image before the label.',
-                'Order now',
-                `<img src="${headerImage.replace(/^public/, '')}" alt="" className="size-4" />Order now`,
-              ),
+              {
+                ...variant(
+                  cardText,
+                  'Card',
+                  `A card with a ${icon} icon, built from the sketch.`,
+                  '<OrderButton />',
+                  sketchedCard,
+                ),
+                ops: [
+                  {
+                    kind: 'replace_snippet',
+                    file,
+                    base_hash: baseHash,
+                    find: "import { Counter } from './components/Counter';",
+                    replace: `import ${icon}Icon from './assets/icons/${icon}-icon.svg';\nimport { Counter } from './components/Counter';`,
+                  },
+                  {
+                    kind: 'replace_snippet',
+                    file,
+                    base_hash: baseHash,
+                    find: '<OrderButton />',
+                    replace: sketchedCard,
+                  },
+                ],
+                assets: [
+                  {
+                    name: `${icon}-icon`,
+                    format: 'svg',
+                    svg: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 9h12v5a5 5 0 0 1-5 5H9a5 5 0 0 1-5-5z" fill="#3b2418"/></svg>',
+                  },
+                ],
+              },
             ],
           }
-        : {
-            variants: [
-              variant(
-                'Blue button',
-                'Solid',
-                'Swapped the brand fill for blue.',
-                'bg-brand',
-                'bg-[#2563EB]',
-              ),
-              /invalid/i.test(request)
-                ? variant('Deep blue', 'Deep', 'A darker blue.', 'bg-nowhere', 'bg-[#1D4ED8]')
-                : variant('Deep blue', 'Deep', 'A darker blue.', 'bg-brand', 'bg-[#1D4ED8]'),
-              variant(
-                'Outline',
-                'Outline',
-                'A white button with a blue border.',
-                'bg-brand',
-                'border-2 border-[#2563EB] bg-white',
-              ),
-            ],
-          },
+        : headerImage
+          ? {
+              variants: [
+                variant(
+                  'Header image',
+                  'Icon',
+                  'Adds the header image before the label.',
+                  'Order now',
+                  `<img src="${headerImage.replace(/^public/, '')}" alt="" className="size-4" />Order now`,
+                ),
+              ],
+            }
+          : {
+              variants: [
+                variant(
+                  'Blue button',
+                  'Solid',
+                  'Swapped the brand fill for blue.',
+                  'bg-brand',
+                  'bg-[#2563EB]',
+                ),
+                /invalid/i.test(request)
+                  ? variant('Deep blue', 'Deep', 'A darker blue.', 'bg-nowhere', 'bg-[#1D4ED8]')
+                  : variant('Deep blue', 'Deep', 'A darker blue.', 'bg-brand', 'bg-[#1D4ED8]'),
+                variant(
+                  'Outline',
+                  'Outline',
+                  'A white button with a blue border.',
+                  'bg-brand',
+                  'border-2 border-[#2563EB] bg-white',
+                ),
+              ],
+            },
   });
 }

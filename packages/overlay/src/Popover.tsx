@@ -102,6 +102,7 @@ export function CodeChanges({ changes }: { changes: readonly CodeChange[] }) {
   if (changes.length === 0) {
     return <p className="typography-body-medium py-3 text-grey-500">No changes yet.</p>;
   }
+  const multiFile = new Set(changes.map((change) => change.file)).size > 1;
   return (
     <section
       aria-label="Code changes"
@@ -112,8 +113,17 @@ export function CodeChanges({ changes }: { changes: readonly CodeChange[] }) {
           key={`${change.file}:${change.line}`}
           className="typography-body-small rounded-md bg-grey-100 p-2 font-mono break-all whitespace-pre-wrap"
         >
-          <span className="block text-red-600">{numbered(change.line, '−', change.before)}</span>
-          <span className="block text-green-600">{numbered(change.line, '+', change.after)}</span>
+          {multiFile ? (
+            <span data-change-file="" className="block text-grey-500">
+              {change.file}
+            </span>
+          ) : null}
+          {change.before.length > 0 ? (
+            <span className="block text-red-600">{numbered(change.line, '−', change.before)}</span>
+          ) : null}
+          {change.after.length > 0 ? (
+            <span className="block text-green-600">{numbered(change.line, '+', change.after)}</span>
+          ) : null}
         </pre>
       ))}
     </section>

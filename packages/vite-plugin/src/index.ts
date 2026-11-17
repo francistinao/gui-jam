@@ -17,6 +17,7 @@ import {
 } from 'vite';
 import { findDaemonBinary, platformKey } from './daemon-binary.js';
 import { DaemonClient } from './daemon-client.js';
+import { resolveOverlay } from './overlay-resolve.js';
 import {
   checkWidgetRequest,
   errorReply,
@@ -351,17 +352,11 @@ export function guijam(options: GuijamOptions = {}): Plugin<GuijamApi> {
 
     resolveId(source, importer) {
       if (source === CLIENT_ID) return CLIENT_ENTRY;
-      const [path = '', query] = source.split('?', 2);
-      if (overlays.has(normalizePath(path)) && !existsSync(path)) return source;
-      const base = path.startsWith('/')
-        ? root
-        : importer && dirname(importer.split('?', 1)[0] ?? '');
-      if (!base || !(path.startsWith('/') || path.startsWith('./') || path.startsWith('../'))) {
-        return null;
-      }
-      const id = normalizePath(resolve(base, path.startsWith('/') ? `.${path}` : path));
-      if (!overlays.has(id) || existsSync(id)) return null;
-      return query === undefined ? id : `${id}?${query}`;
+      return resolveOverlay(source, importer, {
+        root,
+        has: (id) => overlays.has(id),
+        onDisk: (id) => existsSync(id),
+      });
     },
 
     load(id) {

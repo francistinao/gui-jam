@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::num::NonZeroU64;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
@@ -15,7 +15,7 @@ use gjd_core::contracts::{
     VariantAssetsItemFormat, VariantPreview, VariantSelect, VariantSelected, VariantSet,
 };
 use gjd_core::journal::{CommitError, FileChange, Journal};
-use gjd_core::jsx::JsxError;
+use gjd_core::jsx::{JsxError, check_syntax};
 use gjd_core::patch::{self, PatchError};
 use gjd_core::policy::{PolicyError, ProjectRoot};
 use gjd_core::style::inspect;
@@ -33,6 +33,7 @@ use crate::diff::code_changes;
 use crate::generate::{self, Progress, Step, TierConfig};
 use crate::index::ProjectIndex;
 use crate::links::{self, Found};
+use crate::project::{self, Project};
 use crate::r0;
 use crate::references;
 use crate::route::{self, Tier};
@@ -324,23 +325,94 @@ fn assets_for(
     Ok(files)
 }
 
+struct Checks<'a> {
+    assets_dir: &'a str,
+    existing: &'a [String],
+    taken: &'a [String],
+    project: &'a Project,
+    root: &'a Path,
+}
+
+fn edits_of(ops: &[EditOp]) -> Vec<EditOp> {
+    ops.iter()
+        .filter(|op| !matches!(op, EditOp::CreateFile { .. }))
+        .cloned()
+        .collect()
+}
+
+fn new_files_for(variant: &Variant, checks: &Checks<'_>) -> Result<Vec<AssetFile>, String> {
+    let creates: Vec<(&str, &str)> = variant
+        .ops
+        .iter()
+        .filter_map(|op| match op {
+            EditOp::CreateFile { file, content } => Some((file.as_str(), content.as_str())),
+            _ => None,
+        })
+        .collect();
+    if creates.len() > project::MAX_NEW_FILES {
+        return Err(format!(
+            "It creates {} files; {} at most.",
+            creates.len(),
+            project::MAX_NEW_FILES
+        ));
+    }
+    let mut files: Vec<AssetFile> = Vec::new();
+    for (path, content) in creates {
+        project::check_new_path(checks.project, path)?;
+        if checks.existing.iter().any(|file| file == path) || checks.root.join(path).exists() {
+            return Err(format!("{path} already exists."));
+        }
+        if checks.taken.iter().any(|file| file == path) {
+            return Err(format!("{path} is already used by another drawing."));
+        }
+        if files.iter().any(|file| file.path == path) {
+            return Err(format!("It creates {path} twice."));
+        }
+        if content.len() > project::MAX_NEW_FILE_BYTES {
+            return Err(format!(
+                "Its {path} is larger than {} KB.",
+                project::MAX_NEW_FILE_BYTES / 1024
+            ));
+        }
+        check_syntax(path, content)
+            .map_err(|error| format!("Its {path} doesn't parse: {error}."))?;
+        files.push(AssetFile {
+            path: path.to_owned(),
+            content: content.as_bytes().to_vec(),
+            preview: content.to_owned(),
+        });
+    }
+    Ok(files)
+}
+
+fn files_for(variant: &Variant, checks: &Checks<'_>) -> Result<Vec<AssetFile>, String> {
+    let mut files = assets_for(variant, checks.assets_dir, checks.existing, checks.taken)?;
+    for file in new_files_for(variant, checks)? {
+        if files.iter().any(|other| other.path == file.path) {
+            return Err(format!("It creates {} twice.", file.path));
+        }
+        files.push(file);
+    }
+    Ok(files)
+}
+
 fn validate_variants(
     variants: Vec<Variant>,
     file: &str,
     current: &str,
-    assets_dir: &str,
-    existing: &[String],
-    taken: &[String],
+    checks: &Checks<'_>,
 ) -> Result<Validated, Failure> {
     let mut valid: Vec<(Variant, String, Vec<AssetFile>)> = Vec::new();
     let mut dropped = Vec::new();
     for variant in variants.into_iter().take(generate::VARIANTS) {
         let label = String::from(variant.label.clone());
-        let reason = match apply_variant(&variant.ops, file, current) {
+        let edits = edits_of(&variant.ops);
+        let creates = variant.ops.len() - edits.len();
+        let reason = match apply_variant(&edits, file, current) {
             Ok(content) if valid.iter().any(|(_, other, _)| *other == content) => {
                 "It is the same as another variant.".to_owned()
             }
-            Ok(content) => match assets_for(&variant, assets_dir, existing, taken) {
+            Ok(content) => match files_for(&variant, checks) {
                 Ok(files) => {
                     valid.push((variant, content, files));
                     continue;
@@ -348,6 +420,9 @@ fn validate_variants(
                 Err(reason) => reason,
             },
             Err(failure) if failure.code == ErrorCode::StaleBase => return Err(failure),
+            Err(_) if edits.is_empty() && creates > 0 => {
+                format!("It creates components but doesn't place them in {file}.")
+            }
             Err(failure) => failure.message,
         };
         dropped.push(GenerateDoneDroppedItem {
@@ -470,6 +545,7 @@ struct Job<'a> {
     request: &'a GenerateRequest,
     prompt: &'a str,
     links: &'a Found,
+    project: &'a Project,
     source: &'a str,
     style: &'a ElementStyle,
     started: Instant,
@@ -966,6 +1042,8 @@ impl Daemon {
             .and_then(|props| finetune_op(&style, &props, &theme).ok());
         let force_ai = request.force_ai.unwrap_or(false);
         let found = links::find(&prompt);
+        let files = self.index.files().await;
+        let project = project::detect(self.project.path(), &files);
         let decision = route::classify(
             &prompt,
             exact.is_some(),
@@ -976,6 +1054,7 @@ impl Daemon {
             request: &request,
             prompt: &prompt,
             links: &found,
+            project: &project,
             source: &source,
             style: &style,
             started,
@@ -1220,15 +1299,21 @@ impl Daemon {
         let existing = self.index.files().await;
         let assets_dir = assets::assets_dir(&existing);
         let taken = self.held_assets();
-        let (valid, dropped) =
-            validate_variants(proposed, file, job.source, &assets_dir, &existing, &taken)?;
+        let checks = Checks {
+            assets_dir: &assets_dir,
+            existing: &existing,
+            taken: &taken,
+            project: job.project,
+            root: self.project.path(),
+        };
+        let (valid, dropped) = validate_variants(proposed, file, job.source, &checks)?;
         if job.cancel.is_cancelled() {
             return Err(ProviderError::Cancelled.into());
         }
         let held = valid
             .into_iter()
             .map(|(variant, content, files)| {
-                let ops = variant.ops.clone();
+                let ops = edits_of(&variant.ops);
                 (Held::from_variant(variant, files), content, ops)
             })
             .collect();
@@ -1267,7 +1352,8 @@ impl Daemon {
             inspiration_count(job.request),
         );
         let folder = assets::prompt_note(&job.request.file, &assets::assets_dir(&files));
-        format!("{sketch}{inspiration}{found}{folder}")
+        let new_ui = project::new_ui_section(job.project, &files, &job.request.file);
+        format!("{sketch}{inspiration}{found}{folder}{new_ui}")
     }
 
     async fn prepare(&self, job: &Job<'_>, tier: &TierConfig) -> Result<Prepared, Failure> {
@@ -1370,7 +1456,14 @@ impl Daemon {
                     "{file}:{} — {} ({route_label})",
                     request.line, variant.label
                 );
-                let changes = code_changes(file, current, &content);
+                let mut changes = code_changes(file, current, &content);
+                for created in variant.assets.iter().filter(|asset| {
+                    std::path::Path::new(&asset.path)
+                        .extension()
+                        .is_some_and(|extension| extension == "tsx" || extension == "jsx")
+                }) {
+                    changes.extend(code_changes(&created.path, "", &created.preview));
+                }
                 let created = variant
                     .assets
                     .iter()
@@ -1750,7 +1843,30 @@ mod tests {
     use gjd_core::contracts::{EditOp, ErrorCode};
     use serde_json::json;
 
-    use super::{Version, apply_variant, materialize, validate_variants};
+    use std::path::Path;
+
+    use super::{Checks, Version, apply_variant, materialize, validate_variants};
+    use crate::project::{PackageManager, Project, Ui};
+
+    fn react() -> Project {
+        Project {
+            ui: Ui::React,
+            typescript: true,
+            dependencies: std::collections::BTreeMap::new(),
+            package_manager: PackageManager::Pnpm,
+            components: "src/components".to_owned(),
+        }
+    }
+
+    fn checks<'a>(project: &'a Project, existing: &'a [String], taken: &'a [String]) -> Checks<'a> {
+        Checks {
+            assets_dir: "src/assets/icons",
+            existing,
+            taken,
+            project,
+            root: Path::new("/nonexistent-project"),
+        }
+    }
 
     fn variant(label: &str, ops: &[EditOp]) -> gjd_core::contracts::Variant {
         serde_json::from_value(json!({
@@ -1770,7 +1886,7 @@ mod tests {
         ];
 
         let (valid, dropped) =
-            validate_variants(proposed, FILE, SOURCE, "src/assets/icons", &[], &[])
+            validate_variants(proposed, FILE, SOURCE, &checks(&react(), &[], &[]))
                 .expect("one survives");
 
         let kept: Vec<String> = valid
@@ -1795,13 +1911,148 @@ mod tests {
         );
     }
 
+    fn create(path: &str, content: &str) -> EditOp {
+        serde_json::from_value(json!({ "kind": "create_file", "file": path, "content": content }))
+            .expect("create op")
+    }
+
+    const ORGANISM: &str = "export function Pricing() {\n  return <section>Plans</section>;\n}\n";
+
+    #[test]
+    fn new_component_files_ride_along_when_they_follow_the_rules() {
+        let proposed = vec![
+            variant(
+                "Split",
+                &[
+                    snippet(FILE, SOURCE, "bg-brand", "bg-sea"),
+                    create("src/components/organisms/Pricing.tsx", ORGANISM),
+                    create(
+                        "src/components/atoms/Price.tsx",
+                        "export function Price() {\n  return <b>$9</b>;\n}\n",
+                    ),
+                ],
+            ),
+            variant(
+                "Outside",
+                &[
+                    snippet(FILE, SOURCE, "p-2", "p-3"),
+                    create("src/pages/Pricing.tsx", ORGANISM),
+                ],
+            ),
+            variant(
+                "Broken",
+                &[
+                    snippet(FILE, SOURCE, "p-2", "p-4"),
+                    create(
+                        "src/components/atoms/Bad.tsx",
+                        "export function Bad() { return <b>; }",
+                    ),
+                ],
+            ),
+        ];
+        let project = react();
+
+        let (valid, dropped) =
+            validate_variants(proposed, FILE, SOURCE, &checks(&project, &[], &[]))
+                .expect("one survives");
+
+        assert_eq!(valid.len(), 1);
+        let (_, content, files) = &valid[0];
+        assert!(content.contains("bg-sea"));
+        let paths: Vec<&str> = files.iter().map(|file| file.path.as_str()).collect();
+        assert_eq!(
+            paths,
+            [
+                "src/components/organisms/Pricing.tsx",
+                "src/components/atoms/Price.tsx"
+            ]
+        );
+        assert_eq!(files[0].preview, ORGANISM);
+        assert_eq!(files[0].content, ORGANISM.as_bytes());
+        assert!(
+            dropped[0].reason.contains("outside src/components/"),
+            "{}",
+            dropped[0].reason
+        );
+        assert!(
+            dropped[1].reason.contains("doesn't parse"),
+            "{}",
+            dropped[1].reason
+        );
+    }
+
+    #[test]
+    fn refuses_new_files_that_break_the_rules() {
+        let place = || snippet(FILE, SOURCE, "bg-brand", "bg-sea");
+        let path = "src/components/organisms/Pricing.tsx";
+        let existing = vec![path.to_owned()];
+        let many: Vec<EditOp> = std::iter::once(place())
+            .chain((0..9).map(|n| create(&format!("src/components/atoms/A{n}.tsx"), ORGANISM)))
+            .collect();
+        let huge = format!(
+            "export const Big = () => <p>{}</p>;\n",
+            "x".repeat(61 * 1024)
+        );
+        let plain = Project {
+            ui: crate::project::Ui::None,
+            ..react()
+        };
+        let project = react();
+        let cases: Vec<(Vec<EditOp>, Checks<'_>, &str)> = vec![
+            (
+                vec![create(path, ORGANISM)],
+                checks(&project, &[], &[]),
+                "It creates components but doesn't place them in src/B.tsx.",
+            ),
+            (
+                vec![place(), create(path, ORGANISM)],
+                checks(&project, &existing, &[]),
+                "already exists.",
+            ),
+            (
+                vec![place(), create(path, ORGANISM)],
+                checks(&project, &[], &existing),
+                "already used by another drawing.",
+            ),
+            (
+                many,
+                checks(&project, &[], &[]),
+                "It creates 9 files; 8 at most.",
+            ),
+            (
+                vec![place(), create(path, ORGANISM), create(path, ORGANISM)],
+                checks(&project, &[], &[]),
+                "twice",
+            ),
+            (
+                vec![place(), create("src/components/atoms/Big.tsx", &huge)],
+                checks(&project, &[], &[]),
+                "larger than 60 KB",
+            ),
+            (
+                vec![place(), create(path, ORGANISM)],
+                checks(&plain, &[], &[]),
+                "only creates component files in React, Preact or Solid",
+            ),
+        ];
+        for (ops, checks, reason) in cases {
+            let failure = validate_variants(vec![variant("Only", &ops)], FILE, SOURCE, &checks)
+                .expect_err(reason);
+            assert!(
+                failure.message.contains(reason),
+                "{reason}: {}",
+                failure.message
+            );
+        }
+    }
+
     #[test]
     fn fails_when_no_variant_applies_or_the_file_changed() {
         let lost = vec![variant(
             "Lost",
             &[snippet(FILE, SOURCE, "bg-nowhere", "bg-sky")],
         )];
-        let failure = validate_variants(lost, FILE, SOURCE, "src/assets/icons", &[], &[])
+        let failure = validate_variants(lost, FILE, SOURCE, &checks(&react(), &[], &[]))
             .expect_err("none survive");
         assert_eq!(failure.code, ErrorCode::ProviderInvalidOutput);
 
@@ -1810,8 +2061,8 @@ mod tests {
             "Sea",
             &[snippet(FILE, SOURCE, "bg-brand", "bg-sea")],
         )];
-        let failure = validate_variants(stale, FILE, &saved, "src/assets/icons", &[], &[])
-            .expect_err("stale");
+        let failure =
+            validate_variants(stale, FILE, &saved, &checks(&react(), &[], &[])).expect_err("stale");
         assert_eq!(failure.code, ErrorCode::StaleBase);
     }
 

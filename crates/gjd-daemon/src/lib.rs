@@ -7,6 +7,7 @@ pub mod generate;
 pub mod html_text;
 pub mod index;
 pub mod links;
+pub mod project;
 pub mod r0;
 pub mod references;
 pub mod route;

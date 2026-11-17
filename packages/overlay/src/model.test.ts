@@ -2,6 +2,7 @@ import type { ElementStyle, StyleToken } from '@guijam/contracts-ts';
 import { describe, expect, it } from 'vitest';
 import {
   boundsOf,
+  changesIn,
   chooseDrawTarget,
   clamp,
   classifyGesture,
@@ -309,6 +310,16 @@ describe('shiftedLine', () => {
     expect(shiftedLine(30, changes)).toBe(31);
     expect(shiftedLine(50, changes)).toBe(53);
     expect(shiftedLine(1, changes)).toBe(1);
+  });
+
+  it('counts only the changes in the selected file when a variant also adds files', () => {
+    const changes = [
+      { file: 'src/Button.tsx', line: 1, before: [], after: ["import { Plans } from './Plans';"] },
+      { file: 'src/components/organisms/Plans.tsx', line: 1, before: [], after: ['a', 'b', 'c'] },
+    ];
+    expect(changesIn('src/Button.tsx', changes)).toHaveLength(1);
+    expect(shiftedLine(3, changesIn('src/Button.tsx', changes))).toBe(4);
+    expect(shiftedLine(3, changes)).toBe(7);
   });
 });
 

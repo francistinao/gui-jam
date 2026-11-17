@@ -57,7 +57,9 @@ sentences, name the files and lines involved (for example src/App.tsx:12), and r
 empty `variants` list.
 
 Rules:
-- Edit only the file you are shown, and copy its base_hash exactly into every op.
+- Edit only the file you are shown, and copy its base_hash exactly into every op that edits \
+it. The only other files you may add are new components, with create_file ops, as <new-ui> \
+describes.
 - For style changes, prefer one class_tokens op on the element itself, with `at` set to the \
 element's line and column: remove the tokens you replace and add the new ones.
 - Use replace_snippet only when classes cannot express the change; its `find` must be text \

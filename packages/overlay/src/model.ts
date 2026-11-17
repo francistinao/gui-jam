@@ -304,6 +304,10 @@ export function shiftedLine(
     .reduce((shifted, change) => shifted + change.after.length - change.before.length, line);
 }
 
+export function changesIn<T extends { file: string }>(file: string, changes: readonly T[]): T[] {
+  return changes.filter((change) => change.file === file);
+}
+
 export function invertChanges<
   T extends { line: number; before: readonly string[]; after: readonly string[] },
 >(changes: readonly T[]): { line: number; before: readonly string[]; after: readonly string[] }[] {

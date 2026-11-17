@@ -20,6 +20,7 @@ import {
 } from './attachments';
 import type { WidgetHost } from './host';
 import {
+  changesIn,
   classifyGesture,
   containerIndex,
   cssColor,
@@ -788,11 +789,12 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
         notify(failure(reply), UNDO_WINDOW_MS);
         return;
       }
-      committed.set(reply.payload.journalId, variant.changes);
       const { target } = job;
+      const own = changesIn(target.file, variant.changes);
+      committed.set(reply.payload.journalId, own);
       const moveTarget = (selection: Selection): Selection => {
         if (selection.file !== target.file) return selection;
-        const line = shiftedLine(selection.line, variant.changes);
+        const line = shiftedLine(selection.line, own);
         return { ...selection, line, src: `${selection.file}:${line}:${selection.column}` };
       };
       removeJob(job.id);
