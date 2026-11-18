@@ -216,7 +216,6 @@ scripts/gate.sh
 | `scripts/smoke-package.sh` | Packs `guijam`, installs it outside the workspace, and checks that it loads and type-checks |
 | `scripts/try-guijam.sh setup\|clean <app>` | Adds GUIJam to one of your Vite apps without touching tracked files, or removes it |
 | `scripts/playground.sh [app]` | Creates or refreshes the playground apps; `GUIJAM_SPEC=guijam@X.Y.Z` installs a published version |
-| `scripts/release-local.sh build\|publish <version>` | Builds or publishes a release from a Mac when GitHub Actions is unavailable |
 | `cargo run -p gjd-daemon -- provider list` | Lists the AI CLIs as the daemon sees them |
 | `cargo run -p gjd-daemon -- provider test claude-code --runs 5` | Runs a real CLI five times and reports timings (spends tokens) |
 | `GUIJAM_LIVE_PROVIDER=<id> pnpm exec playwright test tests/e2e/live-provider.spec.ts` | Runs a real Draw and a question through the widget with a real AI tool; `GUIJAM_LIVE_MODEL` picks the model (spends tokens) |
@@ -244,8 +243,6 @@ Versions come from the release tag; nothing in the repo needs a version bump.
 3. Publish the release `vX.Y.Z` to move `latest`.
 
 npm requires two-factor authentication to publish. For CI, either set up npm trusted publishing on each of the six packages (GitHub Actions, workflow `release.yml`, environment `npm`), or store a granular token with "Bypass two-factor authentication" as the `NPM_TOKEN` secret. The `npm-check` workflow (Actions, then Run workflow) confirms that the token works and belongs to the `guijam` organization, and publishes nothing.
-
-Without GitHub Actions, release from a Mac with zig and `cargo-zigbuild` installed and the cross targets added (`rustup target add x86_64-apple-darwin x86_64-unknown-linux-musl aarch64-unknown-linux-musl x86_64-pc-windows-gnu`): `scripts/release-local.sh build X.Y.Z` builds and smoke-tests everything, then `scripts/release-local.sh publish X.Y.Z next` (or `latest`) publishes it and asks for your npm one-time password.
 
 ## Credits
 

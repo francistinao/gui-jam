@@ -22,3 +22,6 @@ packages/guijam/assets/
 .astro/
 .next/
 next-env.d.ts
+
+scripts/release.sh
+scripts/release-local.sh
