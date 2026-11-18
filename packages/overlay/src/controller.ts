@@ -89,6 +89,8 @@ export interface Generation {
   startedAt: number | null;
   stepSince: number | null;
   timeoutMs: number | null;
+  expectedMs: number | null;
+  waiting: number;
 }
 
 const IDLE_GENERATION: Generation = {
@@ -107,6 +109,8 @@ const IDLE_GENERATION: Generation = {
   startedAt: null,
   stepSince: null,
   timeoutMs: null,
+  expectedMs: null,
+  waiting: 0,
 };
 
 export interface SketchState {
@@ -256,18 +260,36 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
     if (message.type !== 'generate.progress') return;
     const jobId = runs.get(message.payload.runId);
     if (!jobId) return;
-    const { steps, timeoutMs } = message.payload;
+    const { steps, timeoutMs, expectedMs, variants, waiting, update } = message.payload;
+    if (update) {
+      store.set({
+        jobs: store
+          .get()
+          .jobs.map((entry) => (entry.id === jobId ? entry : { ...entry, previewed: false })),
+      });
+    }
     updateJob(jobId, (job) => {
       const before = job.generation.steps.find((step) => step.state === 'active')?.label;
       const after = steps.find((step) => step.state === 'active')?.label;
       const stepSince = before === after ? job.generation.stepSince : Date.now();
+      const arrived = variants ?? [];
+      const current = job.generation.variants[job.generation.active]?.changesetId;
+      const active = Math.max(
+        0,
+        update
+          ? arrived.findIndex((variant) => !variant.needs)
+          : arrived.findIndex((variant) => variant.changesetId === current),
+      );
       return {
         ...job,
+        previewed: job.previewed || update !== undefined,
         generation: {
           ...job.generation,
           steps,
           stepSince,
           timeoutMs: timeoutMs ?? job.generation.timeoutMs,
+          expectedMs: expectedMs ?? job.generation.expectedMs,
+          ...(arrived.length > 0 ? { variants: [...arrived], active, waiting: waiting ?? 0 } : {}),
         },
       };
     });
@@ -512,7 +534,15 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
             ...entry.generation,
             status: 'ready',
             variants: [...variants],
-            active: 0,
+            active: Math.max(
+              0,
+              variants.findIndex(
+                (variant) =>
+                  variant.changesetId ===
+                  entry.generation.variants[entry.generation.active]?.changesetId,
+              ),
+            ),
+            waiting: 0,
             dropped,
             route,
             elapsedMs,
@@ -576,8 +606,11 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
 
   async function sketchRequest(sketch: SketchState): Promise<Sketch> {
     const { bounds } = sketch;
+    const started = performance.now();
+    const images = await captureSketch(sketch.strokes, bounds, host.hostElement);
     return {
-      images: await captureSketch(sketch.strokes, bounds, host.hostElement),
+      images,
+      captureMs: Math.round(performance.now() - started),
       box: [
         Math.round(bounds.left),
         Math.round(bounds.top),
@@ -749,7 +782,9 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
 
     async selectVariant(index: number): Promise<void> {
       const job = focused();
-      if (job?.generation.status !== 'ready' || index === job.generation.active) return;
+      if (!job || index === job.generation.active) return;
+      const { status, variants } = job.generation;
+      if (status !== 'ready' && !(status === 'running' && variants.length > 0)) return;
       await showVariant(job.id, index);
     },
 
@@ -805,7 +840,11 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
       if (store.get().jobs.length > 0) return;
       const jobs = saved.jobs.map((job) => {
         const element = elementsAt(job.target.src)[0];
-        return { ...job, anchor: element ? rectOf(element) : job.anchor };
+        return {
+          ...job,
+          generation: { ...IDLE_GENERATION, ...job.generation },
+          anchor: element ? rectOf(element) : job.anchor,
+        };
       });
       store.set({ jobs });
       for (const job of jobs) {
@@ -894,6 +933,11 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
       const { target } = job;
       const own = changesIn(target.file, variant.changes);
       committed.set(reply.payload.journalId, own);
+      const { runId: stillRunning, status } = job.generation;
+      if (status === 'running' && stillRunning) {
+        runs.delete(stillRunning);
+        void host.request({ type: 'generate.cancel', payload: { runId: stillRunning } });
+      }
       const moveTarget = (selection: Selection): Selection => {
         if (selection.file !== target.file) return selection;
         const line = shiftedLine(selection.line, own);

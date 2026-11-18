@@ -1,4 +1,4 @@
-import { mkdtemp, readFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -19,6 +19,7 @@ import {
 import { searchPath } from './support/process.js';
 
 const FAKE_CLI_DIR = fileURLToPath(new URL('../fake-cli/', import.meta.url));
+const TIMINGS = join(FIXTURE_DIR, '.guijam', 'run', 'timings.json');
 const ORDER_BUTTON_REF = { file: 'src/components/OrderButton.tsx', line: 3, column: 5 };
 
 let fixture: FixtureServer;
@@ -27,8 +28,13 @@ const savedEnv = { PATH: process.env.PATH };
 
 interface CliRun {
   request?: string;
+  slot?: number | null;
   interrupted?: boolean;
 }
+
+const BRAND_RGB = 'rgb(190, 18, 60)';
+const SOLID_RGB = 'rgb(37, 99, 235)';
+const DEEP_RGB = 'rgb(29, 78, 216)';
 
 async function cliRuns(): Promise<CliRun[]> {
   const text = await readFile(cliLog, 'utf8').catch(() => '');
@@ -100,7 +106,7 @@ test('the active step says what the AI tool is doing and how long it has taken',
   await expect(active.locator('[data-step-detail]')).toHaveText('Claude Code is thinking…');
   await expect(active.locator('[data-step-elapsed]')).toHaveText(/^\d+ s$/);
   await expect(active.locator('svg[data-spinner]')).toBeVisible();
-  await expect(active.locator('[data-step-detail]')).toHaveText('Writing the variants… 3 KB');
+  await expect(active.locator('[data-step-detail]')).toHaveText('Writing the variants… 7 KB');
   await expect(progress.locator('li[data-state="done"] svg')).not.toHaveCount(0);
 
   const variants = prompt.getByRole('region', { name: 'Variants' });
@@ -109,6 +115,7 @@ test('the active step says what the AI tool is doing and how long it has taken',
 });
 
 test('a long run explains the wait in plain words, then can be cancelled', async ({ page }) => {
+  await rm(TIMINGS, { force: true });
   await page.clock.install();
   const prompt = await ask(page, 'Make it feel more premium, slowly');
   const status = prompt.getByRole('status');
@@ -137,8 +144,67 @@ test('a long run explains the wait in plain words, then can be cancelled', async
 
   await expect(prompt.getByRole('button', { name: 'Generate' })).toBeVisible();
   await expect
-    .poll(async () => (await cliRuns()).some((run) => run.interrupted), { timeout: 5_000 })
-    .toBe(true);
+    .poll(
+      async () =>
+        (await cliRuns())
+          .filter((run) => run.interrupted && run.request?.includes('slowly'))
+          .map((run) => run.slot)
+          .sort(),
+      { timeout: 5_000 },
+    )
+    .toEqual([0, 1, 2]);
+});
+
+test('after three runs the wait is quoted from how long they took', async ({ page }) => {
+  await rm(TIMINGS, { force: true });
+  for (const take of [1, 2, 3]) {
+    const prompt = await ask(page, `Make it feel more premium, take ${take}`);
+    const variants = prompt.getByRole('region', { name: 'Variants' });
+    await expect(variants.getByRole('button', { name: 'Discard' })).toBeVisible();
+    await variants.getByRole('button', { name: 'Discard' }).click();
+  }
+  await page.clock.install();
+
+  const prompt = await ask(page, 'Make it feel more premium, slowly again');
+  await page.clock.fastForward(20_000);
+
+  await expect(prompt.getByRole('status')).toHaveText(
+    /^Still generating\. With this AI tool and model the first variant usually takes about \d+ s\.$/,
+  );
+  await prompt.getByRole('button', { name: 'Cancel' }).click();
+  await expect(prompt.getByRole('button', { name: 'Generate' })).toBeVisible();
+});
+
+test('variants show as they arrive, and Discard stops the one still being written', async ({
+  page,
+}) => {
+  const prompt = await ask(page, 'Make it blue, staggered');
+  const variants = prompt.getByRole('region', { name: 'Variants' });
+  const button = page.getByRole('button', { name: 'Order now' });
+
+  await expect(
+    variants.getByRole('group', { name: 'Pick a variant' }).getByRole('button'),
+  ).toHaveText(['V1Solid', 'V2Deep']);
+  await expect(variants.locator('[data-writing="V3"]')).toBeVisible();
+  await expect(variants).toContainText('Writing one more variant…');
+  await expect(button).toHaveCSS('background-color', SOLID_RGB);
+
+  await variants.getByRole('button', { name: 'V2 · Deep' }).click();
+
+  await expect(button).toHaveCSS('background-color', DEEP_RGB);
+
+  await variants.getByRole('button', { name: 'Discard' }).click();
+
+  await expect(button).toHaveCSS('background-color', BRAND_RGB);
+  await expect
+    .poll(
+      async () =>
+        (await cliRuns())
+          .filter((run) => run.interrupted && run.request?.includes('staggered'))
+          .map((run) => run.slot),
+      { timeout: 5_000 },
+    )
+    .toEqual([2]);
 });
 
 test('a request the daemon cannot read fails at once instead of waiting for minutes', async () => {

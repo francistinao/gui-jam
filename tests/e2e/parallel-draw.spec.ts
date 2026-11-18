@@ -143,7 +143,7 @@ test('a stray stroke while a drawing generates opens a draft that Escape removes
   await expect(code).toHaveCSS('overflow-y', 'auto');
   const panel = await dialog.boundingBox();
   expect(panel && panel.y + panel.height).toBeLessThanOrEqual(page.viewportSize()?.height ?? 0);
-  expect((await cliRuns()).filter((run) => run.request?.includes('linger'))).toHaveLength(1);
+  expect((await cliRuns()).filter((run) => run.request?.includes('linger'))).toHaveLength(3);
 
   await discardAll(page);
 });
@@ -159,11 +159,6 @@ test('three drawings generate at once and a fourth is refused', async ({ page })
     await page.keyboard.press('Escape');
     await expect(dialog).toHaveCount(0);
   }
-  await expect
-    .poll(
-      async () => (await cliRuns()).filter((run) => run.request?.endsWith('card, linger')).length,
-    )
-    .toBe(3);
   await expect(badge(page, /: Generating$/)).toHaveCount(3);
 
   await box(page, left, top + 110);
@@ -175,6 +170,9 @@ test('three drawings generate at once and a fourth is refused', async ({ page })
   for (const number of [1, 2, 3]) {
     await expect(badge(page, `Drawing ${number}: 1 variant`)).toBeVisible({ timeout: READY_MS });
   }
+  const linger = (await cliRuns()).filter((run) => run.request?.endsWith('card, linger'));
+  expect(new Set(linger.map((run) => run.request)).size).toBe(3);
+  expect(linger).toHaveLength(9);
 
   await discardAll(page);
 });

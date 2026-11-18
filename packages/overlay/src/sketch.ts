@@ -6,6 +6,7 @@ import type { Point, Rect } from './model';
 const MAX_SIDE = 1568;
 const PADDING = 24;
 const JPEG_QUALITY = 0.85;
+const ASSET_TIMEOUT_MS = 5_000;
 
 function canvasOf(width: number, height: number): [HTMLCanvasElement, CanvasRenderingContext2D] {
   const canvas = document.createElement('canvas');
@@ -39,6 +40,7 @@ async function pageWithStrokes(
     const page = await domToCanvas(document.documentElement, {
       filter: (node) => node !== exclude,
       scale: 1,
+      timeout: ASSET_TIMEOUT_MS,
     });
     const [view, context] = canvasOf(window.innerWidth, window.innerHeight);
     context.drawImage(

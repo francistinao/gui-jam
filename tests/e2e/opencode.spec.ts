@@ -28,6 +28,7 @@ const SOLID_RGB = 'rgb(37, 99, 235)';
 interface OpenCodeRun {
   request: string;
   retry: boolean;
+  slot: number | null;
   model?: string;
   agent?: string;
   pure: boolean;
@@ -153,8 +154,14 @@ test('an answer without JSON is retried once with the reason', async ({ page }) 
   await expect(
     prompt.getByRole('region', { name: 'Variants' }).getByRole('group', { name: 'Pick a variant' }),
   ).toBeVisible();
-  const attempts = (await runs()).filter((run) => run.request.includes('unusable'));
-  expect(attempts.map((run) => run.retry)).toEqual([false, true]);
+  await expect
+    .poll(async () =>
+      (await runs())
+        .filter((run) => run.request.includes('unusable'))
+        .map((run) => `${run.slot}${run.retry ? ' retry' : ''}`)
+        .sort(),
+    )
+    .toEqual(['0', '0 retry', '1', '1 retry', '2', '2 retry']);
 
   await prompt
     .getByRole('region', { name: 'Variants' })

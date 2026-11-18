@@ -39,6 +39,8 @@ const savedEnv = { PATH: process.env.PATH };
 interface CliRun {
   args?: string[];
   request?: string;
+  slot?: number | null;
+  gitInstructions?: boolean;
   assets?: string[];
   images?: string[];
   interrupted?: boolean;
@@ -158,11 +160,23 @@ test('a drawn prompt shows its progress, then three variants that switch live wi
   await expect(button).toHaveCSS('background-color', DEEP_RGB);
   expect(await fileSnapshot(ORDER_BUTTON)).toEqual(before);
 
-  const runs = await cliRuns();
-  expect(runs).toHaveLength(runsBefore + 1);
-  expect(runs.at(-1)?.args).toEqual(
-    expect.arrayContaining(['--tools', '', '--strict-mcp-config', '--model', 'haiku']),
-  );
+  const runs = (await cliRuns()).slice(runsBefore);
+  expect(runs.map((run) => run.slot).sort()).toEqual([0, 1, 2]);
+  for (const run of runs) {
+    expect(run.gitInstructions).toBe(false);
+    expect(run.args).toEqual(
+      expect.arrayContaining([
+        '--tools',
+        '',
+        '--strict-mcp-config',
+        '--safe-mode',
+        '--model',
+        'haiku',
+        '--effort',
+        'low',
+      ]),
+    );
+  }
 
   await variants.getByRole('button', { name: 'Use V2' }).click();
 
@@ -265,11 +279,8 @@ test('runs on the same file finish side by side, and a fourth run in flight is r
     }),
   );
   await expect
-    .poll(
-      async () =>
-        (await cliRuns()).filter((run) => run.request?.includes('slowly e2e-slow')).length,
-    )
-    .toBe(3);
+    .poll(async () => (await cliRuns()).filter((run) => run.request?.includes('slowly e2e-slow')))
+    .toHaveLength(6);
 
   const fourth = await send('generate.request', {
     runId: 'e2e-fourth',
@@ -323,7 +334,7 @@ test('an exact edit needs no model, and Ask AI for variations asks for three', a
 
   await expect(tiles).toHaveText(['V1Solid', 'V2Deep', 'V3Outline']);
   const runs = await cliRuns();
-  expect(runs).toHaveLength(runsBefore + 1);
+  expect(runs).toHaveLength(runsBefore + 3);
   expect(runs.at(-1)?.request).toBe('make it blue and pill-shaped');
   expect(runs.at(-1)?.args).toEqual(expect.arrayContaining(['--model', 'haiku']));
 });
@@ -360,7 +371,9 @@ test('an open-ended request uses the standard tier, and a multi-file one says so
   await expect(
     prompt.getByRole('group', { name: 'Pick a variant' }).getByRole('button'),
   ).toHaveCount(3);
-  expect((await cliRuns()).at(-1)?.args).toEqual(expect.arrayContaining(['--model', 'sonnet']));
+  expect((await cliRuns()).at(-1)?.args).toEqual(
+    expect.arrayContaining(['--model', 'sonnet', '--effort', 'medium']),
+  );
 
   await prompt.getByRole('button', { name: 'Edit prompt' }).click();
   await prompt

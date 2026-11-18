@@ -231,6 +231,7 @@ mod tests {
     fn request() -> GenerationRequest {
         GenerationRequest {
             model: None,
+            effort: None,
             system_prompt: "Be brief.".to_owned(),
             user_prompt: "Where is the logo?".to_owned(),
             images: Vec::new(),

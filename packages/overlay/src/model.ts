@@ -361,6 +361,7 @@ export interface WorkContext {
   sketch: boolean;
   images: number;
   links: number;
+  expectedMs: number | null;
 }
 
 export const STILL_WORKING_MS = 15_000;
@@ -384,12 +385,19 @@ export function stillWorking(
   context: WorkContext,
 ): string {
   if (elapsedMs < STILL_WORKING_MS) return 'Generating…';
-  if (elapsedMs < SLOW_MS) {
+  const { expectedMs } = context;
+  const slow = Math.max(SLOW_MS, (expectedMs ?? 0) * 1.25);
+  const verySlow = Math.max(VERY_SLOW_MS, (expectedMs ?? 0) * 2);
+  if (elapsedMs < slow) {
+    if (expectedMs !== null) {
+      const seconds = Math.max(1, Math.round(expectedMs / 1000));
+      return `Still generating. With this AI tool and model the first variant usually takes about ${seconds} s.`;
+    }
     return context.sketch || context.images > 0
       ? 'Still generating. Sketches and new components usually take 20 to 60 s.'
       : 'Still generating. Most changes take 10 to 40 s.';
   }
-  if (elapsedMs < VERY_SLOW_MS) return reason(context);
+  if (elapsedMs < verySlow) return reason(context);
   if (timeoutMs === null)
     return 'Taking longer than usual. You can keep waiting or Cancel any time.';
   const limit = Math.round(timeoutMs / 1000);

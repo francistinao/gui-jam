@@ -146,6 +146,11 @@ fn toml_string(text: &str) -> String {
     Value::String(text.to_owned()).to_string()
 }
 
+const LEAN_CONTEXT: [&str; 2] = [
+    "project_doc_max_bytes=0",
+    "include_environment_context=false",
+];
+
 fn args(request: &GenerationRequest, schema: &Path, images: &[PathBuf]) -> Vec<String> {
     let mut args: Vec<String> = [
         "exec",
@@ -167,6 +172,14 @@ fn args(request: &GenerationRequest, schema: &Path, images: &[PathBuf]) -> Vec<S
         "developer_instructions={}",
         toml_string(&request.system_prompt)
     ));
+    for setting in LEAN_CONTEXT {
+        args.push("-c".to_owned());
+        args.push(setting.to_owned());
+    }
+    if let Some(effort) = request.effort {
+        args.push("-c".to_owned());
+        args.push(format!("model_reasoning_effort=\"{effort}\""));
+    }
     args.push("--output-schema".to_owned());
     args.push(schema.display().to_string());
     let disabled = DISABLED_FEATURES
@@ -327,7 +340,7 @@ mod tests {
 
     use super::{CodexStream, args};
     use crate::process::EventFold;
-    use crate::{GenerationRequest, ProviderError, ToolPolicy};
+    use crate::{Effort, GenerationRequest, ProviderError, ToolPolicy};
 
     const SUCCESS: &str = include_str!("../tests/fixtures/codex/0.169.0/success.jsonl");
     const NOT_LOGGED_IN: &str = include_str!("../tests/fixtures/codex/0.169.0/not-logged-in.jsonl");
@@ -351,6 +364,7 @@ mod tests {
     fn request(tools: ToolPolicy) -> GenerationRequest {
         GenerationRequest {
             model: Some("gpt-6-luna".to_owned()),
+            effort: None,
             system_prompt: "Say \"hi\"\nthen stop.".to_owned(),
             user_prompt: "user".to_owned(),
             images: Vec::new(),
@@ -462,6 +476,27 @@ mod tests {
         assert!(
             flag_values(&none, "-c")
                 .contains(&r#"developer_instructions="Say \"hi\"\nthen stop.""#)
+        );
+    }
+
+    #[test]
+    fn runs_skip_project_docs_and_set_reasoning_effort_only_when_asked() {
+        let schema = Path::new("/tmp/schema.json");
+        let mut medium = request(ToolPolicy::None);
+        medium.effort = Some(Effort::Medium);
+        let medium_args = args(&medium, schema, &[]);
+        let inherited_args = args(&request(ToolPolicy::None), schema, &[]);
+
+        for run in [&medium_args, &inherited_args] {
+            let settings = flag_values(run, "-c");
+            assert!(settings.contains(&"project_doc_max_bytes=0"));
+            assert!(settings.contains(&"include_environment_context=false"));
+        }
+        assert!(flag_values(&medium_args, "-c").contains(&r#"model_reasoning_effort="medium""#));
+        assert!(
+            !flag_values(&inherited_args, "-c")
+                .iter()
+                .any(|setting| setting.starts_with("model_reasoning_effort"))
         );
     }
 }

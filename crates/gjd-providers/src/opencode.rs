@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use crate::spawn::command;
@@ -24,6 +25,11 @@ const LOGIN_COMMAND: &str = "opencode auth login";
 const AGENT: &str = "guijam";
 const QUERY_TIMEOUT: Duration = Duration::from_secs(30);
 const READ_ONLY_TOOLS: [&str; 3] = ["read", "glob", "grep"];
+const MODELS_FRESH: Duration = Duration::from_secs(60);
+
+type ListedModels = (PathBuf, String, Instant, Vec<ModelInfo>);
+
+static LISTED: Mutex<Option<ListedModels>> = Mutex::new(None);
 
 pub struct OpenCode;
 
@@ -437,11 +443,32 @@ fn parse_models(verbose: &str) -> Vec<ModelInfo> {
 
 impl OpenCode {
     async fn list_models(&self, discovery: &Discovery) -> Result<Vec<ModelInfo>, ProviderError> {
+        let carried = carried_config(&user_settings());
+        let key = carried
+            .as_ref()
+            .map_or_else(String::new, |(_, value)| value.clone());
+        if let Some((binary, settings, at, models)) = LISTED
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .as_ref()
+            && *binary == discovery.binary
+            && *settings == key
+            && at.elapsed() < MODELS_FRESH
+        {
+            return Ok(models.clone());
+        }
         let home = tempfile::tempdir()?;
         let mut env = isolated_env(home.path());
-        env.extend(carried_config(&user_settings()));
+        env.extend(carried);
         let stdout = query(&discovery.binary, &["models", "--verbose"], &env).await?;
-        Ok(parse_models(&stdout))
+        let models = parse_models(&stdout);
+        *LISTED.lock().unwrap_or_else(PoisonError::into_inner) = Some((
+            discovery.binary.clone(),
+            key,
+            Instant::now(),
+            models.clone(),
+        ));
+        Ok(models)
     }
 
     async fn run_once(
@@ -686,6 +713,7 @@ mod tests {
     fn request(tools: ToolPolicy) -> GenerationRequest {
         GenerationRequest {
             model: Some("deepseek/deepseek-chat".to_owned()),
+            effort: None,
             system_prompt: "Be brief.".to_owned(),
             user_prompt: "Element: <button>".to_owned(),
             images: Vec::new(),

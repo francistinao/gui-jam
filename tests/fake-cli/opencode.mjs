@@ -51,9 +51,19 @@ const config = JSON.parse(process.env.OPENCODE_CONFIG_CONTENT ?? '{}');
 const agent = config.agent?.[flag('--agent') ?? ''] ?? {};
 const request = /^Request: (.*)$/m.exec(message)?.[1] ?? '';
 const retry = message.includes('could not be used');
+const direction = /^Direction: (.*)$/m.exec(message)?.[1] ?? null;
+const slot =
+  direction === null
+    ? null
+    : direction.startsWith('a distinctly different')
+      ? 1
+      : direction.startsWith('the simplest')
+        ? 2
+        : 0;
 log({
   request,
   retry,
+  slot,
   model: flag('-m'),
   agent: flag('--agent'),
   pure: args.includes('--pure'),
@@ -74,17 +84,19 @@ const variant = (label, style, rationale, find, replace) => ({
   missing: [],
   ops: [{ kind: 'replace_snippet', file, base_hash: baseHash, find, replace }],
 });
+const takes = [
+  variant('Blue button', 'Solid', 'Swapped the brand fill for blue.', 'bg-brand', 'bg-[#2563EB]'),
+  variant('Deep blue', 'Deep', 'A darker blue.', 'bg-brand', 'bg-[#1D4ED8]'),
+];
 const answer = {
-  variants: [
-    variant('Blue button', 'Solid', 'Swapped the brand fill for blue.', 'bg-brand', 'bg-[#2563EB]'),
-    variant('Deep blue', 'Deep', 'A darker blue.', 'bg-brand', 'bg-[#1D4ED8]'),
-  ],
+  variants: slot === null ? takes : takes.slice(slot, slot + 1),
 };
 const text =
   /unusable/i.test(request) && !retry
     ? 'I would make the button blue and keep the radius.'
     : `Here are two takes:\n\`\`\`json\n${JSON.stringify(answer, null, 2)}\n\`\`\`\nBoth keep the label.`;
 
+if (slot) await new Promise((resolve) => setTimeout(resolve, slot * 150));
 print({ type: 'step_start', part: { type: 'step-start' } });
 print({ type: 'text', part: { type: 'text', text } });
 print({ type: 'step_finish', part: { type: 'step-finish', reason: 'stop', cost: 0.0004 } });

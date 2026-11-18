@@ -361,7 +361,7 @@ describe('invertChanges', () => {
 });
 
 describe('stillWorking', () => {
-  const plain = { sketch: false, images: 0, links: 0 };
+  const plain = { sketch: false, images: 0, links: 0, expectedMs: null };
 
   it('starts plain, then explains the wait in steps', () => {
     expect(stillWorking(0, 60_000, plain)).toBe('Generating…');
@@ -380,6 +380,23 @@ describe('stillWorking', () => {
     );
     expect(stillWorking(90_000, null, plain)).toBe(
       'Taking longer than usual. You can keep waiting or Cancel any time.',
+    );
+  });
+
+  it('quotes the measured wait and only calls a run slow against it', () => {
+    const opus = { ...plain, sketch: true, expectedMs: 72_400 };
+
+    expect(stillWorking(15_000, 180_000, opus)).toBe(
+      'Still generating. With this AI tool and model the first variant usually takes about 72 s.',
+    );
+    expect(stillWorking(100_000, 180_000, opus)).toBe(
+      'Still working on your sketch: laying out the parts and their styles.',
+    );
+    expect(stillWorking(144_800, 180_000, opus)).toBe(
+      'Taking longer than usual. It stops on its own after 180 s, or Cancel any time.',
+    );
+    expect(stillWorking(15_000, 60_000, { ...plain, expectedMs: 300 })).toBe(
+      'Still generating. With this AI tool and model the first variant usually takes about 1 s.',
     );
   });
 

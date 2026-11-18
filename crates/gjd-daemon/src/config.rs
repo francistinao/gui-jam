@@ -3,7 +3,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
-use gjd_providers::ProviderId;
+use gjd_providers::{Effort, ProviderId};
 
 const NO_CONFIG_DIR: &str = if cfg!(windows) {
     "neither XDG_CONFIG_HOME nor APPDATA is set"
@@ -43,18 +43,32 @@ pub fn active_provider_in(path: &Path) -> Option<ProviderId> {
     ProviderId::from_str(active).ok()
 }
 
-#[must_use]
-pub fn provider_model_in(path: &Path, id: ProviderId) -> Option<String> {
+fn provider_setting_in(path: &Path, id: ProviderId, key: &str) -> Option<String> {
     let table = read_table(path).ok()?;
-    let model = table
+    let value = table
         .get("providers")?
         .get(id.as_str())?
-        .get("model")?
+        .get(key)?
         .as_str()?;
-    (!model.trim().is_empty()).then(|| model.to_owned())
+    (!value.trim().is_empty()).then(|| value.trim().to_owned())
 }
 
-pub fn set_active_provider_in(path: &Path, id: ProviderId, model: Option<&str>) -> io::Result<()> {
+#[must_use]
+pub fn provider_model_in(path: &Path, id: ProviderId) -> Option<String> {
+    provider_setting_in(path, id, "model")
+}
+
+#[must_use]
+pub fn provider_effort_in(path: &Path, id: ProviderId) -> Option<Effort> {
+    provider_setting_in(path, id, "effort").and_then(|effort| effort.parse().ok())
+}
+
+pub fn set_active_provider_in(
+    path: &Path,
+    id: ProviderId,
+    model: Option<&str>,
+    effort: Option<Effort>,
+) -> io::Result<()> {
     let mut table = read_table(path)?;
     let providers = table
         .entry("providers")
@@ -69,7 +83,14 @@ pub fn set_active_provider_in(path: &Path, id: ProviderId, model: Option<&str>) 
         "active".to_owned(),
         toml::Value::String(id.as_str().to_owned()),
     );
-    if let Some(model) = model {
+    let settings = [
+        ("model", model.map(str::to_owned)),
+        ("effort", effort.map(|effort| effort.as_str().to_owned())),
+    ];
+    for (key, value) in settings {
+        let Some(value) = value else {
+            continue;
+        };
         let entry = providers
             .entry(id.as_str())
             .or_insert_with(|| toml::Value::Table(toml::Table::new()));
@@ -80,7 +101,7 @@ pub fn set_active_provider_in(path: &Path, id: ProviderId, model: Option<&str>) 
                 id.as_str()
             )));
         };
-        entry.insert("model".to_owned(), toml::Value::String(model.to_owned()));
+        entry.insert(key.to_owned(), toml::Value::String(value));
     }
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
@@ -98,9 +119,18 @@ pub fn provider_model(id: ProviderId) -> Option<String> {
     config_path().and_then(|path| provider_model_in(&path, id))
 }
 
-pub fn set_active_provider(id: ProviderId, model: Option<&str>) -> io::Result<PathBuf> {
+#[must_use]
+pub fn provider_effort(id: ProviderId) -> Option<Effort> {
+    config_path().and_then(|path| provider_effort_in(&path, id))
+}
+
+pub fn set_active_provider(
+    id: ProviderId,
+    model: Option<&str>,
+    effort: Option<Effort>,
+) -> io::Result<PathBuf> {
     let path = config_path().ok_or_else(|| io::Error::other(NO_CONFIG_DIR))?;
-    set_active_provider_in(&path, id, model)?;
+    set_active_provider_in(&path, id, model, effort)?;
     Ok(path)
 }
 
@@ -113,7 +143,12 @@ mod tests {
     use std::ffi::OsString;
     use std::path::PathBuf;
 
-    use super::{active_provider_in, config_path_from, provider_model_in, set_active_provider_in};
+    use gjd_providers::Effort;
+
+    use super::{
+        active_provider_in, config_path_from, provider_effort_in, provider_model_in,
+        set_active_provider_in,
+    };
 
     fn env(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<OsString> {
         let pairs: Vec<(String, OsString)> = pairs
@@ -160,7 +195,7 @@ mod tests {
 
         fs::create_dir_all(path.parent().expect("parent")).expect("dir");
         fs::write(&path, "[widget]\nshortcut = \"Alt+Shift+G\"\n").expect("seed");
-        set_active_provider_in(&path, ProviderId::Codex, None).expect("saved");
+        set_active_provider_in(&path, ProviderId::Codex, None, None).expect("saved");
 
         assert_eq!(active_provider_in(&path), Some(ProviderId::Codex));
         let text = fs::read_to_string(&path).expect("read");
@@ -168,14 +203,24 @@ mod tests {
         assert!(text.contains("active = \"codex\""), "{text}");
         assert_eq!(provider_model_in(&path, ProviderId::Codex), None);
 
-        set_active_provider_in(&path, ProviderId::OpenCode, Some("deepseek/deepseek-chat"))
-            .expect("saved with a model");
+        set_active_provider_in(
+            &path,
+            ProviderId::OpenCode,
+            Some("deepseek/deepseek-chat"),
+            Some(Effort::Low),
+        )
+        .expect("saved with a model");
 
         assert_eq!(active_provider_in(&path), Some(ProviderId::OpenCode));
         assert_eq!(
             provider_model_in(&path, ProviderId::OpenCode).as_deref(),
             Some("deepseek/deepseek-chat")
         );
+        assert_eq!(
+            provider_effort_in(&path, ProviderId::OpenCode),
+            Some(Effort::Low)
+        );
+        assert_eq!(provider_effort_in(&path, ProviderId::Codex), None);
         let text = fs::read_to_string(&path).expect("read");
         assert!(text.contains("shortcut = \"Alt+Shift+G\""), "{text}");
     }

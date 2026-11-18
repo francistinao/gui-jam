@@ -68,11 +68,19 @@ export function VariantsPanel({
   installError,
   controller,
 }: VariantsPanelProps) {
-  const { variants, active, dropped, route, elapsedMs, notes } = generation;
+  const { variants, active, dropped, route, elapsedMs, notes, status, waiting } = generation;
   const variant = variants[active];
   if (!variant) return null;
   const note = droppedNote(dropped);
-  const meta = [`${(elapsedMs / 1000).toFixed(1)} s`, route?.model].filter(Boolean).join(' · ');
+  const running = status === 'running';
+  const pending = running
+    ? Array.from({ length: waiting }, (_, index) => variants.length + index)
+    : [];
+  const meta = running
+    ? waiting === 1
+      ? 'Writing one more variant…'
+      : `Writing ${waiting} more variants…`
+    : [`${(elapsedMs / 1000).toFixed(1)} s`, route?.model].filter(Boolean).join(' · ');
 
   return (
     <section aria-label="Variants" className="flex flex-col gap-2">
@@ -102,6 +110,17 @@ export function VariantsPanel({
               {option.style}
             </span>
           </button>
+        ))}
+        {pending.map((index) => (
+          <div
+            key={`writing-${index}`}
+            aria-hidden="true"
+            data-writing={`V${index + 1}`}
+            className="flex h-14 flex-col items-center justify-center gap-0.5 rounded-md border border-dashed border-grey-200 px-1 text-grey-500"
+          >
+            <LoaderCircle aria-hidden="true" className="size-3.5 animate-spin" />
+            <span className="typography-body-small">Writing…</span>
+          </div>
         ))}
       </fieldset>
       {route?.notice ? (
@@ -153,7 +172,9 @@ export function VariantsPanel({
         />
       ) : null}
       <CodeChanges changes={variant.changes} />
-      <p className="typography-body-small text-grey-500">{meta}</p>
+      <p aria-live="polite" className="typography-body-small text-grey-500">
+        {meta}
+      </p>
       <footer className="flex items-center justify-end gap-2">
         <Button variant="secondary" disabled={busy} onClick={() => void controller.discardJob()}>
           Discard

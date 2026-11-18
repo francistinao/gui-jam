@@ -4,12 +4,17 @@ use std::time::Duration;
 use gjd_core::contracts::{
     EditOp, ElementStyle, ElementStyleAdapter, ElementStyleClassSource, GenerateProgress,
     GenerateProgressStepsItem, GenerateProgressStepsItemDetail, GenerateProgressStepsItemState,
-    RouteTier,
+    RouteTier, UpdateResult, VariantPreview,
 };
-use gjd_providers::{ProviderEvent, ProviderId};
+use gjd_providers::{Effort, ProviderEvent, ProviderId};
 
 pub const MAX_OPS: usize = 40;
 pub const VARIANTS: usize = 3;
+pub const DIRECTIONS: [&str; VARIANTS] = [
+    "Direction: do exactly what the request asks.",
+    "Direction: a distinctly different visual take on the request.",
+    "Direction: the simplest version of the request that works.",
+];
 pub const MAX_RUNS: usize = 3;
 pub const HEAVY_TIMEOUT: Duration = Duration::from_secs(300);
 const HEAVY_IMAGES: usize = 3;
@@ -21,6 +26,7 @@ pub struct TierConfig {
     pub label: &'static str,
     pub timeout: Duration,
     pub context_lines: usize,
+    pub effort: Effort,
 }
 
 pub const R1: TierConfig = TierConfig {
@@ -28,6 +34,7 @@ pub const R1: TierConfig = TierConfig {
     label: "R1",
     timeout: Duration::from_secs(60),
     context_lines: 40,
+    effort: Effort::Low,
 };
 
 pub const R2: TierConfig = TierConfig {
@@ -35,6 +42,7 @@ pub const R2: TierConfig = TierConfig {
     label: "R2",
     timeout: Duration::from_secs(180),
     context_lines: 120,
+    effort: Effort::Medium,
 };
 
 impl TierConfig {
@@ -49,8 +57,8 @@ impl TierConfig {
 
 pub const SYSTEM_PROMPT: &str = "\
 You change one element of a React app styled with Tailwind CSS v4, for GUIJam, a visual \
-editing tool. Return exactly 3 variants: three different takes on the request, each with \
-a distinct one-word `style` (for example Solid, Soft, Outline). Set `system` to \
+editing tool. Return exactly 1 variant, the take that the Direction line at the end of the \
+request asks for, with a one-word `style` (for example Solid, Soft, Outline). Set `system` to \
 \"Your project\".
 
 If the request is a question rather than a change, answer it in `answer` in at most a few \
@@ -133,6 +141,10 @@ pub struct Progress {
     active: Step,
     detail: Option<String>,
     timeout: Duration,
+    variants: Vec<VariantPreview>,
+    waiting: Option<u64>,
+    update: Option<UpdateResult>,
+    expected: Option<u64>,
 }
 
 const DETAIL_CHARS: usize = 200;
@@ -154,6 +166,49 @@ pub fn event_detail(event: &ProviderEvent, provider: &str) -> String {
         ProviderEvent::Retrying(reason) => {
             format!("The first answer wasn't usable ({reason}), asking again…")
         }
+    };
+    detail.chars().take(DETAIL_CHARS).collect()
+}
+
+#[must_use]
+pub fn runs_detail(
+    events: &[Option<ProviderEvent>],
+    started: usize,
+    ready: usize,
+    provider: &str,
+) -> String {
+    if started == 0 {
+        return "Waiting for another drawing to finish…".to_owned();
+    }
+    let written: usize = events
+        .iter()
+        .map(|event| match event {
+            Some(ProviderEvent::Writing { bytes }) => *bytes,
+            _ => 0,
+        })
+        .sum();
+    let retrying = events.iter().find_map(|event| match event {
+        Some(ProviderEvent::Retrying(reason)) => Some(reason),
+        _ => None,
+    });
+    let thinking = events
+        .iter()
+        .any(|event| matches!(event, Some(ProviderEvent::Ready)));
+    let detail = if let Some(reason) = retrying {
+        format!("An answer wasn't usable ({reason}), asking again…")
+    } else if written >= 1024 {
+        format!("Writing the variants… {} KB", written.div_ceil(1024))
+    } else if written > 0 {
+        "Writing the variants…".to_owned()
+    } else if thinking {
+        format!("{provider} is thinking…")
+    } else {
+        format!("Starting {provider}…")
+    };
+    let detail = match ready {
+        0 => detail,
+        1 => format!("{detail} 1 variant is ready."),
+        count => format!("{detail} {count} variants are ready."),
     };
     detail.chars().take(DETAIL_CHARS).collect()
 }
@@ -202,7 +257,24 @@ impl Progress {
             active: Step::Read,
             detail: None,
             timeout,
+            variants: Vec::new(),
+            waiting: None,
+            update: None,
+            expected: None,
         }
+    }
+
+    pub fn expect(&mut self, expected_ms: Option<u64>) {
+        self.expected = expected_ms;
+    }
+
+    pub fn arrived(&mut self, variants: &[VariantPreview], waiting: usize) {
+        self.variants = variants.to_vec();
+        self.waiting = u64::try_from(waiting).ok();
+    }
+
+    pub fn previewed(&mut self, update: UpdateResult) {
+        self.update = Some(update);
     }
 
     pub fn start(&mut self, step: Step) {
@@ -220,11 +292,14 @@ impl Progress {
         }
     }
 
-    #[must_use]
-    pub fn snapshot(&self) -> GenerateProgress {
+    pub fn snapshot(&mut self) -> GenerateProgress {
         GenerateProgress {
             run_id: self.run_id.clone(),
             timeout_ms: u64::try_from(self.timeout.as_millis()).ok(),
+            variants: self.variants.clone(),
+            waiting: self.waiting,
+            update: self.update.take(),
+            expected_ms: self.expected,
             steps: self
                 .steps
                 .iter()
@@ -349,14 +424,18 @@ mod tests {
     use std::time::Duration;
 
     use gjd_core::contracts::{
-        ElementStyle, GenerateProgress, GenerateProgressStepsItemState as State,
+        ElementStyle, GenerateProgress, GenerateProgressStepsItemState as State, UpdateResult,
+        VariantPreview,
     };
     use gjd_core::theme::Theme;
     use gjd_providers::ProviderEvent;
+    use serde_json::json;
 
-    use super::{Extras, Progress, R1, R2, Step, ask_label, budget, event_detail, user_prompt};
+    use super::{
+        Extras, Progress, R1, R2, Step, ask_label, budget, event_detail, runs_detail, user_prompt,
+    };
 
-    fn states(progress: &Progress) -> Vec<(String, State)> {
+    fn states(progress: &mut Progress) -> Vec<(String, State)> {
         progress
             .snapshot()
             .steps
@@ -382,7 +461,7 @@ mod tests {
         progress.relabel(Step::Check, "Checking 3 variants".to_owned());
 
         assert_eq!(
-            states(&progress),
+            states(&mut progress),
             [
                 (
                     "Reading <button> at OrderButton.tsx:3".to_owned(),
@@ -401,7 +480,7 @@ mod tests {
     fn progress_skips_the_theme_step_without_theme_tokens() {
         let style = inspect("src/A.tsx", BUTTON, 3, 5, &Theme::default());
 
-        let progress = Progress::new(
+        let mut progress = Progress::new(
             "r1",
             &style,
             &[],
@@ -409,7 +488,7 @@ mod tests {
             Duration::from_secs(60),
         );
 
-        let labels: Vec<String> = states(&progress)
+        let labels: Vec<String> = states(&mut progress)
             .into_iter()
             .map(|(label, _)| label)
             .collect();
@@ -474,8 +553,8 @@ mod tests {
     fn attached_images_get_their_own_step_after_the_sketch() {
         let style = inspect("src/A.tsx", BUTTON, 3, 5, &Theme::default());
         let labels = |extras| -> Vec<String> {
-            let progress = Progress::new("r1", &style, &[], extras, Duration::from_secs(60));
-            states(&progress)
+            let mut progress = Progress::new("r1", &style, &[], extras, Duration::from_secs(60));
+            states(&mut progress)
                 .into_iter()
                 .map(|(label, _)| label)
                 .collect()
@@ -623,5 +702,92 @@ mod tests {
         assert!(narrow.contains("lines=\"21-62\""));
         assert!(!wide.contains("<imports"));
         assert!(wide.contains("lines=\"1-62\""));
+    }
+
+    #[test]
+    fn runs_detail_adds_up_every_run_and_counts_the_ready_variants() {
+        let writing = |bytes| Some(ProviderEvent::Writing { bytes });
+
+        assert_eq!(
+            runs_detail(&[None, None, None], 0, 0, "Codex"),
+            "Waiting for another drawing to finish…"
+        );
+        assert_eq!(
+            runs_detail(&[None, None, None], 3, 0, "Codex"),
+            "Starting Codex…"
+        );
+        assert_eq!(
+            runs_detail(&[Some(ProviderEvent::Ready), None, None], 3, 0, "Codex"),
+            "Codex is thinking…"
+        );
+        assert_eq!(
+            runs_detail(
+                &[writing(2200), writing(2200), writing(2200)],
+                3,
+                1,
+                "Codex"
+            ),
+            "Writing the variants… 7 KB 1 variant is ready."
+        );
+        assert_eq!(
+            runs_detail(
+                &[
+                    Some(ProviderEvent::Retrying("no JSON".to_owned())),
+                    writing(10),
+                    None
+                ],
+                3,
+                2,
+                "Codex"
+            ),
+            "An answer wasn't usable (no JSON), asking again… 2 variants are ready."
+        );
+    }
+
+    #[test]
+    fn arrived_variants_stay_in_every_report_and_the_preview_is_sent_once() {
+        let style = inspect("src/A.tsx", BUTTON, 3, 5, &Theme::default());
+        let mut progress = Progress::new(
+            "r1",
+            &style,
+            &[],
+            Extras {
+                sketch: false,
+                inspiration: 0,
+                links: 0,
+            },
+            Duration::from_secs(60),
+        );
+        let variant: VariantPreview = serde_json::from_value(json!({
+            "changesetId": "c1",
+            "label": "Deep blue",
+            "system": "Your project",
+            "style": "Deep",
+            "rationale": "A darker fill.",
+            "file": "src/A.tsx",
+            "changes": [],
+            "created": []
+        }))
+        .expect("variant preview");
+        let update: UpdateResult = serde_json::from_value(json!({
+            "updateId": "u1",
+            "status": "ok",
+            "latencyMs": 12,
+            "errors": []
+        }))
+        .expect("update result");
+
+        progress.arrived(&[variant], 2);
+        progress.previewed(update);
+        let first = progress.snapshot();
+        let second = progress.snapshot();
+
+        for snapshot in [&first, &second] {
+            assert_eq!(snapshot.variants.len(), 1);
+            assert_eq!(snapshot.variants[0].changeset_id, "c1");
+            assert_eq!(snapshot.waiting, Some(2));
+        }
+        assert!(first.update.is_some());
+        assert!(second.update.is_none());
     }
 }

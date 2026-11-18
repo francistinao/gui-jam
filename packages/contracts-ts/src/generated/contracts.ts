@@ -487,6 +487,7 @@ export interface Sketch {
   images: [SketchImage] | [SketchImage, SketchImage];
   box: [number, number, number, number];
   touching: string[];
+  captureMs?: number;
 }
 export interface SketchImage {
   mediaType: 'image/png' | 'image/jpeg';
@@ -577,11 +578,25 @@ export interface GenerateCancelledMessage {
 export interface GenerateProgress {
   runId: string;
   timeoutMs?: number;
+  variants?:
+    | []
+    | [VariantPreview]
+    | [VariantPreview, VariantPreview]
+    | [VariantPreview, VariantPreview, VariantPreview];
+  waiting?: number;
+  expectedMs?: number;
+  update?: UpdateResult1;
   steps: {
     label: string;
     state: 'done' | 'active' | 'pending';
     detail?: string;
   }[];
+}
+export interface UpdateResult1 {
+  updateId: string;
+  status: 'ok' | 'compile_error' | 'runtime_error' | 'full_reload' | 'timeout';
+  latencyMs: number;
+  errors: UpdateError[];
 }
 export interface VariantSelect {
   runId: string;

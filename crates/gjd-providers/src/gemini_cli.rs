@@ -194,6 +194,7 @@ impl GeminiCli {
             SpawnOptions {
                 env: vec![
                     ("GEMINI_SYSTEM_MD".to_owned(), system.display().to_string()),
+                    ("GEMINI_CLI_NO_RELAUNCH".to_owned(), "true".to_owned()),
                     ("NO_COLOR".to_owned(), "1".to_owned()),
                 ],
                 watch_stderr: false,
@@ -367,6 +368,7 @@ mod tests {
     fn widget_runs_deny_every_tool_and_load_no_mcp_servers_or_extensions() {
         let request = GenerationRequest {
             model: None,
+            effort: None,
             system_prompt: "Be brief.".to_owned(),
             user_prompt: "Element: <button>".to_owned(),
             images: Vec::new(),

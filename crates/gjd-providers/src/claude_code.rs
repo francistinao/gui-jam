@@ -11,7 +11,7 @@ use serde_json::json;
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 
-use crate::process::{EventFold, ProviderProcess, Signals, run_to_answer};
+use crate::process::{EventFold, ProviderProcess, Signals, SpawnOptions, run_to_answer};
 use crate::{
     AuthStatus, Capabilities, Discovery, GenerationOutput, GenerationRequest, ProviderAdapter,
     ProviderError, ProviderEvent, ProviderId, RunTimings, ToolPolicy,
@@ -181,6 +181,8 @@ fn args(request: &GenerationRequest) -> Vec<&str> {
         "dontAsk",
         "--no-session-persistence",
         "--strict-mcp-config",
+        "--safe-mode",
+        "--exclude-dynamic-system-prompt-sections",
         "--json-schema",
         VARIANT_SET_PROVIDER_SCHEMA,
         "--append-system-prompt",
@@ -193,6 +195,9 @@ fn args(request: &GenerationRequest) -> Vec<&str> {
     ];
     if let Some(model) = &request.model {
         args.extend(["--model", model]);
+    }
+    if let Some(effort) = request.effort {
+        args.extend(["--effort", effort.as_str()]);
     }
     args
 }
@@ -287,11 +292,18 @@ impl ProviderAdapter for ClaudeCode {
         cancel: CancellationToken,
     ) -> Result<GenerationOutput, ProviderError> {
         let started = Instant::now();
-        let process = ProviderProcess::spawn(
+        let process = ProviderProcess::spawn_with(
             &discovery.binary,
             args(&request),
             &request.cwd,
             user_message(&request).as_bytes(),
+            SpawnOptions {
+                env: vec![(
+                    "CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS".to_owned(),
+                    "1".to_owned(),
+                )],
+                watch_stderr: false,
+            },
         )
         .await?;
         request.emit(ProviderEvent::Started);
@@ -320,7 +332,7 @@ mod tests {
 
     use super::{Answer, ClaudeStream, args};
     use crate::process::{EventFold, Signals};
-    use crate::{GenerationRequest, ProviderError, ProviderEvent, ToolPolicy};
+    use crate::{Effort, GenerationRequest, ProviderError, ProviderEvent, ToolPolicy};
 
     const SUCCESS: &str = include_str!("../tests/fixtures/claude-code/2.1.325/success.jsonl");
     const PARTIAL: &str =
@@ -359,6 +371,7 @@ mod tests {
     fn request(tools: ToolPolicy) -> GenerationRequest {
         GenerationRequest {
             model: None,
+            effort: None,
             system_prompt: "system".to_owned(),
             user_prompt: "user".to_owned(),
             images: Vec::new(),
@@ -474,5 +487,21 @@ mod tests {
             assert!(run.contains(&"--include-partial-messages"));
             assert_eq!(flag_value(run, "--permission-mode"), Some("dontAsk"));
         }
+    }
+
+    #[test]
+    fn runs_skip_the_developers_setup_and_set_effort_only_when_asked() {
+        let mut low = request(ToolPolicy::None);
+        low.effort = Some(Effort::Low);
+        let low_args = args(&low);
+        let inherited = request(ToolPolicy::None);
+        let inherited_args = args(&inherited);
+
+        for run in [&low_args, &inherited_args] {
+            assert!(run.contains(&"--safe-mode"));
+            assert!(run.contains(&"--exclude-dynamic-system-prompt-sections"));
+        }
+        assert_eq!(flag_value(&low_args, "--effort"), Some("low"));
+        assert_eq!(flag_value(&inherited_args, "--effort"), None);
     }
 }

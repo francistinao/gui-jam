@@ -57,6 +57,9 @@ fn request(
         model: std::env::var("GUIJAM_LIVE_MODEL")
             .ok()
             .or_else(|| adapter.id().fast_model().map(str::to_owned)),
+        effort: std::env::var("GUIJAM_LIVE_EFFORT")
+            .ok()
+            .and_then(|effort| effort.parse().ok()),
         system_prompt: system_prompt.to_owned(),
         user_prompt,
         images: Vec::new(),

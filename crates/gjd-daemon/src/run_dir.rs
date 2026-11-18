@@ -44,6 +44,11 @@ impl RunDir {
         self.dir.join("daemon.json")
     }
 
+    #[must_use]
+    pub fn timings_path(&self) -> PathBuf {
+        self.dir.join("timings.json")
+    }
+
     pub fn lock(&self) -> io::Result<Option<File>> {
         let file = private_file()
             .create(true)

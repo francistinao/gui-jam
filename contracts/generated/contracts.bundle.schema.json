@@ -1840,6 +1840,11 @@
             "maxLength": 300
           },
           "description": "The data-gj-src of annotated elements the sketch overlaps, at most 20."
+        },
+        "captureMs": {
+          "description": "How long the widget took to capture the sketch images.",
+          "type": "integer",
+          "minimum": 0
         }
       }
     },
@@ -1921,6 +1926,28 @@
           "description": "How long the run may take in total before it stops with a timeout.",
           "type": "integer",
           "minimum": 0
+        },
+        "variants": {
+          "description": "Variants that already arrived, in the order they arrived; each is held as a changeset and can be selected or committed before the run ends.",
+          "type": "array",
+          "maxItems": 3,
+          "items": {
+            "$ref": "#/$defs/VariantPreview"
+          }
+        },
+        "waiting": {
+          "description": "How many variants are still being written.",
+          "type": "integer",
+          "minimum": 0
+        },
+        "expectedMs": {
+          "description": "Median wait for the first variant over this project's recent runs with the same AI tool, model and tier, counted from the developer pressing Generate. Absent until there are three such runs.",
+          "type": "integer",
+          "minimum": 0
+        },
+        "update": {
+          "description": "Set once the first variant that arrived is previewed in the running app.",
+          "$ref": "#/$defs/UpdateResult"
         },
         "steps": {
           "type": "array",

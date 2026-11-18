@@ -215,10 +215,11 @@ pub fn new_ui_section(project: &Project, files: &[String], file: &str) -> String
     let mut out = format!(
         "\n<new-ui components=\"{dir}\" extension=\"{extension}\" library=\"{library}\">\n\
 When the request adds UI that isn't on the page yet (what a sketch shows, or a section, card, form \
-or list the prompt asks for), build it with atomic design instead of inline markup:\n\
-- atoms: the smallest reusable pieces (a button, badge, price or input) in {dir}/atoms/\n\
-- molecules: small groups of atoms (a plan card or a form field) in {dir}/molecules/\n\
-- organisms: the section itself (a pricing table or a testimonial strip) in {dir}/organisms/\n\
+or list the prompt asks for), put it in new component files instead of inline markup:\n\
+- a self-contained piece (one effect, widget, card or section) is a single organism file in {dir}/organisms/\n\
+- split out atoms (the smallest reusable pieces, such as a button, badge or input) in {dir}/atoms/ and \
+molecules (small groups of atoms, such as a plan card) in {dir}/molecules/ only when a part repeats \
+inside the piece or other UI would reuse it\n\
 Add each new component with a create_file op: one exported function component per file, named like \
 its PascalCase file ({dir}/atoms/PriceTag.{extension} exports PriceTag),{props} styled with the \
 project's theme tokens. Import components with relative paths and no extension. Reuse the existing \
@@ -502,6 +503,14 @@ mod tests {
         );
         assert!(
             section.contains("in src/components/organisms/"),
+            "{section}"
+        );
+        assert!(
+            section.contains("is a single organism file in src/components/organisms/"),
+            "{section}"
+        );
+        assert!(
+            section.contains("only when a part repeats inside the piece"),
             "{section}"
         );
         assert!(

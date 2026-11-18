@@ -6,7 +6,8 @@ use clap::{Parser, Subcommand};
 use gjd_daemon::Outcome;
 use gjd_daemon::run_dir::{DaemonInfo, RunDir};
 use gjd_providers::{
-    AuthStatus, GenerationRequest, ProviderAdapter, ProviderId, RunTimings, ToolPolicy, adapter,
+    AuthStatus, Effort, GenerationRequest, ProviderAdapter, ProviderId, RunTimings, ToolPolicy,
+    adapter,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -61,6 +62,8 @@ enum ProviderCommand {
         id: ProviderId,
         #[arg(long)]
         model: Option<String>,
+        #[arg(long)]
+        effort: Option<Effort>,
     },
     Models {
         id: ProviderId,
@@ -73,6 +76,8 @@ enum ProviderCommand {
         runs: u32,
         #[arg(long)]
         model: Option<String>,
+        #[arg(long)]
+        effort: Option<Effort>,
     },
 }
 
@@ -118,14 +123,19 @@ async fn list_json() -> ExitCode {
     ExitCode::SUCCESS
 }
 
-fn use_provider(id: ProviderId, model: Option<&str>) -> ExitCode {
+fn use_provider(id: ProviderId, model: Option<&str>, effort: Option<Effort>) -> ExitCode {
     if adapter(id).is_none() {
         eprintln!("{id}: adapter not available in this build");
         return ExitCode::FAILURE;
     }
-    match gjd_daemon::config::set_active_provider(id, model) {
+    match gjd_daemon::config::set_active_provider(id, model, effort) {
         Ok(path) => {
-            let with = model.map_or_else(String::new, |model| format!(" with {model}"));
+            let with = match (model, effort) {
+                (Some(model), Some(effort)) => format!(" with {model} at {effort} effort"),
+                (Some(model), None) => format!(" with {model}"),
+                (None, Some(effort)) => format!(" at {effort} effort"),
+                (None, None) => String::new(),
+            };
             println!(
                 "{}{with} is now the AI tool for GUIJam ({})",
                 id.display_name(),
@@ -200,10 +210,12 @@ async fn run_probe(
     provider: &dyn ProviderAdapter,
     discovery: &gjd_providers::Discovery,
     model: Option<&str>,
+    effort: Option<Effort>,
     cwd: &std::path::Path,
 ) -> Result<(RunTimings, Option<f64>), gjd_providers::ProviderError> {
     let request = GenerationRequest {
         model: model.map(str::to_owned),
+        effort,
         system_prompt: PROBE_SYSTEM_PROMPT.to_owned(),
         user_prompt: PROBE_PROMPT.to_owned(),
         images: Vec::new(),
@@ -218,7 +230,12 @@ async fn run_probe(
     Ok((output.timings, output.cost_usd))
 }
 
-async fn test(id: ProviderId, runs: u32, model: Option<String>) -> ExitCode {
+async fn test(
+    id: ProviderId,
+    runs: u32,
+    model: Option<String>,
+    effort: Option<Effort>,
+) -> ExitCode {
     let Some(provider) = adapter(id) else {
         eprintln!("{id}: adapter not available in this build");
         return ExitCode::FAILURE;
@@ -247,7 +264,14 @@ async fn test(id: ProviderId, runs: u32, model: Option<String>) -> ExitCode {
     let model = model
         .or_else(|| gjd_daemon::config::provider_model(id))
         .or_else(|| id.fast_model().map(str::to_owned));
-    println!("model {}", model.as_deref().unwrap_or("default"));
+    let effort = effort
+        .or_else(|| gjd_daemon::config::provider_effort(id))
+        .or(Some(Effort::Low));
+    println!(
+        "model {} · effort {}",
+        model.as_deref().unwrap_or("default"),
+        effort.map_or("default", Effort::as_str)
+    );
     let mut ready = Vec::new();
     let mut answer = Vec::new();
     for run in 1..=runs {
@@ -255,6 +279,7 @@ async fn test(id: ProviderId, runs: u32, model: Option<String>) -> ExitCode {
             provider.as_ref(),
             &discovery,
             model.as_deref(),
+            effort,
             workdir.path(),
         )
         .await
@@ -382,9 +407,16 @@ async fn main() -> ExitCode {
         Command::Daemon(DaemonCommand::Stop { project }) => stop_daemon(&project).await,
         Command::Provider(ProviderCommand::List { json: true }) => list_json().await,
         Command::Provider(ProviderCommand::List { json: false }) => list().await,
-        Command::Provider(ProviderCommand::Use { id, model }) => use_provider(id, model.as_deref()),
+        Command::Provider(ProviderCommand::Use { id, model, effort }) => {
+            use_provider(id, model.as_deref(), effort)
+        }
         Command::Provider(ProviderCommand::Models { id, json }) => models(id, json).await,
-        Command::Provider(ProviderCommand::Test { id, runs, model }) => test(id, runs, model).await,
+        Command::Provider(ProviderCommand::Test {
+            id,
+            runs,
+            model,
+            effort,
+        }) => test(id, runs, model, effort).await,
     }
 }
 

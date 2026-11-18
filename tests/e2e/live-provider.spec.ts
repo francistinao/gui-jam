@@ -58,7 +58,7 @@ async function answered(prompt: Locator): Promise<Locator> {
   const alert = prompt.getByRole('alert');
   await expect(tiles.first().or(alert)).toBeVisible({ timeout: ANSWER_MS });
   if (await alert.isVisible()) {
-    throw new Error(`${PROVIDER} did not answer: ${await alert.innerText()}`);
+    throw new Error(`${PROVIDER} did not answer: ${await alert.textContent()}`);
   }
   return tiles;
 }
@@ -134,8 +134,55 @@ test('a real AI tool answers a question about the element without changing it', 
   const alert = prompt.getByRole('alert');
   await expect(answer.or(alert)).toBeVisible({ timeout: ANSWER_MS });
   if (await alert.isVisible()) {
-    throw new Error(`${PROVIDER} did not answer: ${await alert.innerText()}`);
+    throw new Error(`${PROVIDER} did not answer: ${await alert.textContent()}`);
   }
   await expect(answer).toContainText('OrderButton.tsx');
   expect(await fileSnapshot(ORDER_BUTTON)).toEqual(before);
+});
+
+test('a real AI tool builds a new component from a sketch, timed to its first and last variant', async ({
+  page,
+}) => {
+  await openFixture(page, fixture.url);
+  const draw = page.getByRole('toolbar', { name: 'GUIJam' }).getByRole('button', { name: 'Draw' });
+  await draw.click();
+  const anchor = await page.getByRole('button', { name: 'Order now' }).boundingBox();
+  if (!anchor) throw new Error('the button is not visible');
+  const left = anchor.x + 520;
+  const top = anchor.y - 12;
+  await page.mouse.move(left, top + 140);
+  await page.mouse.down();
+  for (const [x, y] of [
+    [left, top],
+    [left + 300, top],
+    [left + 300, top + 140],
+    [left + 4, top + 138],
+  ] as const) {
+    await page.mouse.move(x, y, { steps: 6 });
+  }
+  await page.mouse.up();
+  const dialog = page.getByRole('dialog');
+  await dialog
+    .getByRole('textbox', { name: 'Describe the change' })
+    .fill(
+      "Let's add a falling 8-bit or unicode pattern here and color of it is the main color which is blue. When I hover into it, it must have an effect where the 8-bit pattern ripples in a given radius around the cursor when hovered.",
+    );
+  const started = Date.now();
+  await dialog.getByRole('button', { name: 'Generate' }).click();
+
+  const tiles = await answered(dialog);
+  const first = Date.now() - started;
+  const done = page.getByRole('button', { name: /^Drawing 1: \d variants?$/ });
+  await expect(done).toBeVisible({ timeout: ANSWER_MS });
+  const all = Date.now() - started;
+  const count = await tiles.count();
+  const timing = `${PROVIDER} ${MODEL ?? 'default model'} sketch: first variant ${(first / 1000).toFixed(1)} s, all ${(all / 1000).toFixed(1)} s, ${count} variants`;
+  test.info().annotations.push({ type: 'timing', description: timing });
+  console.log(timing);
+
+  await dialog
+    .getByRole('region', { name: 'Variants' })
+    .getByRole('button', { name: 'Discard' })
+    .click();
+  await expect(done).toHaveCount(0);
 });

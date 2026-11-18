@@ -366,6 +366,7 @@ mod tests {
     fn widget_runs_are_safe_mode_plan_only_and_without_tool_calls() {
         let request = GenerationRequest {
             model: Some("qwen3-coder-plus".to_owned()),
+            effort: None,
             system_prompt: "Be brief.".to_owned(),
             user_prompt: "Element: <button>".to_owned(),
             images: Vec::new(),

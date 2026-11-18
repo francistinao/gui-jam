@@ -5,6 +5,8 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
+use futures_util::StreamExt;
+use futures_util::stream::FuturesUnordered;
 use gjd_core::codemod::{CodemodError, finetune_ops};
 use gjd_core::content_hash;
 use gjd_core::contracts::{
@@ -23,10 +25,10 @@ use gjd_core::style::{Styling, inspect_with};
 use gjd_core::template;
 use gjd_core::theme::Theme;
 use gjd_providers::{
-    AuthStatus, Discovery, GenerationRequest, ImageInput, ProviderAdapter, ProviderError,
+    AuthStatus, Discovery, Effort, GenerationRequest, ImageInput, ProviderAdapter, ProviderError,
     ProviderEvent, ProviderId, ToolPolicy, adapter,
 };
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{Semaphore, mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
 use crate::assets::{self, AssetFile, Format};
@@ -41,9 +43,12 @@ use crate::project::{self, PackageManager, Project};
 use crate::r0;
 use crate::references;
 use crate::route::{self, Tier};
+use crate::run_dir::RunDir;
 use crate::screenshot::{self, Browser};
+use crate::timings;
 
 const UPDATE_TIMEOUT: Duration = Duration::from_secs(5);
+const CLI_SLOTS: usize = 6;
 const AUTH_CACHE: Duration = Duration::from_mins(5);
 const DEFAULT_PROVIDER: ProviderId = ProviderId::ClaudeCode;
 const VERSION_CACHE: Duration = Duration::from_hours(1);
@@ -603,7 +608,33 @@ struct Prepared {
     provider: Box<dyn ProviderAdapter>,
     discovery: Discovery,
     model: Option<String>,
+    effort: Effort,
     progress: Progress,
+}
+
+enum Asked {
+    Answer(String),
+    Variants {
+        variants: Vec<VariantPreview>,
+        dropped: Vec<GenerateDoneDroppedItem>,
+        update: Option<UpdateResult>,
+        first_ms: Option<u64>,
+    },
+}
+
+#[derive(Default)]
+struct Collected {
+    held: Vec<VariantPreview>,
+    dropped: Vec<GenerateDoneDroppedItem>,
+    failures: Vec<Failure>,
+    update: Option<UpdateResult>,
+    first_ms: Option<u64>,
+}
+
+enum Arrival {
+    More,
+    Answer(String),
+    Settled,
 }
 
 struct VariantRun {
@@ -626,6 +657,49 @@ struct Job<'a> {
 impl Job<'_> {
     fn elapsed_ms(&self) -> u64 {
         u64::try_from(self.started.elapsed().as_millis()).unwrap_or(u64::MAX)
+    }
+}
+
+struct RunLabels {
+    route: String,
+    waits: PathBuf,
+    key: String,
+}
+
+fn capture_ms(job: &Job<'_>) -> u64 {
+    job.request
+        .sketch
+        .as_ref()
+        .and_then(|sketch| sketch.capture_ms)
+        .unwrap_or(0)
+}
+
+impl RunLabels {
+    fn first_arrived(&self, job: &Job<'_>) -> u64 {
+        let first = job.elapsed_ms();
+        if let Err(error) = timings::record(&self.waits, &self.key, first + capture_ms(job)) {
+            tracing::warn!(%error, "could not record how long the run took");
+        }
+        first
+    }
+
+    fn variants_ready(
+        &self,
+        job: &Job<'_>,
+        effort: Effort,
+        first_ms: Option<u64>,
+        (variants, dropped): (usize, usize),
+    ) {
+        tracing::info!(
+            run = %self.key,
+            effort = %effort,
+            capture_ms = capture_ms(job),
+            first_variant_ms = first_ms,
+            all_ms = job.elapsed_ms(),
+            variants,
+            dropped,
+            "variants ready"
+        );
     }
 }
 
@@ -750,6 +824,7 @@ pub struct Daemon {
     preview: tokio::sync::Mutex<Option<String>>,
     provider: tokio::sync::Mutex<Option<(ProviderId, Discovery, Instant)>>,
     versions: Mutex<VersionCache>,
+    slots: Semaphore,
     next_id: AtomicU64,
     connections: AtomicUsize,
     last_disconnect: Mutex<Instant>,
@@ -772,6 +847,7 @@ impl Daemon {
             preview: tokio::sync::Mutex::default(),
             provider: tokio::sync::Mutex::default(),
             versions: Mutex::default(),
+            slots: Semaphore::new(CLI_SLOTS),
             next_id: AtomicU64::new(1),
             connections: AtomicUsize::new(0),
             last_disconnect: Mutex::new(Instant::now()),
@@ -1100,7 +1176,7 @@ impl Daemon {
         result
     }
 
-    fn report(&self, progress: &Progress) {
+    fn report(&self, progress: &mut Progress) {
         if let Some(link) = locked(&self.plugin).clone() {
             let _ = link.send(GuijamMessage::GenerateProgress {
                 id: None,
@@ -1124,12 +1200,13 @@ impl Daemon {
         only_if_free: bool,
     ) -> Result<Option<UpdateResult>, Failure> {
         let mut slot = self.preview.lock().await;
-        let holder = slot
+        let held = slot
             .clone()
-            .filter(|holder| holder != run_id && locked(&self.variant_runs).contains_key(holder));
-        if only_if_free && holder.is_some() {
+            .filter(|holder| locked(&self.variant_runs).contains_key(holder));
+        if only_if_free && held.is_some() {
             return Ok(None);
         }
+        let holder = held.filter(|holder| holder != run_id);
         let (file, version, previews, waiting) = {
             let runs = locked(&self.variant_runs);
             let run = runs
@@ -1315,11 +1392,11 @@ impl Daemon {
         match (decision.tier, exact) {
             (Tier::R0, Some(ops)) => self.exact_edit(&job, &ops).await,
             (Tier::R2, _) => {
-                self.generate_with(&job, &generate::R2, decision.notice)
+                self.generate_with(&job, &generate::R2, decision.notice, decision.question)
                     .await
             }
             _ => {
-                self.generate_with(&job, &generate::R1, decision.notice)
+                self.generate_with(&job, &generate::R1, decision.notice, decision.question)
                     .await
             }
         }
@@ -1392,12 +1469,14 @@ impl Daemon {
         job: &Job<'_>,
         tier: &TierConfig,
         notice: Option<&str>,
+        question: bool,
     ) -> Result<GenerateDone, Failure> {
         let file = job.request.file.as_str();
         let Prepared {
             provider,
             discovery,
             model,
+            effort,
             mut progress,
         } = self.prepare(job, tier).await?;
         let provider_name = provider.id().display_name();
@@ -1407,8 +1486,9 @@ impl Daemon {
         let mut images = request_images(job.request);
         images.extend(linked.images);
         let timeout = generate::budget(tier, images.len(), job.links.links.len());
-        let generation = GenerationRequest {
+        let base = GenerationRequest {
             model: model.clone(),
+            effort: Some(effort),
             system_prompt: generate::SYSTEM_PROMPT.to_owned(),
             user_prompt: format!(
                 "{}{references}{}",
@@ -1421,16 +1501,6 @@ impl Daemon {
             cwd: self.project.path().to_path_buf(),
             events: None,
         };
-        let reply = self
-            .ask_reporting(
-                &*provider,
-                &discovery,
-                generation,
-                job.cancel,
-                &mut progress,
-            )
-            .await?;
-        let route_label = format!("{} · {provider_name} {model_label}", tier.label);
         let route = Route {
             tier: tier.tier,
             provider: Some(provider_name.to_owned()),
@@ -1438,41 +1508,51 @@ impl Daemon {
             notice: notice.map(str::to_owned),
         };
         let at = format!("<{}> {file}:{}", job.style.tag, job.request.line);
-        if reply.variants.is_empty() {
-            let answer = reply
-                .answer
-                .map(String::from)
-                .ok_or_else(|| invalid_output("it proposed no variant"))?;
-            return Ok(GenerateDone {
-                run_id: job.request.run_id.clone(),
-                route,
-                summary: format!(
-                    "{} → answered for {at} ({route_label})",
-                    quoted(job.prompt, 60)
-                ),
-                elapsed_ms: job.elapsed_ms(),
-                answer: Some(answer),
-                variants: Vec::new(),
-                dropped: Vec::new(),
-                notes: notes(linked.notes),
-                update: None,
-            });
+        let labels = RunLabels {
+            route: format!("{} · {provider_name} {model_label}", tier.label),
+            waits: RunDir::of(self.project.path()).timings_path(),
+            key: timings::key(provider_name, model_label, tier.label),
+        };
+        if !question {
+            progress.expect(timings::expected(&labels.waits, &labels.key));
         }
-
-        let proposed = reply.variants;
-        let checked = variants_phrase(proposed.len().min(generate::VARIANTS));
-        progress.relabel(Step::Check, format!("Checking {checked}"));
-        progress.start(Step::Check);
-        self.report(&progress);
-        let (variants, dropped, first) = self.check_and_hold(job, proposed, &route_label).await?;
-        progress.start(Step::Preview);
-        self.report(&progress);
-        let update = match first {
-            Some(first) => {
-                self.preview_run(&job.request.run_id, &first, job.cancel)
-                    .await?
+        let route_label = labels.route.as_str();
+        let asked = self
+            .ask_all(
+                (&*provider, &discovery),
+                &base,
+                question,
+                job,
+                &mut progress,
+                &labels,
+            )
+            .await?;
+        let (variants, dropped, update) = match asked {
+            Asked::Answer(answer) => {
+                return Ok(GenerateDone {
+                    run_id: job.request.run_id.clone(),
+                    route,
+                    summary: format!(
+                        "{} → answered for {at} ({route_label})",
+                        quoted(job.prompt, 60)
+                    ),
+                    elapsed_ms: job.elapsed_ms(),
+                    answer: Some(answer),
+                    variants: Vec::new(),
+                    dropped: Vec::new(),
+                    notes: notes(linked.notes),
+                    update: None,
+                });
             }
-            None => None,
+            Asked::Variants {
+                variants,
+                dropped,
+                update,
+                first_ms,
+            } => {
+                labels.variants_ready(job, effort, first_ms, (variants.len(), dropped.len()));
+                (variants, dropped, update)
+            }
         };
         Ok(GenerateDone {
             run_id: job.request.run_id.clone(),
@@ -1488,6 +1568,189 @@ impl Daemon {
             dropped,
             notes: notes(linked.notes),
             update,
+        })
+    }
+
+    async fn ask_all(
+        &self,
+        (provider, discovery): (&dyn ProviderAdapter, &Discovery),
+        base: &GenerationRequest,
+        question: bool,
+        job: &Job<'_>,
+        progress: &mut Progress,
+        labels: &RunLabels,
+    ) -> Result<Asked, Failure> {
+        let name = provider.id().display_name();
+        let directions: Vec<Option<&str>> = if question {
+            vec![None]
+        } else {
+            generate::DIRECTIONS.iter().copied().map(Some).collect()
+        };
+        let (events, mut received) = mpsc::unbounded_channel::<(usize, Option<ProviderEvent>)>();
+        let tokens: Vec<CancellationToken> = directions
+            .iter()
+            .map(|_| job.cancel.child_token())
+            .collect();
+        let mut pending: FuturesUnordered<_> = directions
+            .iter()
+            .enumerate()
+            .map(|(index, direction)| {
+                let mut request = base.clone();
+                if let Some(direction) = direction {
+                    request.user_prompt = format!("{}\n{direction}\n", request.user_prompt);
+                }
+                let (run_events, mut run_received) = mpsc::unbounded_channel();
+                request.events = Some(run_events);
+                let forward = events.clone();
+                let token = &tokens[index];
+                async move {
+                    let _slot = tokio::select! {
+                        slot = self.slots.acquire() => slot.ok(),
+                        () = token.cancelled() => return Err(ProviderError::Cancelled.into()),
+                    };
+                    let _ = forward.send((index, None));
+                    let relay = async {
+                        while let Some(event) = run_received.recv().await {
+                            let _ = forward.send((index, Some(event)));
+                        }
+                    };
+                    let (result, ()) =
+                        tokio::join!(self.ask(provider, discovery, request, token), relay);
+                    result
+                }
+            })
+            .collect();
+        drop(events);
+        let mut latest: Vec<Option<ProviderEvent>> = vec![None; directions.len()];
+        let mut collected = Collected::default();
+        let mut remaining = directions.len();
+        let mut started = 0;
+        let free = self.slots.available_permits().min(directions.len());
+        progress.start(Step::Ask);
+        progress.detail(generate::runs_detail(&latest, free, 0, name));
+        self.report(progress);
+        while remaining > 0 {
+            tokio::select! {
+                Some(result) = pending.next() => {
+                    remaining -= 1;
+                    let arrival = self
+                        .take_arrival(job, labels, result, &mut collected, progress)
+                        .await?;
+                    match arrival {
+                        Arrival::More => {}
+                        Arrival::Answer(answer) => {
+                            tokens.iter().for_each(CancellationToken::cancel);
+                            return Ok(Asked::Answer(answer));
+                        }
+                        Arrival::Settled => {
+                            tokens.iter().for_each(CancellationToken::cancel);
+                            return Err(ProviderError::Cancelled.into());
+                        }
+                    }
+                    progress.arrived(&collected.held, remaining);
+                    progress.detail(generate::runs_detail(&latest, started, collected.held.len(), name));
+                    self.report(progress);
+                }
+                Some((index, event)) = received.recv() => {
+                    match event {
+                        Some(event) => latest[index] = Some(event),
+                        None => started += 1,
+                    }
+                    progress.detail(generate::runs_detail(&latest, started, collected.held.len(), name));
+                    self.report(progress);
+                }
+            }
+        }
+        self.finish_variants(job, collected, progress).await
+    }
+
+    async fn take_arrival(
+        &self,
+        job: &Job<'_>,
+        labels: &RunLabels,
+        result: Result<VariantSet, Failure>,
+        collected: &mut Collected,
+        progress: &mut Progress,
+    ) -> Result<Arrival, Failure> {
+        let run_id = job.request.run_id.as_str();
+        let set = match result {
+            Ok(set) => set,
+            Err(failure) => {
+                collected.dropped.push(GenerateDoneDroppedItem {
+                    label: None,
+                    reason: failure.message.clone(),
+                });
+                collected.failures.push(failure);
+                return Ok(Arrival::More);
+            }
+        };
+        if set.variants.is_empty() {
+            if let Some(answer) = set.answer.filter(|_| collected.held.is_empty()) {
+                return Ok(Arrival::Answer(String::from(answer)));
+            }
+            return Ok(Arrival::More);
+        }
+        let proposed = set.variants.into_iter().take(1).collect();
+        match self.check_and_hold(job, proposed, &labels.route).await {
+            Ok((variants, more, first)) => {
+                if !variants.is_empty() && collected.first_ms.is_none() {
+                    collected.first_ms = Some(labels.first_arrived(job));
+                }
+                collected.dropped.extend(more);
+                collected.held.extend(variants);
+                collected
+                    .held
+                    .sort_by_key(|variant| variant.needs.is_some());
+                if collected.update.is_none()
+                    && let Some(first) = first
+                    && let Some(shown) = self.show_variant(run_id, &first, true).await?
+                {
+                    progress.previewed(shown.clone());
+                    collected.update = Some(shown);
+                }
+            }
+            Err(failure) => collected.dropped.push(GenerateDoneDroppedItem {
+                label: None,
+                reason: failure.message,
+            }),
+        }
+        if !collected.held.is_empty() && !locked(&self.variant_runs).contains_key(run_id) {
+            return Ok(Arrival::Settled);
+        }
+        Ok(Arrival::More)
+    }
+
+    async fn finish_variants(
+        &self,
+        job: &Job<'_>,
+        collected: Collected,
+        progress: &mut Progress,
+    ) -> Result<Asked, Failure> {
+        if job.cancel.is_cancelled() {
+            self.discard_run(&job.request.run_id).await?;
+            return Err(ProviderError::Cancelled.into());
+        }
+        if collected.held.is_empty() {
+            let reasons: Vec<&str> = collected
+                .dropped
+                .iter()
+                .map(|item| item.reason.as_str())
+                .collect();
+            let fallback = if reasons.is_empty() {
+                invalid_output("it proposed no variant")
+            } else {
+                Failure::new(ErrorCode::ProviderInvalidOutput, reasons.join(" "))
+                    .with_action("Retry, or simplify the prompt.")
+            };
+            return Err(collected.failures.into_iter().next().unwrap_or(fallback));
+        }
+        progress.start(Step::Preview);
+        self.report(progress);
+        Ok(Asked::Variants {
+            variants: collected.held,
+            dropped: collected.dropped,
+            update: collected.update,
+            first_ms: collected.first_ms,
         })
     }
 
@@ -1786,7 +2049,7 @@ impl Daemon {
         );
         progress.start(Step::Read);
         progress.detail("Finding your AI tool…".to_owned());
-        self.report(&progress);
+        self.report(&mut progress);
         let (provider, discovery) = self.provider().await?;
         let provider_id = provider.id();
         let provider_name = provider_id.display_name();
@@ -1814,43 +2077,18 @@ impl Daemon {
             ));
         }
         let model = saved.or_else(|| tier.model_for(provider_id).map(str::to_owned));
+        let effort = config::provider_effort(provider_id).unwrap_or(tier.effort);
         let model_label = model.as_deref().unwrap_or("default model");
         progress.relabel(Step::Ask, generate::ask_label(provider_name, model_label));
         progress.detail("Gathering the page, assets and files it needs…".to_owned());
-        self.report(&progress);
+        self.report(&mut progress);
         Ok(Prepared {
             provider,
             discovery,
             model,
+            effort,
             progress,
         })
-    }
-
-    async fn ask_reporting(
-        &self,
-        provider: &dyn ProviderAdapter,
-        discovery: &Discovery,
-        mut generation: GenerationRequest,
-        cancel: &CancellationToken,
-        progress: &mut Progress,
-    ) -> Result<VariantSet, Failure> {
-        let name = provider.id().display_name();
-        let (events, mut received) = mpsc::unbounded_channel();
-        generation.events = Some(events);
-        progress.start(Step::Ask);
-        progress.detail(generate::event_detail(&ProviderEvent::Started, name));
-        self.report(progress);
-        let ask = self.ask(provider, discovery, generation, cancel);
-        tokio::pin!(ask);
-        loop {
-            tokio::select! {
-                reply = &mut ask => return reply,
-                Some(event) = received.recv() => {
-                    progress.detail(generate::event_detail(&event, name));
-                    self.report(progress);
-                }
-            }
-        }
     }
 
     async fn ask(
@@ -1861,7 +2099,27 @@ impl Daemon {
         cancel: &CancellationToken,
     ) -> Result<VariantSet, Failure> {
         let model = request.model.clone();
+        let effort = request.effort;
+        let prompt_chars = request.system_prompt.len() + request.user_prompt.len();
+        let images = request.images.len();
         let result = provider.generate(discovery, request, cancel.clone()).await;
+        if let Ok(output) = &result {
+            let answer_bytes =
+                serde_json::to_string(&output.variant_set).map_or(0, |text| text.len());
+            tracing::info!(
+                provider = %provider.id(),
+                version = %discovery.version,
+                model = model.as_deref().unwrap_or("default"),
+                effort = effort.map_or("default", Effort::as_str),
+                prompt_chars,
+                images,
+                ready_ms = output.timings.ready.map(|ready| ready.as_millis()),
+                answer_ms = output.timings.answer.as_millis(),
+                answer_bytes,
+                cost_usd = output.cost_usd,
+                "the AI tool answered"
+            );
+        }
         if let Err(error) = &result
             && !matches!(error, ProviderError::Cancelled)
         {
@@ -1942,17 +2200,15 @@ impl Daemon {
                 }
             })
             .collect();
-        locked(&self.variant_runs).insert(
-            request.run_id.clone(),
-            VariantRun {
+        locked(&self.variant_runs)
+            .entry(request.run_id.clone())
+            .or_insert_with(|| VariantRun {
                 file: file.clone(),
-                changesets: variants
-                    .iter()
-                    .map(|variant| variant.changeset_id.clone())
-                    .collect(),
+                changesets: Vec::new(),
                 shown: Vec::new(),
-            },
-        );
+            })
+            .changesets
+            .extend(variants.iter().map(|variant| variant.changeset_id.clone()));
         let first = variants
             .first()
             .filter(|variant| variant.needs.is_none())
@@ -2002,7 +2258,7 @@ impl Daemon {
             .await
             .map_err(|error| provider_failure(error, Some(id)))?;
         match provider.check_auth(&discovery).await {
-            AuthStatus::LoggedIn => *ready = Some((id, discovery.clone(), Instant::now())),
+            AuthStatus::LoggedIn => {}
             AuthStatus::NotLoggedIn { login_command } => {
                 return Err(not_authenticated(provider.id(), login_command, None));
             }
@@ -2010,6 +2266,7 @@ impl Daemon {
                 tracing::warn!(%reason, "could not read the provider's login status");
             }
         }
+        *ready = Some((id, discovery.clone(), Instant::now()));
         Ok((provider, discovery))
     }
 

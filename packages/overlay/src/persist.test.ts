@@ -26,6 +26,8 @@ const job = (id: string, status: 'idle' | 'running' | 'ready' = 'ready'): Job =>
       startedAt: null,
       stepSince: null,
       timeoutMs: null,
+      expectedMs: null,
+      waiting: 0,
     },
     previewed: true,
     attachments: [

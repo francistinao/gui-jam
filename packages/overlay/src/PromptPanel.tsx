@@ -161,6 +161,7 @@ export function PromptPanel({ store, controller }: PanelProps) {
   const { prompt, status, steps, error } = generation;
   const answered =
     status === 'ready' && generation.answer !== null && generation.variants.length === 0;
+  const arriving = status === 'running' && generation.variants.length > 0;
   const badge = answered
     ? 'Answer'
     : status === 'ready'
@@ -190,7 +191,7 @@ export function PromptPanel({ store, controller }: PanelProps) {
       ) : null}
       {answered ? (
         <AnswerPanel generation={generation} controller={controller} />
-      ) : status === 'ready' ? (
+      ) : status === 'ready' || arriving ? (
         <VariantsPanel
           generation={generation}
           busy={busy}
@@ -289,6 +290,7 @@ export function PromptPanel({ store, controller }: PanelProps) {
                     sketch: sketched,
                     images: job.attachments.length,
                     links: linksIn(prompt).links.length,
+                    expectedMs: generation.expectedMs,
                   })}
                 </span>
                 <Button

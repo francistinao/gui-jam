@@ -166,6 +166,43 @@ pub struct Capabilities {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Effort {
+    Low,
+    Medium,
+    High,
+}
+
+impl Effort {
+    pub const ALL: [Self; 3] = [Self::Low, Self::Medium, Self::High];
+
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Low => "low",
+            Self::Medium => "medium",
+            Self::High => "high",
+        }
+    }
+}
+
+impl fmt::Display for Effort {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl FromStr for Effort {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        Self::ALL
+            .into_iter()
+            .find(|effort| effort.as_str() == value)
+            .ok_or_else(|| format!("unknown effort `{value}` (expected low, medium or high)"))
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ToolPolicy {
     None,
     ReadOnly,
@@ -188,6 +225,7 @@ pub enum ProviderEvent {
 #[derive(Clone, Debug)]
 pub struct GenerationRequest {
     pub model: Option<String>,
+    pub effort: Option<Effort>,
     pub system_prompt: String,
     pub user_prompt: String,
     pub images: Vec<ImageInput>,

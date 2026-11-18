@@ -37,6 +37,19 @@ const sizeOf = (image) => {
   return null;
 };
 const sketched = text.includes('<sketch');
+const direction = /^Direction: (.*)$/m.exec(text)?.[1] ?? null;
+const slot =
+  direction === null
+    ? null
+    : direction.startsWith('a distinctly different')
+      ? 1
+      : direction.startsWith('the simplest')
+        ? 2
+        : 0;
+const pick = (answer) =>
+  slot === null || !Array.isArray(answer.variants)
+    ? answer
+    : { ...answer, variants: answer.variants[slot] ? [answer.variants[slot]] : [] };
 const field = (block, name) => new RegExp(`^${name}: (.*)$`, 'm').exec(block)?.[1] ?? null;
 const links = [
   ...text.matchAll(/<link url="([^"]*)"((?: \w+="[^"]*")*)>\n([\s\S]*?)<\/link>/g),
@@ -54,6 +67,8 @@ const links = [
 log({
   args,
   request,
+  slot,
+  gitInstructions: process.env.CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS !== '1',
   images: images.map((image) => image.source.media_type),
   imageSizes: images.map(sizeOf),
   inspiration: /<inspiration images="([^"]+)">/.exec(text)?.[1] ?? null,
@@ -65,9 +80,9 @@ log({
 
 print({ type: 'system', subtype: 'init' });
 
-if (/slow/i.test(request)) {
+if (/slow/i.test(request) || (/staggered/i.test(request) && slot === 2)) {
   process.on('SIGINT', () => {
-    log({ interrupted: true });
+    log({ interrupted: true, request, slot });
     process.exit(130);
   });
   setInterval(() => {}, 1000);
@@ -195,84 +210,87 @@ if (/slow/i.test(request)) {
       },
     ],
   };
+  if (slot) await new Promise((resolve) => setTimeout(resolve, slot * 150));
   print({
     type: 'result',
     subtype: 'success',
     is_error: false,
     total_cost_usd: 0,
-    structured_output: /\b3d\b/i.test(request)
-      ? scene
-      : /pricing/i.test(request)
-        ? pricing
-        : sketched
-          ? {
-              variants: [
-                {
-                  ...variant(
-                    cardText,
-                    'Card',
-                    `A card with a ${icon} icon, built from the sketch.`,
-                    '<OrderButton />',
-                    sketchedCard,
-                  ),
-                  ops: [
-                    {
-                      kind: 'replace_snippet',
-                      file,
-                      base_hash: baseHash,
-                      find: "import { Counter } from './components/Counter';",
-                      replace: `import ${icon}Icon from './assets/icons/${icon}-icon.svg';\nimport { Counter } from './components/Counter';`,
-                    },
-                    {
-                      kind: 'replace_snippet',
-                      file,
-                      base_hash: baseHash,
-                      find: '<OrderButton />',
-                      replace: sketchedCard,
-                    },
-                  ],
-                  assets: [
-                    {
-                      name: `${icon}-icon`,
-                      format: 'svg',
-                      svg: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 9h12v5a5 5 0 0 1-5 5H9a5 5 0 0 1-5-5z" fill="#3b2418"/></svg>',
-                    },
-                  ],
-                },
-              ],
-            }
-          : headerImage
+    structured_output: pick(
+      /\b3d\b/i.test(request)
+        ? scene
+        : /pricing/i.test(request)
+          ? pricing
+          : sketched
             ? {
                 variants: [
-                  variant(
-                    'Header image',
-                    'Icon',
-                    'Adds the header image before the label.',
-                    'Order now',
-                    `<img src="${headerImage.replace(/^public/, '')}" alt="" className="size-4" />Order now`,
-                  ),
+                  {
+                    ...variant(
+                      cardText,
+                      'Card',
+                      `A card with a ${icon} icon, built from the sketch.`,
+                      '<OrderButton />',
+                      sketchedCard,
+                    ),
+                    ops: [
+                      {
+                        kind: 'replace_snippet',
+                        file,
+                        base_hash: baseHash,
+                        find: "import { Counter } from './components/Counter';",
+                        replace: `import ${icon}Icon from './assets/icons/${icon}-icon.svg';\nimport { Counter } from './components/Counter';`,
+                      },
+                      {
+                        kind: 'replace_snippet',
+                        file,
+                        base_hash: baseHash,
+                        find: '<OrderButton />',
+                        replace: sketchedCard,
+                      },
+                    ],
+                    assets: [
+                      {
+                        name: `${icon}-icon`,
+                        format: 'svg',
+                        svg: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 9h12v5a5 5 0 0 1-5 5H9a5 5 0 0 1-5-5z" fill="#3b2418"/></svg>',
+                      },
+                    ],
+                  },
                 ],
               }
-            : {
-                variants: [
-                  variant(
-                    'Blue button',
-                    'Solid',
-                    'Swapped the brand fill for blue.',
-                    'bg-brand',
-                    'bg-[#2563EB]',
-                  ),
-                  /invalid/i.test(request)
-                    ? variant('Deep blue', 'Deep', 'A darker blue.', 'bg-nowhere', 'bg-[#1D4ED8]')
-                    : variant('Deep blue', 'Deep', 'A darker blue.', 'bg-brand', 'bg-[#1D4ED8]'),
-                  variant(
-                    'Outline',
-                    'Outline',
-                    'A white button with a blue border.',
-                    'bg-brand',
-                    'border-2 border-[#2563EB] bg-white',
-                  ),
-                ],
-              },
+            : headerImage
+              ? {
+                  variants: [
+                    variant(
+                      'Header image',
+                      'Icon',
+                      'Adds the header image before the label.',
+                      'Order now',
+                      `<img src="${headerImage.replace(/^public/, '')}" alt="" className="size-4" />Order now`,
+                    ),
+                  ],
+                }
+              : {
+                  variants: [
+                    variant(
+                      'Blue button',
+                      'Solid',
+                      'Swapped the brand fill for blue.',
+                      'bg-brand',
+                      'bg-[#2563EB]',
+                    ),
+                    /invalid/i.test(request)
+                      ? variant('Deep blue', 'Deep', 'A darker blue.', 'bg-nowhere', 'bg-[#1D4ED8]')
+                      : variant('Deep blue', 'Deep', 'A darker blue.', 'bg-brand', 'bg-[#1D4ED8]'),
+                    variant(
+                      'Outline',
+                      'Outline',
+                      'A white button with a blue border.',
+                      'bg-brand',
+                      'border-2 border-[#2563EB] bg-white',
+                    ),
+                  ],
+                },
+    ),
   });
 }
