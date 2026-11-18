@@ -408,10 +408,22 @@ struct Checks<'a> {
     root: &'a Path,
 }
 
-fn edits_of(ops: &[EditOp]) -> Vec<EditOp> {
+fn edits_of(ops: &[EditOp], shown: &str) -> Vec<EditOp> {
+    let hash = content_hash(shown.as_bytes());
     ops.iter()
         .filter(|op| !matches!(op, EditOp::CreateFile { .. }))
         .cloned()
+        .map(|mut op| {
+            match &mut op {
+                EditOp::ReplaceSnippet { base_hash, .. }
+                | EditOp::ClassTokens { base_hash, .. }
+                | EditOp::JsxAttr { base_hash, .. }
+                | EditOp::StyleProp { base_hash, .. }
+                | EditOp::RewriteFile { base_hash, .. } => base_hash.clone_from(&hash),
+                EditOp::CreateFile { .. } => {}
+            }
+            op
+        })
         .collect()
 }
 
@@ -481,7 +493,7 @@ fn validate_variants(
     let mut dropped = Vec::new();
     for variant in variants.into_iter().take(generate::VARIANTS) {
         let label = String::from(variant.label.clone());
-        let edits = edits_of(&variant.ops);
+        let edits = edits_of(&variant.ops, current);
         let creates = variant.ops.len() - edits.len();
         let reason = match apply_variant(&edits, file, current) {
             Ok(content) if valid.iter().any(|(_, other, _)| *other == content) => {
@@ -494,7 +506,6 @@ fn validate_variants(
                 }
                 Err(reason) => reason,
             },
-            Err(failure) if failure.code == ErrorCode::StaleBase => return Err(failure),
             Err(_) if edits.is_empty() && creates > 0 => {
                 format!("It creates components but doesn't place them in {file}.")
             }
@@ -688,7 +699,7 @@ impl RunLabels {
         job: &Job<'_>,
         effort: Effort,
         first_ms: Option<u64>,
-        (variants, dropped): (usize, usize),
+        (variants, dropped): (usize, &[GenerateDoneDroppedItem]),
     ) {
         tracing::info!(
             run = %self.key,
@@ -697,9 +708,17 @@ impl RunLabels {
             first_variant_ms = first_ms,
             all_ms = job.elapsed_ms(),
             variants,
-            dropped,
+            dropped = dropped.len(),
             "variants ready"
         );
+        for item in dropped {
+            tracing::info!(
+                run = %self.key,
+                label = item.label.as_deref().unwrap_or("unnamed"),
+                reason = %without_account_ids(&item.reason),
+                "a variant was dropped"
+            );
+        }
     }
 }
 
@@ -1336,11 +1355,12 @@ impl Daemon {
         Some((run_id, run.shown))
     }
 
-    fn held_assets(&self) -> Vec<String> {
+    fn held_assets(&self, except_run: &str) -> Vec<String> {
         let runs = locked(&self.variant_runs);
         let changesets = locked(&self.changesets);
-        runs.values()
-            .flat_map(|run| &run.changesets)
+        runs.iter()
+            .filter(|(run_id, _)| run_id.as_str() != except_run)
+            .flat_map(|(_, run)| &run.changesets)
             .filter_map(|id| changesets.get(id))
             .flat_map(|changeset| changeset.created.iter().map(|asset| asset.path.clone()))
             .collect()
@@ -1550,7 +1570,7 @@ impl Daemon {
                 update,
                 first_ms,
             } => {
-                labels.variants_ready(job, effort, first_ms, (variants.len(), dropped.len()));
+                labels.variants_ready(job, effort, first_ms, (variants.len(), &dropped));
                 (variants, dropped, update)
             }
         };
@@ -1830,7 +1850,7 @@ impl Daemon {
         let file = job.request.file.as_str();
         let existing = self.index.files().await;
         let assets_dir = assets::assets_dir(&existing);
-        let taken = self.held_assets();
+        let taken = self.held_assets(&job.request.run_id);
         let checks = Checks {
             assets_dir: &assets_dir,
             existing: &existing,
@@ -1880,7 +1900,7 @@ impl Daemon {
                 .collect();
             match found {
                 Ok(needs) => {
-                    let ops = edits_of(&variant.ops);
+                    let ops = edits_of(&variant.ops, job.source);
                     held.push((Held::from_variant(variant, files, needs), content, ops));
                 }
                 Err(reason) => dropped.push(GenerateDoneDroppedItem {
@@ -2754,6 +2774,22 @@ mod tests {
     }
 
     #[test]
+    fn a_miscopied_base_hash_still_applies_to_the_source_the_model_was_shown() {
+        let other = SOURCE.replace("p-2", "p-4");
+        let proposed = vec![variant(
+            "Sea",
+            &[snippet(FILE, &other, "bg-brand", "bg-sea")],
+        )];
+
+        let (valid, dropped) =
+            validate_variants(proposed, FILE, SOURCE, &checks(&react(), &[], &[]))
+                .expect("the variant applies");
+
+        assert!(dropped.is_empty(), "{dropped:?}");
+        assert_eq!(valid[0].1, SOURCE.replace("bg-brand", "bg-sea"));
+    }
+
+    #[test]
     fn keeps_variants_that_apply_and_says_why_others_were_dropped() {
         let proposed = vec![
             variant("Sea", &[snippet(FILE, SOURCE, "bg-brand", "bg-sea")]),
@@ -2981,7 +3017,7 @@ mod tests {
     }
 
     #[test]
-    fn fails_when_no_variant_applies_or_the_file_changed() {
+    fn fails_when_no_variant_applies() {
         let lost = vec![variant(
             "Lost",
             &[snippet(FILE, SOURCE, "bg-nowhere", "bg-sky")],
@@ -2989,15 +3025,6 @@ mod tests {
         let failure = validate_variants(lost, FILE, SOURCE, &checks(&react(), &[], &[]))
             .expect_err("none survive");
         assert_eq!(failure.code, ErrorCode::ProviderInvalidOutput);
-
-        let saved = SOURCE.replace("p-2", "p-4");
-        let stale = vec![variant(
-            "Sea",
-            &[snippet(FILE, SOURCE, "bg-brand", "bg-sea")],
-        )];
-        let failure =
-            validate_variants(stale, FILE, &saved, &checks(&react(), &[], &[])).expect_err("stale");
-        assert_eq!(failure.code, ErrorCode::StaleBase);
     }
 
     const FILE: &str = "src/B.tsx";

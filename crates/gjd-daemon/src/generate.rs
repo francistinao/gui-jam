@@ -71,6 +71,10 @@ it. The only other files you may add are new components, with create_file ops, a
 describes.
 - For style changes, prefer one class_tokens op on the element itself, with `at` set to the \
 element's line and column: remove the tokens you replace and add the new ones.
+- `at` points at the element's opening `<`: its line number, and its column counted from 1 at \
+the start of the source line, after the `N | ` prefix.
+- Ops in one variant must not change overlapping text. When two changes touch the same lines, \
+make them one replace_snippet.
 - To set or remove a plain text attribute (title, aria-label, alt, href, type), use one \
 jsx_attr op on the element with `at` set to its line and column and a string `value`, or null \
 to remove it.

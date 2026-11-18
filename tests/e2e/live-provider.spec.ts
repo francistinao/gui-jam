@@ -176,7 +176,9 @@ test('a real AI tool builds a new component from a sketch, timed to its first an
   await expect(done).toBeVisible({ timeout: ANSWER_MS });
   const all = Date.now() - started;
   const count = await tiles.count();
-  const timing = `${PROVIDER} ${MODEL ?? 'default model'} sketch: first variant ${(first / 1000).toFixed(1)} s, all ${(all / 1000).toFixed(1)} s, ${count} variants`;
+  const note = dialog.getByText(/variants? (was|were) dropped/);
+  const dropped = (await note.count()) > 0 ? ` (${await note.textContent()})` : '';
+  const timing = `${PROVIDER} ${MODEL ?? 'default model'} sketch: first variant ${(first / 1000).toFixed(1)} s, all ${(all / 1000).toFixed(1)} s, ${count} variants${dropped}`;
   test.info().annotations.push({ type: 'timing', description: timing });
   console.log(timing);
 

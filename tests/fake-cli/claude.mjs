@@ -223,40 +223,38 @@ if (/slow/i.test(request) || (/staggered/i.test(request) && slot === 2)) {
           ? pricing
           : sketched
             ? {
-                variants: [
-                  {
-                    ...variant(
-                      cardText,
-                      'Card',
-                      `A card with a ${icon} icon, built from the sketch.`,
-                      '<OrderButton />',
-                      sketchedCard,
-                    ),
-                    ops: [
-                      {
-                        kind: 'replace_snippet',
-                        file,
-                        base_hash: baseHash,
-                        find: "import { Counter } from './components/Counter';",
-                        replace: `import ${icon}Icon from './assets/icons/${icon}-icon.svg';\nimport { Counter } from './components/Counter';`,
-                      },
-                      {
-                        kind: 'replace_snippet',
-                        file,
-                        base_hash: baseHash,
-                        find: '<OrderButton />',
-                        replace: sketchedCard,
-                      },
-                    ],
-                    assets: [
-                      {
-                        name: `${icon}-icon`,
-                        format: 'svg',
-                        svg: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 9h12v5a5 5 0 0 1-5 5H9a5 5 0 0 1-5-5z" fill="#3b2418"/></svg>',
-                      },
-                    ],
-                  },
-                ],
+                variants: Array.from({ length: /\btwin\b/i.test(request) ? 2 : 1 }, () => ({
+                  ...variant(
+                    cardText,
+                    'Card',
+                    `A card with a ${icon} icon, built from the sketch.`,
+                    '<OrderButton />',
+                    sketchedCard,
+                  ),
+                  ops: [
+                    {
+                      kind: 'replace_snippet',
+                      file,
+                      base_hash: baseHash,
+                      find: "import { Counter } from './components/Counter';",
+                      replace: `import ${icon}Icon from './assets/icons/${icon}-icon.svg';\nimport { Counter } from './components/Counter';`,
+                    },
+                    {
+                      kind: 'replace_snippet',
+                      file,
+                      base_hash: baseHash,
+                      find: '<OrderButton />',
+                      replace: sketchedCard,
+                    },
+                  ],
+                  assets: [
+                    {
+                      name: `${icon}-icon`,
+                      format: 'svg',
+                      svg: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 9h12v5a5 5 0 0 1-5 5H9a5 5 0 0 1-5-5z" fill="#3b2418"/></svg>',
+                    },
+                  ],
+                })),
               }
             : headerImage
               ? {

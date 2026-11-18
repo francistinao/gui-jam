@@ -148,6 +148,18 @@ test('a stray stroke while a drawing generates opens a draft that Escape removes
   await discardAll(page);
 });
 
+test('two variants of one drawing may add the same new file', async ({ page }) => {
+  const { left, top } = await startDrawing(page);
+  await box(page, left, top);
+  const dialog = page.getByRole('dialog');
+  await generate(dialog, 'a cup card, twin');
+
+  await expect(badge(page, 'Drawing 1: 2 variants')).toBeVisible({ timeout: READY_MS });
+  await expect(dialog.getByText(/dropped/)).toHaveCount(0);
+
+  await discardAll(page);
+});
+
 test('three drawings generate at once and a fourth is refused', async ({ page }) => {
   const { left, top } = await startDrawing(page);
   const requests = ['a cup card, linger', 'a star card, linger', 'a leaf card, linger'];
