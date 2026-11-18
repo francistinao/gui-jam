@@ -115,6 +115,15 @@ impl ProcessTree {
     }
 }
 
+#[cfg(unix)]
+impl Drop for ProcessTree {
+    fn drop(&mut self) {
+        if matches!(self.child.try_wait(), Ok(None)) {
+            let _ = killpg(self.group, Signal::SIGKILL);
+        }
+    }
+}
+
 #[cfg(windows)]
 impl ProcessTree {
     pub fn spawn(command: Command) -> io::Result<Self> {
@@ -156,5 +165,44 @@ impl ProcessTree {
     pub async fn terminate(&mut self) {
         self.kill();
         let _ = self.wait().await;
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use std::process::Stdio;
+    use std::time::{Duration, Instant};
+
+    use nix::sys::signal::kill;
+    use nix::unistd::Pid;
+    use tokio::io::{AsyncBufReadExt, BufReader};
+
+    use super::{ProcessTree, command};
+
+    #[tokio::test]
+    async fn dropping_a_running_tree_stops_the_process_and_its_children() {
+        let mut shell = command("sh");
+        shell
+            .args(["-c", "sleep 30 & echo $!; wait"])
+            .stdout(Stdio::piped());
+        let mut tree = ProcessTree::spawn(shell).expect("spawn sh");
+        let mut lines = BufReader::new(tree.stdout().expect("stdout")).lines();
+        let child: i32 = lines
+            .next_line()
+            .await
+            .expect("read")
+            .expect("a pid line")
+            .parse()
+            .expect("a pid");
+        let child = Pid::from_raw(child);
+        assert!(kill(child, None).is_ok(), "the child runs before the drop");
+
+        drop(tree);
+
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while kill(child, None).is_ok() && Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert!(kill(child, None).is_err(), "the child outlived the drop");
     }
 }

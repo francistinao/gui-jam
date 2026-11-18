@@ -1,6 +1,7 @@
-import { spawn } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { mkdir, open, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { promisify } from 'node:util';
 import type { GuijamMessage } from '@guijam/contracts-ts';
 
 const PROTOCOL_VERSION = 1;
@@ -9,12 +10,16 @@ const SPAWN_WAIT_MS = 3_000;
 const SPAWN_POLL_MS = 25;
 const RECONNECT_MIN_MS = 100;
 const RECONNECT_MAX_MS = 5_000;
+const COMMAND_TIMEOUT_MS = 10_000;
+
+const run = promisify(execFile);
 
 interface DaemonInfo {
   pid: number;
   port: number;
   token: string;
   protocol: number;
+  version?: unknown;
 }
 
 export interface DaemonClientOptions {
@@ -88,6 +93,7 @@ export class DaemonClient {
   #stopped = false;
   #outageReported = false;
   #unreachablePid: number | undefined;
+  #binaryVersion: Promise<string | undefined> | undefined;
 
   constructor(options: DaemonClientOptions) {
     this.#options = options;
@@ -161,7 +167,11 @@ export class DaemonClient {
   async #daemonInfo(): Promise<DaemonInfo> {
     const existing = await this.#readInfo();
     const alive = existing !== undefined && isAlive(existing.pid);
-    if (existing && alive && existing.pid !== this.#unreachablePid) return existing;
+    if (existing && alive && existing.pid !== this.#unreachablePid) {
+      const bundled = await this.#bundledVersion();
+      if (bundled === undefined || existing.version === bundled) return existing;
+      await this.#command(['daemon', 'stop', '--project', this.#options.root]);
+    }
     await this.#spawnDaemon();
     const deadline = Date.now() + SPAWN_WAIT_MS;
     while (Date.now() < deadline) {
@@ -169,7 +179,7 @@ export class DaemonClient {
       if (info && info.pid !== existing?.pid) return info;
       await new Promise((resolve) => setTimeout(resolve, SPAWN_POLL_MS));
     }
-    if (existing && alive) {
+    if (existing && isAlive(existing.pid)) {
       this.#unreachablePid = undefined;
       return existing;
     }
@@ -180,6 +190,25 @@ export class DaemonClient {
     try {
       const parsed: unknown = JSON.parse(await readFile(this.#infoPath, 'utf8'));
       return isDaemonInfo(parsed) && parsed.protocol === PROTOCOL_VERSION ? parsed : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  #bundledVersion(): Promise<string | undefined> {
+    this.#binaryVersion ??= this.#command(['--version']).then(
+      (output) => /^gjd (\S+)$/.exec(output?.trim() ?? '')?.[1],
+    );
+    return this.#binaryVersion;
+  }
+
+  async #command(args: string[]): Promise<string | undefined> {
+    try {
+      const { stdout } = await run(this.#options.binary, args, {
+        timeout: COMMAND_TIMEOUT_MS,
+        windowsHide: true,
+      });
+      return stdout;
     } catch {
       return undefined;
     }

@@ -65,6 +65,7 @@ const links = [
   text: /^Text:\n([\s\S]*)$/.exec(body.slice(body.indexOf('Text:\n')))?.[1]?.trim() ?? null,
 }));
 log({
+  pid: process.pid,
   args,
   request,
   slot,
