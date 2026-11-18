@@ -61,6 +61,7 @@ Run these in your app's folder.
 | `npx guijam provider list` | Lists the AI coding CLIs GUIJam can drive, and whether each is installed and logged in. |
 | `npx guijam provider use <id>` | Switches the AI tool: `claude-code`, `codex`, `opencode`, `qwen-code` or `gemini-cli`. |
 | `npx guijam provider use opencode --model <id>` | With OpenCode, also picks the model, such as `deepseek/deepseek-chat`. |
+| `npx guijam provider use <id> --effort <level>` | Fixes how hard the AI tool thinks: `low`, `medium` or `high`. Without it, GUIJam uses low for small edits and questions and medium for sketches and open-ended changes. Claude Code and Codex use it. |
 | `npx guijam --help` | Shows every command and option. |
 
 Options for `init`:
@@ -127,11 +128,11 @@ With Laravel's `@vite` directive, Inertia, or any server that renders the HTML i
 - **Source-mapped elements.** Every element knows the file, line and column that rendered it, in JSX, Vue, Svelte and Astro templates, including polymorphic components such as `asChild` buttons and Vue component usages.
 - **Live previews, never written early.** Previews are served from memory through Vite's module graph or, in Next.js, through files GUIJam keeps in `.guijam/`. Switching between variants never changes your source files.
 - **Fine-tune like a design tool.** The panel reads the element's real classes and styles, prefers your theme tokens, and writes a one-line change.
-- **Three variants per request.** One call to your CLI returns three takes on the request, with live progress while it works.
+- **Three variants per request, as they arrive.** GUIJam asks your CLI for three takes at once, one per run, and shows each the moment it is ready. The first one previews right away; you can switch, Use or Discard before the others land. The wait it quotes comes from your own recent runs with the same tool and model.
 - **Exact edits without AI.** Prompts like "make it blue and pill-shaped" become a precise edit instantly, with no model call. Ask for AI variations when you want them.
 - **Answers, not just edits.** Ask about an element and get an answer that points at the files involved.
 - **References across the page.** "Use the image from the navbar here" works, because GUIJam indexes your project's assets and the page you are looking at.
-- **Sketch to UI.** Rough out a layout or an icon. GUIJam sends the sketch and a screenshot of the page, then places the new markup in the right component, split into atoms, molecules and organisms when your project has components.
+- **Sketch to UI.** Rough out a layout or an icon. GUIJam sends the sketch and a screenshot of the page, then places the new markup in the right component. A self-contained piece becomes one component file, split into atoms and molecules only when its parts are reused.
 - **Inspiration and links.** Paste or drop images next to your prompt, or paste a link: GUIJam reads the page's text, colors and fonts, and takes a screenshot with your installed Chromium browser.
 - **3D and motion when asked.** Requests that need three.js, Motion or GSAP can use them, after you approve the install.
 - **Safe writes.** Edits are journaled with the exact previous bytes, conflicts with your own unsaved work are refused, and undo restores files exactly.

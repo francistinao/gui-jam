@@ -15,7 +15,8 @@ Commands
   doctor --probe       Also send one short test request to the AI tool
                        (spends a few tokens)
   provider list        List the AI coding CLIs GUIJam can drive
-  provider use <id>    Choose the CLI GUIJam drives
+  provider use <id>    Choose the CLI GUIJam drives; add --model <id> to pick its
+                       model, or --effort low|medium|high to fix how hard it thinks
 
 Options
   -y, --yes            Use the defaults instead of asking
