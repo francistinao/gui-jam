@@ -285,9 +285,7 @@ fn without_account_ids(text: &str) -> String {
 
 fn said(text: &str) -> Option<String> {
     let line = text.lines().map(str::trim).rfind(|line| {
-        line.chars().any(char::is_alphabetic)
-            && !line.starts_with("at ")
-            && !line.starts_with(['{', '}', '[', ']'])
+        line.chars().any(char::is_alphabetic) && !line.starts_with("at ") && !line.starts_with('{')
     })?;
     let line = line.trim_end_matches('.');
     Some(match line.char_indices().nth(SAID_LIMIT) {
@@ -2447,6 +2445,17 @@ mod tests {
                 "see https://opencode.ai/console/org_ABC123/models in ses_9x, org_"
             ),
             "see https://opencode.ai/console/org_redacted/models in ses_redacted, org_"
+        );
+        let no_plan = provider_failure(
+            ProviderError::Failed(
+                "[API Error: membership required: upgrade to plus or pro (request_id: x)]"
+                    .to_owned(),
+            ),
+            Some(ProviderId::QwenCode),
+        );
+        assert_eq!(
+            no_plan.message,
+            "Qwen Code couldn't answer: [API Error: membership required: upgrade to plus or pro (request_id: x)]."
         );
         assert_eq!(silent.message, "Codex isn't logged in.");
         assert_eq!(
