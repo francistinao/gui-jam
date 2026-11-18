@@ -57,6 +57,7 @@ Run these in your app's folder.
 |---|---|
 | `npx guijam init` | Sets up GUIJam: adds the package, wires your framework's config, and picks your AI tool and logs it in. Safe to run again. |
 | `npx guijam doctor` | Checks Node, your framework, the config wiring, the `gjd` daemon and your AI tool's login. |
+| `npx guijam doctor --probe` | Also sends one short test request to your AI tool, to show it answers. Spends a few tokens. |
 | `npx guijam provider list` | Lists the AI coding CLIs GUIJam can drive, and whether each is installed and logged in. |
 | `npx guijam provider use <id>` | Switches the AI tool: `claude-code`, `codex`, `opencode`, `qwen-code` or `gemini-cli`. |
 | `npx guijam provider use opencode --model <id>` | With OpenCode, also picks the model, such as `deepseek/deepseek-chat`. |
@@ -112,7 +113,10 @@ GUIJam keeps its run state, logs and undo journal in `.guijam/` in your project.
 
 - Node `^20.19.0` or `>=22.12.0` on macOS (Apple silicon or Intel), Linux (x64 or arm64) or Windows (x64). SolidStart 2 itself needs Node 24.
 - One of the frameworks above.
-- An AI coding CLI, installed and logged in: [Claude Code](https://claude.com/claude-code), [Codex](https://github.com/openai/codex) or [OpenCode](https://opencode.ai). OpenCode reaches DeepSeek, GLM and many other models with your own key. [Qwen Code](https://github.com/QwenLM/qwen-code) and [Gemini CLI](https://github.com/google-gemini/gemini-cli) are supported too, but haven't been verified live yet. `init` helps you pick one and log in.
+- An AI coding CLI, installed and logged in: [Claude Code](https://claude.com/claude-code), [Codex](https://github.com/openai/codex), [OpenCode](https://opencode.ai), [Gemini CLI](https://github.com/google-gemini/gemini-cli) or [Qwen Code](https://github.com/QwenLM/qwen-code). `init` helps you pick one and log in, and `npx guijam doctor --probe` shows whether it answers.
+  - OpenCode needs a key for the model you pick, added with `opencode auth login` (for example DeepSeek, OpenRouter or OpenCode Zen). OpenCode's free `opencode/*` models only answer OpenCode itself, and an OpenCode Zen model must be switched on in the Zen console, with credit.
+  - Gemini CLI needs a `GEMINI_API_KEY` (from [AI Studio](https://aistudio.google.com/apikey)) chosen with `gemini`, then `/auth`, then "Use Gemini API Key". Google no longer serves Gemini CLI to a personal Google login. GUIJam uses `gemini-3-flash-preview` unless you pick another model with `npx guijam provider use gemini-cli --model <id>`.
+  - Qwen Code needs a Qwen plan or another provider's key, set with `qwen`, then `/auth`. Qwen's free OAuth tier ended on 2026-04-15.
 
 ### Pages rendered by a backend
 
@@ -214,6 +218,7 @@ scripts/gate.sh
 | `scripts/release-local.sh build\|publish <version>` | Builds or publishes a release from a Mac when GitHub Actions is unavailable |
 | `cargo run -p gjd-daemon -- provider list` | Lists the AI CLIs as the daemon sees them |
 | `cargo run -p gjd-daemon -- provider test claude-code --runs 5` | Runs a real CLI five times and reports timings (spends tokens) |
+| `GUIJAM_LIVE_PROVIDER=<id> pnpm exec playwright test tests/e2e/live-provider.spec.ts` | Runs a real Draw and a question through the widget with a real AI tool; `GUIJAM_LIVE_MODEL` picks the model (spends tokens) |
 
 | Path | What it is |
 |---|---|
