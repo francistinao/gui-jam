@@ -305,7 +305,7 @@ fn not_authenticated(provider: ProviderId, login_command: &str, detail: Option<&
     let model_off = detail.is_some_and(|detail| detail.to_lowercase().contains("model access"));
     let api_key = detail.is_some_and(|detail| detail.contains("GEMINI_API_KEY"));
     let action = if api_key {
-        "Set GEMINI_API_KEY in the terminal that starts your dev server, restart it, then retry."
+        "Set GEMINI_API_KEY where your dev server starts, choose it in Gemini CLI with /auth, restart the dev server, then retry."
             .to_owned()
     } else if model_off {
         "Turn this model on at that link, or pick another model with npx guijam init. Then retry."

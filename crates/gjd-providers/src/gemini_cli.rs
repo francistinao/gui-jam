@@ -19,7 +19,7 @@ const BINARY: &str = "gemini";
 const LOGIN_COMMAND: &str = "gemini";
 const QUERY_TIMEOUT: Duration = Duration::from_secs(20);
 const NO_AUTH_EXIT: i32 = 41;
-const GOOGLE_LOGIN_RETIRED: &str = "Google no longer lets Gemini CLI use a personal Google login (IneligibleTierError). Set GEMINI_API_KEY to a key from https://aistudio.google.com/apikey, or use Vertex AI";
+const GOOGLE_LOGIN_RETIRED: &str = "Google no longer lets Gemini CLI use a personal Google login (IneligibleTierError). Set GEMINI_API_KEY to a key from https://aistudio.google.com/apikey and choose it in Gemini CLI (run `gemini`, then /auth, then Use Gemini API Key), or use Vertex AI";
 const NO_MCP_SERVER: &str = "guijam-none";
 const DENY_ALL_POLICY: &str = "[[rule]]\ntoolName = \"*\"\ndecision = \"deny\"\npriority = 999\ndenyMessage = \"GUIJam runs have no tools.\"\n";
 

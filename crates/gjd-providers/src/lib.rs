@@ -29,6 +29,8 @@ pub use gemini_cli::GeminiCli;
 pub use opencode::OpenCode;
 pub use qwen_code::QwenCode;
 
+const GEMINI_MODEL: &str = "gemini-3-flash-preview";
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ProviderId {
     ClaudeCode,
@@ -74,7 +76,8 @@ impl ProviderId {
         match self {
             Self::ClaudeCode => Some("haiku"),
             Self::Codex => Some("gpt-6-luna"),
-            Self::OpenCode | Self::QwenCode | Self::GeminiCli => None,
+            Self::GeminiCli => Some(GEMINI_MODEL),
+            Self::OpenCode | Self::QwenCode => None,
         }
     }
 
@@ -82,7 +85,8 @@ impl ProviderId {
     pub fn standard_model(self) -> Option<&'static str> {
         match self {
             Self::ClaudeCode => Some("sonnet"),
-            Self::Codex | Self::OpenCode | Self::QwenCode | Self::GeminiCli => None,
+            Self::GeminiCli => Some(GEMINI_MODEL),
+            Self::Codex | Self::OpenCode | Self::QwenCode => None,
         }
     }
 
