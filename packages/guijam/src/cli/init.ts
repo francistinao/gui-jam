@@ -8,10 +8,13 @@ import {
   listModels,
   listProviders,
   type ModelInfo,
+  needsProbe,
   type ProviderInfo,
+  probeProvider,
   providerHint,
   rankModels,
   runAttached,
+  usableModels,
   useProvider,
 } from './gjd.js';
 import { PWA_HINT, projectRunsDevServiceWorker } from './pwa.js';
@@ -238,7 +241,7 @@ async function ensureReady(
 
 async function loadModels(gjd: string, provider: ProviderInfo): Promise<ModelInfo[]> {
   try {
-    return rankModels(await listModels(gjd, provider.id));
+    return rankModels(usableModels(await listModels(gjd, provider.id)));
   } catch (error) {
     log.warn(`Could not list the ${provider.name} models: ${messageOf(error)}`);
     return [];
@@ -301,6 +304,29 @@ async function modelStep(gjd: string, provider: ProviderInfo, options: InitOptio
   }
 }
 
+async function probeStep(
+  gjd: string,
+  provider: ProviderInfo,
+  options: InitOptions,
+): Promise<boolean> {
+  const run = await offer(
+    options,
+    `Send ${provider.name} one short test request now? It spends a few tokens and shows whether GUIJam can use it.`,
+    `Check ${provider.name} any time with ${options.highlight('npx guijam doctor --probe')}`,
+  );
+  if (!run) return false;
+  const progress = spinner();
+  progress.start(`Asking ${provider.name} for a short answer`);
+  const probe = await probeProvider(gjd, provider.id);
+  if (probe.ok) {
+    progress.stop(`${provider.name} ${probe.summary}`);
+    return true;
+  }
+  progress.error(`${provider.name} failed the test request`);
+  log.error(probe.summary);
+  return false;
+}
+
 async function providerStep(options: InitOptions): Promise<boolean> {
   const { gjd } = options;
   if (gjd === undefined) {
@@ -312,6 +338,9 @@ async function providerStep(options: InitOptions): Promise<boolean> {
   log.success(`GUIJam will drive ${chosen.name}`);
   const provider = await ensureReady(gjd, chosen, options);
   if (provider.installed) await modelStep(gjd, provider, options);
+  if (provider.installed && needsProbe(provider) && provider.auth !== 'not_logged_in') {
+    if (await probeStep(gjd, provider, options)) return true;
+  }
   if (provider.auth === 'logged_in') {
     log.success(`${provider.name} is logged in`);
     return true;

@@ -3,6 +3,7 @@ mod codex;
 mod error;
 mod gemini_cli;
 mod opencode;
+mod opencode_config;
 mod process;
 mod qwen_code;
 mod schema;

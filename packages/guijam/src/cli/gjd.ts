@@ -5,6 +5,8 @@ import { spawnTool } from './spawn-tool.js';
 const run = promisify(execFile);
 
 const LIST_TIMEOUT_MS = 60_000;
+const PROBE_TIMEOUT_MS = 180_000;
+const PROBED = new Set(['opencode', 'qwen-code', 'gemini-cli']);
 
 export type AuthState = 'logged_in' | 'not_logged_in' | 'unknown';
 
@@ -102,6 +104,10 @@ export async function listModels(gjd: string, id: string): Promise<ModelInfo[]> 
 
 const PREFERRED_PROVIDERS = ['deepseek', 'zai', 'zhipuai'];
 
+export function usableModels(models: readonly ModelInfo[]): ModelInfo[] {
+  return models.filter((model) => !(model.free && model.id.startsWith('opencode/')));
+}
+
 export function rankModels(models: readonly ModelInfo[]): ModelInfo[] {
   const rank = (model: ModelInfo): number => {
     const provider = model.id.split('/', 1)[0] ?? '';
@@ -114,6 +120,34 @@ export function rankModels(models: readonly ModelInfo[]): ModelInfo[] {
 
 export async function useProvider(gjd: string, id: string, model?: string): Promise<void> {
   await run(gjd, ['provider', 'use', id, ...(model === undefined ? [] : ['--model', model])]);
+}
+
+export interface ProbeResult {
+  ok: boolean;
+  summary: string;
+}
+
+export function probeSummary(stdout: string, stderr: string): ProbeResult {
+  const run = /^run 1: ready (\S+) ms · answer (\d+) ms/m.exec(stdout);
+  if (run) return { ok: true, summary: `answered in ${(Number(run[2]) / 1000).toFixed(1)} s` };
+  const failure = /^run 1: (.+)$/m.exec(stderr) ?? /^\S+: (.+)$/m.exec(stderr);
+  return { ok: false, summary: failure?.[1]?.trim() || stderr.trim() || 'no answer' };
+}
+
+export function needsProbe(provider: ProviderInfo): boolean {
+  return PROBED.has(provider.id);
+}
+
+export async function probeProvider(gjd: string, id: string): Promise<ProbeResult> {
+  try {
+    const { stdout, stderr } = await run(gjd, ['provider', 'test', id, '--runs', '1'], {
+      timeout: PROBE_TIMEOUT_MS,
+    });
+    return probeSummary(stdout, stderr);
+  } catch (error) {
+    const output = error as { stdout?: string; stderr?: string; message?: string };
+    return probeSummary(output.stdout ?? '', output.stderr ?? output.message ?? '');
+  }
 }
 
 export async function gjdVersion(gjd: string): Promise<string> {

@@ -7,10 +7,11 @@ use async_trait::async_trait;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use serde::Deserialize;
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 
+use crate::opencode_config::user_settings;
 use crate::process::{EventFold, ProviderProcess, Signals, SpawnOptions, run_to_answer};
 use crate::text_answer::{TextRun, generate_with_retry};
 use crate::{
@@ -22,7 +23,6 @@ const BINARY: &str = "opencode";
 const LOGIN_COMMAND: &str = "opencode auth login";
 const AGENT: &str = "guijam";
 const QUERY_TIMEOUT: Duration = Duration::from_secs(30);
-const FREE_TIER_SINCE: (u64, u64) = (1, 18);
 const READ_ONLY_TOOLS: [&str; 3] = ["read", "glob", "grep"];
 
 pub struct OpenCode;
@@ -82,16 +82,39 @@ struct OpenCodeStream {
     signals: Signals,
 }
 
-fn not_authenticated() -> ProviderError {
+fn not_authenticated(message: &str) -> ProviderError {
     ProviderError::NotAuthenticated {
         provider: ProviderId::OpenCode,
         login_command: LOGIN_COMMAND,
+        detail: Some(message.to_owned()),
     }
 }
 
+fn out_of_credit(message: &str) -> bool {
+    let lower = message.to_lowercase();
+    [
+        "insufficient balance",
+        "insufficient credit",
+        "credits",
+        "billing",
+        "payment",
+    ]
+    .iter()
+    .any(|phrase| lower.contains(phrase))
+}
+
+fn no_credit(message: &str) -> ProviderError {
+    ProviderError::Failed(format!(
+        "{message}. Add credit to the account behind this model, or pick another model with: npx guijam init"
+    ))
+}
+
 fn classify(status: Option<u16>, message: &str) -> ProviderError {
+    if status == Some(402) || out_of_credit(message) {
+        return no_credit(message);
+    }
     match status {
-        Some(401 | 403) => not_authenticated(),
+        Some(401 | 403) => not_authenticated(message),
         Some(429) => ProviderError::RateLimited,
         Some(503 | 529) => ProviderError::Overloaded,
         Some(426) => ProviderError::Failed(format!(
@@ -124,14 +147,21 @@ fn logged_error(line: &str) -> Option<String> {
 
 fn classify_logged(message: &str) -> Option<ProviderError> {
     let lower = message.to_lowercase();
-    if lower.contains("usage limit") || lower.contains("rate limit") || lower.contains("429") {
+    if lower.contains("free usage limit") || lower.contains("free models work in opencode") {
+        Some(ProviderError::Failed(format!(
+            "{message}. OpenCode's free models only answer OpenCode's own agents, not tools like GUIJam. Pick a model you have a key or plan for with: npx guijam init"
+        )))
+    } else if lower.contains("usage limit") || lower.contains("rate limit") || lower.contains("429")
+    {
         Some(ProviderError::RateLimited)
+    } else if out_of_credit(message) || lower.contains("402") {
+        Some(no_credit(message))
     } else if lower.contains("401")
         || lower.contains("unauthorized")
         || lower.contains("api key")
         || lower.contains("authentication")
     {
-        Some(not_authenticated())
+        Some(not_authenticated(message))
     } else if lower.contains("model is unavailable")
         || lower.contains("model not found")
         || lower.contains("or newer is required")
@@ -202,7 +232,16 @@ impl EventFold for OpenCodeStream {
     }
 }
 
-fn agent_config(system_prompt: &str, tools: ToolPolicy) -> String {
+fn carried_config(settings: &Map<String, Value>) -> Option<(String, String)> {
+    (!settings.is_empty()).then(|| {
+        (
+            "OPENCODE_CONFIG_CONTENT".to_owned(),
+            Value::Object(settings.clone()).to_string(),
+        )
+    })
+}
+
+fn agent_config(system_prompt: &str, tools: ToolPolicy, settings: &Map<String, Value>) -> String {
     let mut permission = serde_json::Map::new();
     permission.insert("*".to_owned(), json!("deny"));
     if tools == ToolPolicy::ReadOnly {
@@ -210,7 +249,8 @@ fn agent_config(system_prompt: &str, tools: ToolPolicy) -> String {
             permission.insert(tool.to_owned(), json!("allow"));
         }
     }
-    json!({
+    let mut config = settings.clone();
+    let locked = json!({
         "$schema": "https://opencode.ai/config.json",
         "agent": {
             AGENT: {
@@ -225,8 +265,11 @@ fn agent_config(system_prompt: &str, tools: ToolPolicy) -> String {
         "instructions": [],
         "share": "disabled",
         "autoupdate": false,
-    })
-    .to_string()
+    });
+    if let Value::Object(locked) = locked {
+        config.extend(locked);
+    }
+    Value::Object(config).to_string()
 }
 
 fn isolated_env(config_home: &Path) -> Vec<(String, String)> {
@@ -354,14 +397,6 @@ fn configured_sources(auth_list: &str) -> Option<u64> {
     total
 }
 
-fn version_at_least(version: &str, (major, minor): (u64, u64)) -> bool {
-    let mut parts = version
-        .split('.')
-        .map(|part| part.parse::<u64>().unwrap_or(0));
-    let found = (parts.next().unwrap_or(0), parts.next().unwrap_or(0));
-    found >= (major, minor)
-}
-
 fn model_info(id: String, body: &str) -> Option<ModelInfo> {
     let meta = serde_json::from_str::<Value>(body).ok()?;
     if meta.get("status").and_then(Value::as_str) == Some("deprecated") {
@@ -402,12 +437,9 @@ fn parse_models(verbose: &str) -> Vec<ModelInfo> {
 impl OpenCode {
     async fn list_models(&self, discovery: &Discovery) -> Result<Vec<ModelInfo>, ProviderError> {
         let home = tempfile::tempdir()?;
-        let stdout = query(
-            &discovery.binary,
-            &["models", "--verbose"],
-            &isolated_env(home.path()),
-        )
-        .await?;
+        let mut env = isolated_env(home.path());
+        env.extend(carried_config(&user_settings()));
+        let stdout = query(&discovery.binary, &["models", "--verbose"], &env).await?;
         Ok(parse_models(&stdout))
     }
 
@@ -424,7 +456,7 @@ impl OpenCode {
         let mut env = isolated_env(&config_home);
         env.push((
             "OPENCODE_CONFIG_CONTENT".to_owned(),
-            agent_config(&request.system_prompt, request.tools),
+            agent_config(&request.system_prompt, request.tools, &user_settings()),
         ));
         let process = ProviderProcess::spawn_with(
             &binary,
@@ -486,12 +518,6 @@ impl ProviderAdapter for OpenCode {
         };
         match configured_sources(&listed) {
             Some(count) if count > 0 => AuthStatus::LoggedIn,
-            Some(_) if version_at_least(&discovery.version, FREE_TIER_SINCE) => {
-                AuthStatus::Unknown {
-                    reason: "no provider key yet, so only OpenCode's free models will answer"
-                        .to_owned(),
-                }
-            }
             Some(_) => AuthStatus::NotLoggedIn {
                 login_command: LOGIN_COMMAND,
             },
@@ -544,9 +570,11 @@ mod tests {
     use std::time::Duration;
 
     use super::{
-        OpenCodeStream, agent_config, args, classify_logged, configured_sources, logged_error,
-        parse_models, version_at_least,
+        OpenCodeStream, agent_config, args, classify, classify_logged, configured_sources,
+        logged_error, parse_models,
     };
+    use serde_json::{Map, json};
+
     use crate::process::EventFold;
     use crate::{GenerationRequest, ProviderError, ToolPolicy};
 
@@ -613,7 +641,7 @@ mod tests {
         let mut stream = OpenCodeStream::default();
         assert!(matches!(
             stream.feed_stderr(FREE_LIMIT.trim()),
-            Some(Err(ProviderError::RateLimited))
+            Some(Err(ProviderError::Failed(message))) if message.contains("only answer OpenCode's own agents")
         ));
         assert!(
             stream
@@ -636,8 +664,6 @@ mod tests {
         assert_eq!(configured_sources(AUTH_EMPTY), Some(0));
         assert_eq!(configured_sources(AUTH_ENV), Some(1));
         assert_eq!(configured_sources("nothing useful"), None);
-        assert!(version_at_least("1.19.5", (1, 18)));
-        assert!(!version_at_least("1.17.13", (1, 18)));
     }
 
     #[test]
@@ -688,11 +714,69 @@ mod tests {
     }
 
     #[test]
+    fn a_refused_key_keeps_opencodes_words_and_an_empty_balance_is_not_a_login_problem() {
+        assert!(matches!(
+            classify(Some(401), "Invalid API key"),
+            ProviderError::NotAuthenticated { detail: Some(detail), .. } if detail == "Invalid API key"
+        ));
+        for (status, message) in [
+            (Some(402), "Payment required"),
+            (
+                Some(401),
+                "Insufficient balance. Add credits at https://opencode.ai/workspace",
+            ),
+            (None, "Your billing details are missing"),
+        ] {
+            assert!(
+                matches!(classify(status, message), ProviderError::Failed(text) if text.contains("Add credit")),
+                "{message}"
+            );
+        }
+        assert!(matches!(
+            classify_logged("Insufficient balance for this API key"),
+            Some(ProviderError::Failed(text)) if text.starts_with("Insufficient balance")
+        ));
+        assert!(matches!(
+            classify_logged("Unauthorized: the API key was revoked"),
+            Some(ProviderError::NotAuthenticated { detail: Some(detail), .. }) if detail.contains("revoked")
+        ));
+    }
+
+    #[test]
+    fn carried_provider_settings_sit_beside_the_locked_agent() {
+        let mut settings = Map::new();
+        settings.insert(
+            "provider".to_owned(),
+            json!({ "lmstudio": { "options": { "baseURL": "http://localhost:1234/v1" } } }),
+        );
+
+        let config: serde_json::Value =
+            serde_json::from_str(&agent_config("Be brief.", ToolPolicy::None, &settings))
+                .expect("json");
+
+        assert_eq!(
+            config["provider"]["lmstudio"]["options"]["baseURL"],
+            "http://localhost:1234/v1"
+        );
+        assert_eq!(config["mcp"], json!({}));
+        assert_eq!(config["plugin"], json!([]));
+        assert_eq!(
+            config["agent"]["guijam"]["permission"],
+            json!({ "*": "deny" })
+        );
+    }
+
+    #[test]
     fn the_agent_denies_every_tool_unless_reading_is_allowed() {
         let locked: serde_json::Value =
-            serde_json::from_str(&agent_config("Be brief.", ToolPolicy::None)).expect("json");
-        let reading: serde_json::Value =
-            serde_json::from_str(&agent_config("Be brief.", ToolPolicy::ReadOnly)).expect("json");
+            serde_json::from_str(&agent_config("Be brief.", ToolPolicy::None, &Map::new()))
+                .expect("json");
+        let reading: serde_json::Value = serde_json::from_str(&agent_config(
+            "Be brief.",
+            ToolPolicy::ReadOnly,
+            &Map::new(),
+        ))
+        .expect("json");
 
         let agent = &locked["agent"]["guijam"];
         assert_eq!(agent["prompt"], "Be brief.");

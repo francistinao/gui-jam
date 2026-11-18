@@ -98,6 +98,7 @@ fn classify(message: &str) -> ProviderError {
         ProviderError::NotAuthenticated {
             provider: ProviderId::QwenCode,
             login_command: LOGIN_COMMAND,
+            detail: Some(message.to_owned()),
         }
     } else if lower.contains("429") || lower.contains("rate limit") || lower.contains("quota") {
         ProviderError::RateLimited

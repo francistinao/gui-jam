@@ -142,6 +142,7 @@ impl ClaudeStream {
                 ProviderError::NotAuthenticated {
                     provider: ProviderId::ClaudeCode,
                     login_command: LOGIN_COMMAND,
+                    detail: result.result,
                 }
             } else {
                 match result.api_error_status {

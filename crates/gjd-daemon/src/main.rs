@@ -233,6 +233,7 @@ async fn test(id: ProviderId, runs: u32, model: Option<String>) -> ExitCode {
     let auth = provider.check_auth(&discovery).await;
     println!("{id} {} · {auth}", discovery.version);
     if let AuthStatus::NotLoggedIn { .. } = auth {
+        eprintln!("{id}: {auth}");
         return ExitCode::FAILURE;
     }
 
@@ -243,7 +244,10 @@ async fn test(id: ProviderId, runs: u32, model: Option<String>) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let model = model.or_else(|| id.fast_model().map(str::to_owned));
+    let model = model
+        .or_else(|| gjd_daemon::config::provider_model(id))
+        .or_else(|| id.fast_model().map(str::to_owned));
+    println!("model {}", model.as_deref().unwrap_or("default"));
     let mut ready = Vec::new();
     let mut answer = Vec::new();
     for run in 1..=runs {

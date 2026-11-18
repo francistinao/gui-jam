@@ -3,8 +3,10 @@ import {
   defaultProvider,
   parseModelList,
   parseProviderList,
+  probeSummary,
   providerHint,
   rankModels,
+  usableModels,
 } from './gjd.js';
 
 const LIST = JSON.stringify([
@@ -88,5 +90,47 @@ describe('models', () => {
       'opencode/glm-5.3-flash-free',
     ]);
     expect(() => parseModelList('[{"id":1}]')).toThrow(/unexpected model entry/);
+  });
+});
+
+describe('probeSummary', () => {
+  it('reports how long a successful test request took', () => {
+    expect(
+      probeSummary(
+        'opencode 1.19.5 · logged in\nmodel opencode/glm-5.3-flash-free\nrun 1: ready 812 ms · answer 6345 ms\n',
+        '',
+      ),
+    ).toEqual({ ok: true, summary: 'answered in 6.3 s' });
+  });
+
+  it("repeats the AI tool's own reason when the request fails", () => {
+    expect(
+      probeSummary(
+        'opencode 1.19.5 · logged in\n',
+        'run 1: opencode refused the request (Invalid API key); run `opencode auth login` in a terminal, then retry\n',
+      ),
+    ).toEqual({
+      ok: false,
+      summary:
+        'opencode refused the request (Invalid API key); run `opencode auth login` in a terminal, then retry',
+    });
+    expect(probeSummary('', 'gemini-cli: Gemini CLI is not installed\n')).toEqual({
+      ok: false,
+      summary: 'Gemini CLI is not installed',
+    });
+  });
+});
+
+describe('usableModels', () => {
+  it("drops OpenCode's free models, which refuse other tools, and keeps free models of your own providers", () => {
+    const model = (id: string, free: boolean) => ({ id, name: id, images: false, free });
+    expect(
+      usableModels([
+        model('opencode/big-pickle', true),
+        model('opencode/claude-fable-5', false),
+        model('lmstudio/qwen3-coder', true),
+        model('deepseek/deepseek-chat', false),
+      ]).map((entry) => entry.id),
+    ).toEqual(['opencode/claude-fable-5', 'lmstudio/qwen3-coder', 'deepseek/deepseek-chat']);
   });
 });

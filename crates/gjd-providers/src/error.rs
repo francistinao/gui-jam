@@ -6,10 +6,11 @@ use crate::ProviderId;
 pub enum ProviderError {
     #[error("{0} is not installed")]
     NotInstalled(ProviderId),
-    #[error("{provider} isn't logged in; run `{login_command}` in a terminal, then retry")]
+    #[error("{provider} refused the request{}; run `{login_command}` in a terminal, then retry", said(.detail.as_deref()))]
     NotAuthenticated {
         provider: ProviderId,
         login_command: &'static str,
+        detail: Option<String>,
     },
     #[error("the provider is rate limited")]
     RateLimited,
@@ -30,4 +31,11 @@ pub enum ProviderError {
     Failed(String),
     #[error(transparent)]
     Io(#[from] std::io::Error),
+}
+
+fn said(detail: Option<&str>) -> String {
+    detail
+        .map(str::trim)
+        .filter(|detail| !detail.is_empty())
+        .map_or_else(String::new, |detail| format!(" ({detail})"))
 }

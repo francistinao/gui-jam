@@ -12,6 +12,8 @@ const HELP = `Usage: guijam <command> [options]
 Commands
   init                 Set up GUIJam in this project
   doctor               Check the setup
+  doctor --probe       Also send one short test request to the AI tool
+                       (spends a few tokens)
   provider list        List the AI coding CLIs GUIJam can drive
   provider use <id>    Choose the CLI GUIJam drives
 
@@ -48,6 +50,7 @@ function parse(argv: string[]) {
       model: { type: 'string' },
       'skip-install': { type: 'boolean' },
       cwd: { type: 'string' },
+      probe: { type: 'boolean' },
       help: { type: 'boolean', short: 'h' },
       version: { type: 'boolean', short: 'v' },
     },
@@ -104,7 +107,12 @@ export async function main(argv: string[]): Promise<number> {
         highlight: highlighter(depth),
       });
     case 'doctor':
-      return doctor({ cwd, gjd: findDaemonBinary(), missingGjd: missingGjd() });
+      return doctor({
+        cwd,
+        gjd: findDaemonBinary(),
+        missingGjd: missingGjd(),
+        probe: values.probe === true,
+      });
     case undefined:
     case 'help':
       banner();

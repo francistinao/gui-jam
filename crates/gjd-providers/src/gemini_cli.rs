@@ -64,6 +64,7 @@ fn classify(message: &str) -> ProviderError {
         ProviderError::NotAuthenticated {
             provider: ProviderId::GeminiCli,
             login_command: LOGIN_COMMAND,
+            detail: Some(message.to_owned()),
         }
     } else if lower.contains("resource_exhausted")
         || lower.contains("429")
@@ -143,19 +144,23 @@ fn args(request: &GenerationRequest, policy: &Path) -> Vec<String> {
 }
 
 fn after_exit(error: ProviderError) -> ProviderError {
-    let no_auth = matches!(
-        &error,
-        ProviderError::Crashed { exit_code, stderr_tail }
-            if *exit_code == Some(NO_AUTH_EXIT) || stderr_tail.contains("Please set an Auth method")
-    );
-    if no_auth {
-        ProviderError::NotAuthenticated {
+    if let ProviderError::Crashed {
+        exit_code,
+        stderr_tail,
+    } = &error
+        && (*exit_code == Some(NO_AUTH_EXIT) || stderr_tail.contains("Please set an Auth method"))
+    {
+        return ProviderError::NotAuthenticated {
             provider: ProviderId::GeminiCli,
             login_command: LOGIN_COMMAND,
-        }
-    } else {
-        error
+            detail: stderr_tail
+                .lines()
+                .map(str::trim)
+                .rfind(|line| !line.is_empty())
+                .map(str::to_owned),
+        };
     }
+    error
 }
 
 impl GeminiCli {

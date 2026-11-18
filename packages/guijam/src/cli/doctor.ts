@@ -7,7 +7,7 @@ import {
   SUPPORTED_FRAMEWORKS,
   VITE_FRAMEWORKS,
 } from './detect.js';
-import { gjdVersion, listProviders } from './gjd.js';
+import { gjdVersion, listProviders, probeProvider } from './gjd.js';
 import { PWA_HINT, projectRunsDevServiceWorker } from './pwa.js';
 import { isWired } from './wire.js';
 
@@ -15,6 +15,7 @@ export interface DoctorOptions {
   cwd: string;
   gjd: string | undefined;
   missingGjd: string;
+  probe?: boolean;
 }
 
 type Level = 'ok' | 'warn' | 'fail';
@@ -125,6 +126,14 @@ async function toolChecks(options: DoctorOptions): Promise<Check[]> {
       level: 'warn',
       message: `${provider.name} login status unknown: ${provider.reason ?? 'no details'}`,
     });
+  }
+  if (options.probe && provider?.installed) {
+    const probe = await probeProvider(options.gjd, provider.id);
+    checks.push(
+      probe.ok
+        ? { level: 'ok', message: `${provider.name} ${probe.summary} to a test request` }
+        : { level: 'fail', message: `${provider.name} failed a test request: ${probe.summary}` },
+    );
   }
   return checks;
 }

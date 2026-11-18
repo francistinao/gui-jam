@@ -101,7 +101,9 @@ impl EventFold for CodexStream {
                 self.message = Some(text);
                 None
             }
-            Event::Error { message } if unauthorized(&message) => Some(Err(not_authenticated())),
+            Event::Error { message } if unauthorized(&message) => {
+                Some(Err(not_authenticated(message)))
+            }
             Event::TurnFailed { error } => Some(Err(classify(error.message))),
             Event::TurnCompleted {} => Some(self.message.take().map_or_else(
                 || {
@@ -120,16 +122,17 @@ fn unauthorized(message: &str) -> bool {
     message.contains("status 401")
 }
 
-fn not_authenticated() -> ProviderError {
+fn not_authenticated(message: String) -> ProviderError {
     ProviderError::NotAuthenticated {
         provider: ProviderId::Codex,
         login_command: LOGIN_COMMAND,
+        detail: Some(message),
     }
 }
 
 fn classify(message: String) -> ProviderError {
     if unauthorized(&message) {
-        not_authenticated()
+        not_authenticated(message)
     } else if message.contains("status 429") {
         ProviderError::RateLimited
     } else if message.contains("status 503") || message.contains("status 529") {

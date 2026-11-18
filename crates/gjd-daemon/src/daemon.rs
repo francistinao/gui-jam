@@ -205,7 +205,8 @@ fn provider_failure(error: ProviderError, provider: Option<ProviderId>) -> Failu
         ProviderError::NotAuthenticated {
             provider,
             login_command,
-        } => not_authenticated(provider, login_command),
+            detail,
+        } => not_authenticated(provider, login_command, detail.as_deref()),
         ProviderError::RateLimited => Failure::new(
             ErrorCode::ProviderRateLimited,
             format!("{name} is rate limited."),
@@ -222,9 +223,12 @@ fn provider_failure(error: ProviderError, provider: Option<ProviderId>) -> Failu
         .with_action(retry),
         ProviderError::Cancelled => Failure::new(ErrorCode::Cancelled, "Generation cancelled."),
         ProviderError::InvalidOutput(detail) => invalid_output(&detail),
-        ProviderError::Crashed { .. } => Failure::new(
+        ProviderError::Crashed { stderr_tail, .. } => Failure::new(
             ErrorCode::ProviderCrashed,
-            format!("{name} stopped before answering."),
+            match said(&stderr_tail) {
+                Some(line) => format!("{name} stopped before answering: {line}."),
+                None => format!("{name} stopped before answering."),
+            },
         )
         .with_action(retry),
         ProviderError::Failed(_) | ProviderError::Io(_) => {
@@ -248,12 +252,31 @@ async fn first_logged_in() -> Option<ProviderId> {
     None
 }
 
-fn not_authenticated(provider: ProviderId, login_command: &str) -> Failure {
-    Failure::new(
-        ErrorCode::ProviderNotAuthenticated,
-        format!("{} isn't logged in.", provider.display_name()),
-    )
-    .with_action(format!("Run `{login_command}` in a terminal, then retry."))
+const SAID_LIMIT: usize = 300;
+
+fn said(text: &str) -> Option<String> {
+    let line = text.lines().map(str::trim).rfind(|line| !line.is_empty())?;
+    let line = line.trim_end_matches('.');
+    Some(match line.char_indices().nth(SAID_LIMIT) {
+        Some((cut, _)) => format!("{}…", &line[..cut]),
+        None => line.to_owned(),
+    })
+}
+
+fn not_authenticated(provider: ProviderId, login_command: &str, detail: Option<&str>) -> Failure {
+    let name = provider.display_name();
+    let message = match detail.and_then(said) {
+        Some(reason) => format!("{name} was refused: {reason}."),
+        None => format!("{name} isn't logged in."),
+    };
+    let action = if provider == ProviderId::OpenCode {
+        format!(
+            "Run `{login_command}` and add a key for the provider of the chosen model, or pick another model with npx guijam init. Then retry."
+        )
+    } else {
+        format!("Run `{login_command}` in a terminal, then retry.")
+    };
+    Failure::new(ErrorCode::ProviderNotAuthenticated, message).with_action(action)
 }
 
 fn invalid_output(detail: &str) -> Failure {
@@ -1737,8 +1760,21 @@ impl Daemon {
             )
             .with_action("Choose another with npx guijam provider use <id>."));
         }
-        let model = config::provider_model(provider_id)
-            .or_else(|| tier.model_for(provider_id).map(str::to_owned));
+        let saved = config::provider_model(provider_id);
+        if let Some(saved) = saved.as_deref()
+            && let Ok(models) = provider.models(&discovery).await
+            && !models.is_empty()
+            && !models.iter().any(|info| info.id == saved)
+        {
+            return Err(Failure::new(
+                ErrorCode::ProviderNotAuthenticated,
+                format!("{provider_name} can't reach {saved} with the keys it has."),
+            )
+            .with_action(
+                "Add a key for that model's provider (for OpenCode: opencode auth login), or pick another model with npx guijam init.",
+            ));
+        }
+        let model = saved.or_else(|| tier.model_for(provider_id).map(str::to_owned));
         let model_label = model.as_deref().unwrap_or("default model");
         progress.relabel(Step::Ask, generate::ask_label(provider_name, model_label));
         progress.detail("Gathering the page, assets and files it needs…".to_owned());
@@ -1785,7 +1821,20 @@ impl Daemon {
         request: GenerationRequest,
         cancel: &CancellationToken,
     ) -> Result<VariantSet, Failure> {
-        match provider.generate(discovery, request, cancel.clone()).await {
+        let model = request.model.clone();
+        let result = provider.generate(discovery, request, cancel.clone()).await;
+        if let Err(error) = &result
+            && !matches!(error, ProviderError::Cancelled)
+        {
+            tracing::warn!(
+                provider = %provider.id(),
+                version = %discovery.version,
+                model = model.as_deref().unwrap_or("default"),
+                %error,
+                "the AI tool run failed"
+            );
+        }
+        match result {
             Ok(output) => Ok(output.variant_set),
             Err(error @ ProviderError::NotAuthenticated { .. }) => {
                 *self.provider.lock().await = None;
@@ -1916,7 +1965,7 @@ impl Daemon {
         match provider.check_auth(&discovery).await {
             AuthStatus::LoggedIn => *ready = Some((id, discovery.clone(), Instant::now())),
             AuthStatus::NotLoggedIn { login_command } => {
-                return Err(not_authenticated(provider.id(), login_command));
+                return Err(not_authenticated(provider.id(), login_command, None));
             }
             AuthStatus::Unknown { reason } => {
                 tracing::warn!(%reason, "could not read the provider's login status");
@@ -2293,8 +2342,54 @@ mod tests {
 
     use std::path::Path;
 
-    use super::{Checks, Version, apply_variant, materialize, validate_variants};
+    use super::{Checks, Version, apply_variant, materialize, provider_failure, validate_variants};
     use crate::project::{PackageManager, Project, Ui};
+
+    #[test]
+    fn provider_failures_repeat_what_the_ai_tool_said() {
+        use gjd_providers::{ProviderError, ProviderId};
+
+        let refused = provider_failure(
+            ProviderError::NotAuthenticated {
+                provider: ProviderId::OpenCode,
+                login_command: "opencode auth login",
+                detail: Some("Invalid API key.\n".to_owned()),
+            },
+            Some(ProviderId::OpenCode),
+        );
+        let silent = provider_failure(
+            ProviderError::NotAuthenticated {
+                provider: ProviderId::Codex,
+                login_command: "codex login",
+                detail: None,
+            },
+            Some(ProviderId::Codex),
+        );
+        let crashed = provider_failure(
+            ProviderError::Crashed {
+                exit_code: Some(1),
+                stderr_tail: "booting\nError: model not found: x/y\n\n".to_owned(),
+            },
+            Some(ProviderId::GeminiCli),
+        );
+
+        assert_eq!(refused.message, "OpenCode was refused: Invalid API key.");
+        assert!(
+            refused
+                .action
+                .as_deref()
+                .is_some_and(|action| action.contains("npx guijam init"))
+        );
+        assert_eq!(silent.message, "Codex isn't logged in.");
+        assert_eq!(
+            silent.action.as_deref(),
+            Some("Run `codex login` in a terminal, then retry.")
+        );
+        assert_eq!(
+            crashed.message,
+            "Gemini CLI stopped before answering: Error: model not found: x/y."
+        );
+    }
 
     fn react() -> Project {
         Project {

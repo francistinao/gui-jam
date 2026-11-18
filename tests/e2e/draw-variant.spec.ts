@@ -216,7 +216,9 @@ test('a CLI that exits without answering shows PROVIDER_CRASHED with Retry and l
 
   const prompt = await askAbout(page, button, 'Make it blue with a soft shadow, crash');
 
-  await expect(prompt.getByRole('alert')).toContainText('Claude Code stopped before answering.');
+  await expect(prompt.getByRole('alert')).toContainText(
+    'Claude Code stopped before answering: fake claude: crashed.',
+  );
   await expect(prompt.getByRole('button', { name: 'Retry' })).toBeEnabled();
   await expect(button).toHaveCSS('background-color', BRAND_RGB);
   expect(await fileSnapshot(ORDER_BUTTON)).toEqual(before);
