@@ -10,7 +10,7 @@ use oxc_parser::Parser;
 use oxc_span::{GetSpan, SourceType, Span};
 
 use crate::srcloc::LineIndex;
-use crate::template;
+use crate::template::{self, AttributeSlot};
 
 const SOLID_IMPORT: [&str; 2] = ["from 'solid-js", "from \"solid-js"];
 
@@ -139,6 +139,84 @@ pub fn find_element(
     };
     finder.visit_program(&parsed.program);
     finder.found.ok_or(not_found)
+}
+
+pub fn attribute(
+    path: &str,
+    source: &str,
+    line: u64,
+    column: u64,
+    name: &str,
+) -> Result<AttributeSlot, JsxError> {
+    if template::is_template(path) {
+        return template::attribute(source, line, column, name);
+    }
+    let not_found = JsxError::ElementNotFound { line, column };
+    let offset = LineIndex::new(source)
+        .offset(line, column)
+        .ok_or_else(|| not_found.clone())?;
+    let allocator = Allocator::default();
+    let parsed = Parser::new(&allocator, source, source_type(path)?).parse();
+    first_error(&parsed.diagnostics, parsed.fatal_error)?;
+
+    let mut finder = AttributeFinder {
+        source,
+        offset,
+        name,
+        found: None,
+    };
+    finder.visit_program(&parsed.program);
+    finder.found.ok_or(not_found)
+}
+
+struct AttributeFinder<'n> {
+    source: &'n str,
+    offset: usize,
+    name: &'n str,
+    found: Option<AttributeSlot>,
+}
+
+impl<'a> Visit<'a> for AttributeFinder<'_> {
+    fn visit_jsx_opening_element(&mut self, it: &JSXOpeningElement<'a>) {
+        if self.found.is_none() && span_range(it.span).start == self.offset {
+            self.found = Some(attribute_slot(self.source, it, self.name));
+        }
+        walk::walk_jsx_opening_element(self, it);
+    }
+}
+
+fn attribute_slot(source: &str, element: &JSXOpeningElement<'_>, name: &str) -> AttributeSlot {
+    let mut found = None;
+    let mut last_spread = None;
+    for (index, item) in element.attributes.iter().enumerate() {
+        match item {
+            JSXAttributeItem::Attribute(attribute) if is_named(&attribute.name, name) => {
+                found = Some((index, attribute));
+            }
+            JSXAttributeItem::SpreadAttribute(_) => last_spread = Some(index),
+            JSXAttributeItem::Attribute(_) => {}
+        }
+    }
+    if overridden(found.map(|(index, _)| index), last_spread) {
+        return AttributeSlot::Bound;
+    }
+    let Some((_, attribute)) = found else {
+        return AttributeSlot::Missing {
+            insert_at: span_range(element.name.span()).end,
+        };
+    };
+    match &attribute.value {
+        Some(JSXAttributeValue::StringLiteral(literal)) => {
+            let outer = span_range(literal.span);
+            let value = outer.start + 1..outer.end - 1;
+            AttributeSlot::Static {
+                whole: span_range(attribute.span),
+                text: source[value.clone()].to_owned(),
+                value,
+            }
+        }
+        _ => AttributeSlot::Bound,
+    }
 }
 
 fn first_error(diagnostics: &oxc_diagnostics::Diagnostics, fatal: bool) -> Result<(), JsxError> {

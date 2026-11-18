@@ -105,7 +105,8 @@ fn out_of_credit(message: &str) -> bool {
 
 fn no_credit(message: &str) -> ProviderError {
     ProviderError::Failed(format!(
-        "{message}. Add credit to the account behind this model, or pick another model with: npx guijam init"
+        "{}. Add credit to the account behind this model, or pick another model with: npx guijam init",
+        message.trim_end_matches('.')
     ))
 }
 
@@ -587,6 +588,10 @@ mod tests {
     const AUTH_EMPTY: &str = include_str!("../tests/fixtures/opencode/1.19.5/auth-list-empty.txt");
     const AUTH_ENV: &str = include_str!("../tests/fixtures/opencode/1.19.5/auth-list-env.txt");
     const MODELS: &str = include_str!("../tests/fixtures/opencode/1.19.5/models-verbose.txt");
+    const ACCESS_OFF: &str =
+        include_str!("../tests/fixtures/opencode/1.19.6/model-access-disabled.jsonl");
+    const NO_BALANCE: &str =
+        include_str!("../tests/fixtures/opencode/1.19.6/insufficient-balance.jsonl");
 
     fn replay(fixture: &str) -> (OpenCodeStream, Option<Result<super::Answer, ProviderError>>) {
         let mut stream = OpenCodeStream::default();
@@ -739,6 +744,21 @@ mod tests {
         assert!(matches!(
             classify_logged("Unauthorized: the API key was revoked"),
             Some(ProviderError::NotAuthenticated { detail: Some(detail), .. }) if detail.contains("revoked")
+        ));
+    }
+
+    #[test]
+    fn recorded_zen_refusals_say_what_to_change() {
+        assert!(matches!(
+            replay(ACCESS_OFF).1,
+            Some(Err(ProviderError::NotAuthenticated { detail: Some(detail), .. }))
+                if detail.starts_with("Model access is disabled.")
+        ));
+        assert!(matches!(
+            replay(NO_BALANCE).1,
+            Some(Err(ProviderError::Failed(message)))
+                if message.starts_with("Insufficient balance.")
+                    && message.contains("provider. Add credit")
         ));
     }
 

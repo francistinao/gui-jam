@@ -19,6 +19,7 @@ const BINARY: &str = "gemini";
 const LOGIN_COMMAND: &str = "gemini";
 const QUERY_TIMEOUT: Duration = Duration::from_secs(20);
 const NO_AUTH_EXIT: i32 = 41;
+const GOOGLE_LOGIN_RETIRED: &str = "Google no longer lets Gemini CLI use a personal Google login (IneligibleTierError). Set GEMINI_API_KEY to a key from https://aistudio.google.com/apikey, or use Vertex AI";
 const NO_MCP_SERVER: &str = "guijam-none";
 const DENY_ALL_POLICY: &str = "[[rule]]\ntoolName = \"*\"\ndecision = \"deny\"\npriority = 999\ndenyMessage = \"GUIJam runs have no tools.\"\n";
 
@@ -144,6 +145,16 @@ fn args(request: &GenerationRequest, policy: &Path) -> Vec<String> {
 }
 
 fn after_exit(error: ProviderError) -> ProviderError {
+    if let ProviderError::Crashed { stderr_tail, .. } = &error
+        && (stderr_tail.contains("IneligibleTierError")
+            || stderr_tail.contains("UNSUPPORTED_CLIENT"))
+    {
+        return ProviderError::NotAuthenticated {
+            provider: ProviderId::GeminiCli,
+            login_command: LOGIN_COMMAND,
+            detail: Some(GOOGLE_LOGIN_RETIRED.to_owned()),
+        };
+    }
     if let ProviderError::Crashed {
         exit_code,
         stderr_tail,
@@ -280,6 +291,8 @@ mod tests {
     const INVALID_KEY: &str =
         include_str!("../tests/fixtures/gemini-cli/0.66.0/invalid-api-key.jsonl");
     const NO_AUTH: &str = include_str!("../tests/fixtures/gemini-cli/0.66.0/no-auth.stderr");
+    const RETIRED_LOGIN: &str =
+        include_str!("../tests/fixtures/gemini-cli/0.68.0/ineligible-tier.stderr");
 
     fn replay(lines: &str) -> (GeminiStream, Option<Result<String, ProviderError>>) {
         let mut stream = GeminiStream::default();
@@ -316,6 +329,19 @@ mod tests {
                 ProviderError::NotAuthenticated { .. }
             ));
         }
+    }
+
+    #[test]
+    fn a_retired_google_login_points_at_an_api_key() {
+        let crash = ProviderError::Crashed {
+            exit_code: Some(55),
+            stderr_tail: RETIRED_LOGIN.to_owned(),
+        };
+
+        assert!(matches!(
+            after_exit(crash),
+            ProviderError::NotAuthenticated { detail: Some(detail), .. } if detail.contains("GEMINI_API_KEY")
+        ));
     }
 
     #[test]

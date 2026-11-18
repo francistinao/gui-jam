@@ -231,7 +231,15 @@ fn provider_failure(error: ProviderError, provider: Option<ProviderId>) -> Failu
             },
         )
         .with_action(retry),
-        ProviderError::Failed(_) | ProviderError::Io(_) => {
+        ProviderError::Failed(detail) => Failure::new(
+            ErrorCode::ProviderFailed,
+            match said(&detail) {
+                Some(reason) => format!("{name} couldn't answer: {reason}."),
+                None => format!("{name} couldn't answer."),
+            },
+        )
+        .with_action(retry),
+        ProviderError::Io(_) => {
             Failure::new(ErrorCode::ProviderFailed, error.to_string()).with_action(retry)
         }
     }
@@ -252,10 +260,35 @@ async fn first_logged_in() -> Option<ProviderId> {
     None
 }
 
-const SAID_LIMIT: usize = 300;
+const SAID_LIMIT: usize = 600;
+const ACCOUNT_ID_PREFIXES: [&str; 3] = ["org_", "ses_", "acct_"];
+
+fn without_account_ids(text: &str) -> String {
+    let mut plain = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some((at, prefix)) = ACCOUNT_ID_PREFIXES
+        .iter()
+        .filter_map(|prefix| rest.find(prefix).map(|at| (at, *prefix)))
+        .min_by_key(|(at, _)| *at)
+    {
+        plain.push_str(&rest[..at + prefix.len()]);
+        let after = &rest[at + prefix.len()..];
+        let id_len = after
+            .find(|c: char| !c.is_ascii_alphanumeric())
+            .unwrap_or(after.len());
+        plain.push_str(if id_len > 0 { "redacted" } else { "" });
+        rest = &after[id_len..];
+    }
+    plain.push_str(rest);
+    plain
+}
 
 fn said(text: &str) -> Option<String> {
-    let line = text.lines().map(str::trim).rfind(|line| !line.is_empty())?;
+    let line = text.lines().map(str::trim).rfind(|line| {
+        line.chars().any(char::is_alphabetic)
+            && !line.starts_with("at ")
+            && !line.starts_with(['{', '}', '[', ']'])
+    })?;
     let line = line.trim_end_matches('.');
     Some(match line.char_indices().nth(SAID_LIMIT) {
         Some((cut, _)) => format!("{}…", &line[..cut]),
@@ -269,7 +302,15 @@ fn not_authenticated(provider: ProviderId, login_command: &str, detail: Option<&
         Some(reason) => format!("{name} was refused: {reason}."),
         None => format!("{name} isn't logged in."),
     };
-    let action = if provider == ProviderId::OpenCode {
+    let model_off = detail.is_some_and(|detail| detail.to_lowercase().contains("model access"));
+    let api_key = detail.is_some_and(|detail| detail.contains("GEMINI_API_KEY"));
+    let action = if api_key {
+        "Set GEMINI_API_KEY in the terminal that starts your dev server, restart it, then retry."
+            .to_owned()
+    } else if model_off {
+        "Turn this model on at that link, or pick another model with npx guijam init. Then retry."
+            .to_owned()
+    } else if provider == ProviderId::OpenCode {
         format!(
             "Run `{login_command}` and add a key for the provider of the chosen model, or pick another model with npx guijam init. Then retry."
         )
@@ -1830,7 +1871,7 @@ impl Daemon {
                 provider = %provider.id(),
                 version = %discovery.version,
                 model = model.as_deref().unwrap_or("default"),
-                %error,
+                error = %without_account_ids(&error.to_string()),
                 "the AI tool run failed"
             );
         }
@@ -2342,7 +2383,10 @@ mod tests {
 
     use std::path::Path;
 
-    use super::{Checks, Version, apply_variant, materialize, provider_failure, validate_variants};
+    use super::{
+        Checks, Version, apply_variant, materialize, provider_failure, validate_variants,
+        without_account_ids,
+    };
     use crate::project::{PackageManager, Project, Ui};
 
     #[test]
@@ -2368,7 +2412,8 @@ mod tests {
         let crashed = provider_failure(
             ProviderError::Crashed {
                 exit_code: Some(1),
-                stderr_tail: "booting\nError: model not found: x/y\n\n".to_owned(),
+                stderr_tail: "booting\nError: model not found: x/y\n    at run (cli.js:1:2)\n}\n\n"
+                    .to_owned(),
             },
             Some(ProviderId::GeminiCli),
         );
@@ -2379,6 +2424,29 @@ mod tests {
                 .action
                 .as_deref()
                 .is_some_and(|action| action.contains("npx guijam init"))
+        );
+        let model_off = provider_failure(
+            ProviderError::NotAuthenticated {
+                provider: ProviderId::OpenCode,
+                login_command: "opencode auth login",
+                detail: Some(
+                    "Model access is disabled. Change model access at https://opencode.ai/console/org_ABC123/models."
+                        .to_owned(),
+                ),
+            },
+            Some(ProviderId::OpenCode),
+        );
+        assert!(
+            model_off
+                .action
+                .as_deref()
+                .is_some_and(|action| action.starts_with("Turn this model on"))
+        );
+        assert_eq!(
+            without_account_ids(
+                "see https://opencode.ai/console/org_ABC123/models in ses_9x, org_"
+            ),
+            "see https://opencode.ai/console/org_redacted/models in ses_redacted, org_"
         );
         assert_eq!(silent.message, "Codex isn't logged in.");
         assert_eq!(

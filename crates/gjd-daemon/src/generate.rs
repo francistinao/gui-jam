@@ -63,8 +63,12 @@ it. The only other files you may add are new components, with create_file ops, a
 describes.
 - For style changes, prefer one class_tokens op on the element itself, with `at` set to the \
 element's line and column: remove the tokens you replace and add the new ones.
-- Use replace_snippet only when classes cannot express the change; its `find` must be text \
-copied exactly from the file (without the line-number prefix) that occurs exactly once.
+- To set or remove a plain text attribute (title, aria-label, alt, href, type), use one \
+jsx_attr op on the element with `at` set to its line and column and a string `value`, or null \
+to remove it.
+- Use replace_snippet only when classes and attributes cannot express the change, such as an \
+attribute whose value is an expression or a change to the element's text; its `find` must be \
+text copied exactly from the file (without the line-number prefix) that occurs exactly once.
 - Reuse the project's theme tokens before arbitrary values such as bg-[#1D4ED8].
 - Change only what the request asks for. Keep the label short; the rationale says what \
 changed and any value you had to choose.

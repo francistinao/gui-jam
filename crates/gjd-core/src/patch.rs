@@ -262,13 +262,7 @@ fn resolve_attribute(
     name: &str,
     value: Option<&JsxValue>,
 ) -> Result<TextEdit, PatchError> {
-    if !template::is_template(path) {
-        return Err(PatchError::Unsupported {
-            op,
-            kind: "jsx_attr",
-        });
-    }
-    let slot = template::attribute(source, at.line.get(), at.column.get(), name)
+    let slot = crate::jsx::attribute(path, source, at.line.get(), at.column.get(), name)
         .map_err(|source| PatchError::Element { op, source })?;
     let text = match value {
         None => None,
@@ -680,6 +674,56 @@ mod tests {
             styled(variable, &[("padding", json!(8))]).expect("literal props stay editable"),
             "export const B = (p) => <b style={{ color: p.color, padding: 8 }} />;\n"
         );
+    }
+
+    fn attr(content: &str, name: &str, value: &serde_json::Value) -> EditOp {
+        let column = u64::try_from(content.find("<button").expect("a button") + 1).expect("column");
+        op(json!({
+            "kind": "jsx_attr", "file": FILE, "base_hash": content_hash(content.as_bytes()).as_str(),
+            "at": { "line": 1, "column": column }, "name": name, "value": value,
+        }))
+    }
+
+    #[test]
+    fn edits_plain_string_attributes_on_a_jsx_element() {
+        let content = "export const B = () => <button type=\"button\" aria-label=\"Order\" className=\"p-2\">Go</button>;\n";
+
+        let changed = apply(
+            &sources(content),
+            &[
+                attr(content, "type", &json!({ "string": "submit" })),
+                attr(
+                    content,
+                    "title",
+                    &json!({ "string": "Order \"now\" & pay" }),
+                ),
+                attr(content, "aria-label", &json!(null)),
+            ],
+        )
+        .expect("applies");
+
+        assert_eq!(
+            changed[FILE],
+            "export const B = () => <button title=\"Order &quot;now&quot; &amp; pay\" type=\"submit\" className=\"p-2\">Go</button>;\n"
+        );
+    }
+
+    #[test]
+    fn refuses_jsx_attributes_that_are_expressions_or_may_come_from_a_spread() {
+        let bound = "export const B = (p) => <button onClick={p.go} {...p}>Go</button>;\n";
+
+        for (name, value) in [
+            ("onClick", json!({ "string": "x" })),
+            ("title", json!({ "string": "x" })),
+        ] {
+            assert!(
+                matches!(
+                    apply(&sources(bound), &[attr(bound, name, &value)]),
+                    Err(PatchError::AttributeNotEditable { .. })
+                ),
+                "{name}"
+            );
+        }
     }
 
     #[test]

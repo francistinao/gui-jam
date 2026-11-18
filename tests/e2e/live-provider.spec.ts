@@ -1,0 +1,141 @@
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { expect, type Locator, type Page, test } from '@playwright/test';
+import {
+  GJD_BINARY,
+  requireDaemonBinary,
+  stopDaemon,
+  waitForDaemon,
+  widgetRequests,
+} from './support/daemon.js';
+import {
+  FIXTURE_DIR,
+  type FixtureServer,
+  fileSnapshot,
+  fixturePath,
+  openFixture,
+  startFixtureServer,
+} from './support/fixture.js';
+
+const PROVIDER = process.env.GUIJAM_LIVE_PROVIDER;
+const MODEL = process.env.GUIJAM_LIVE_MODEL;
+const ANSWER_MS = 300_000;
+const ORDER_BUTTON = fixturePath('src/components/OrderButton.tsx');
+const ORDER_BUTTON_REF = { file: 'src/components/OrderButton.tsx', line: 3, column: 5 };
+
+let fixture: FixtureServer;
+let original: string;
+
+test.skip(PROVIDER === undefined, 'set GUIJAM_LIVE_PROVIDER to run a real AI tool (spends tokens)');
+test.setTimeout(ANSWER_MS + 60_000);
+
+async function circle(page: Page, element: Locator): Promise<void> {
+  const box = await element.boundingBox();
+  if (!box) throw new Error('the element is not visible');
+  const left = box.x - 18;
+  const right = box.x + box.width + 18;
+  const top = box.y - 14;
+  const bottom = box.y + box.height + 14;
+  await page.mouse.move(left, top + 10);
+  await page.mouse.down();
+  for (const [x, y] of [
+    [left + 30, top],
+    [right, top + 6],
+    [right - 4, bottom],
+    [left + 6, bottom - 2],
+    [left, top + 14],
+  ] as const) {
+    await page.mouse.move(x, y, { steps: 6 });
+  }
+  await page.mouse.up();
+}
+
+async function answered(prompt: Locator): Promise<Locator> {
+  const tiles = prompt
+    .getByRole('region', { name: 'Variants' })
+    .getByRole('group', { name: 'Pick a variant' })
+    .getByRole('button');
+  const alert = prompt.getByRole('alert');
+  await expect(tiles.first().or(alert)).toBeVisible({ timeout: ANSWER_MS });
+  if (await alert.isVisible()) {
+    throw new Error(`${PROVIDER} did not answer: ${await alert.innerText()}`);
+  }
+  return tiles;
+}
+
+test.beforeAll(async () => {
+  await requireDaemonBinary();
+  await stopDaemon(FIXTURE_DIR);
+  const configHome = process.env.XDG_CONFIG_HOME;
+  if (!configHome) throw new Error('playwright.config.ts sets XDG_CONFIG_HOME for every run');
+  await mkdir(join(configHome, 'guijam'), { recursive: true });
+  const model = MODEL === undefined ? '' : `\n[providers.${PROVIDER}]\nmodel = "${MODEL}"\n`;
+  await writeFile(
+    join(configHome, 'guijam', 'config.toml'),
+    `[providers]\nactive = "${PROVIDER}"\n${model}`,
+  );
+  process.env.GUIJAM_GJD_BIN = GJD_BINARY;
+  fixture = await startFixtureServer();
+  original = await readFile(ORDER_BUTTON, 'utf8');
+  await waitForDaemon(widgetRequests(fixture.api), ORDER_BUTTON_REF);
+});
+
+test.afterEach(async () => {
+  if ((await readFile(ORDER_BUTTON, 'utf8')) !== original) await writeFile(ORDER_BUTTON, original);
+});
+
+test.afterAll(async () => {
+  delete process.env.GUIJAM_GJD_BIN;
+  await fixture?.server.close();
+  await stopDaemon(FIXTURE_DIR);
+});
+
+async function ask(page: Page, request: string): Promise<Locator> {
+  await openFixture(page, fixture.url);
+  await page.getByRole('toolbar', { name: 'GUIJam' }).getByRole('button', { name: 'Draw' }).click();
+  await circle(page, page.getByRole('button', { name: 'Order now' }));
+  const prompt = page.getByRole('dialog', { name: 'Ask AI src/components/OrderButton.tsx' });
+  await prompt.getByRole('textbox', { name: 'Describe the change' }).fill(request);
+  await prompt.getByRole('button', { name: 'Generate' }).click();
+  return prompt;
+}
+
+test('a real AI tool answers a drawn prompt, and Use writes a variant that Undo takes back', async ({
+  page,
+}) => {
+  const before = await fileSnapshot(ORDER_BUTTON);
+  const prompt = await ask(page, 'Give this button a warmer, friendlier personality');
+
+  const tiles = await answered(prompt);
+  await expect(prompt.getByRole('button', { name: 'Ask AI for variations' })).toHaveCount(0);
+  await tiles.first().click();
+  expect(await fileSnapshot(ORDER_BUTTON)).toEqual(before);
+
+  await prompt
+    .getByRole('button', { name: /^Use V\d$/ })
+    .first()
+    .click();
+  const toast = page.getByRole('status').filter({ hasText: 'Applied to OrderButton.tsx.' });
+  await expect(toast).toBeVisible();
+  expect(await readFile(ORDER_BUTTON, 'utf8')).not.toBe(before.content);
+
+  await toast.getByRole('button', { name: 'Undo' }).click();
+  await expect(page.getByRole('status').filter({ hasText: 'Change undone.' })).toBeVisible();
+  expect(await readFile(ORDER_BUTTON, 'utf8')).toBe(before.content);
+});
+
+test('a real AI tool answers a question about the element without changing it', async ({
+  page,
+}) => {
+  const before = await fileSnapshot(ORDER_BUTTON);
+  const prompt = await ask(page, 'Which file defines this button?');
+
+  const answer = prompt.getByRole('region', { name: 'Answer' });
+  const alert = prompt.getByRole('alert');
+  await expect(answer.or(alert)).toBeVisible({ timeout: ANSWER_MS });
+  if (await alert.isVisible()) {
+    throw new Error(`${PROVIDER} did not answer: ${await alert.innerText()}`);
+  }
+  await expect(answer).toContainText('OrderButton.tsx');
+  expect(await fileSnapshot(ORDER_BUTTON)).toEqual(before);
+});

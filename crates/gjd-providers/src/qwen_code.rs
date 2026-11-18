@@ -305,6 +305,8 @@ mod tests {
     use crate::{GenerationRequest, ProviderError, ToolPolicy};
 
     const NO_AUTH: &str = include_str!("../tests/fixtures/qwen-code/0.26.6/no-auth-type.jsonl");
+    const NO_MEMBERSHIP: &str =
+        include_str!("../tests/fixtures/qwen-code/0.28.0/membership-required.jsonl");
     const DISCONTINUED: &str =
         include_str!("../tests/fixtures/qwen-code/0.26.6/oauth-discontinued.jsonl");
 
@@ -326,6 +328,14 @@ mod tests {
                 }))
             ));
         }
+    }
+
+    #[test]
+    fn a_missing_plan_keeps_qwens_words() {
+        assert!(matches!(
+            replay(NO_MEMBERSHIP),
+            Some(Err(ProviderError::Failed(message))) if message.contains("membership required")
+        ));
     }
 
     #[test]
