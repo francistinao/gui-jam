@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   activeLayers,
   addStroke,
+  appliedMessage,
   boundsOf,
   changesIn,
   chooseDrawTarget,
@@ -12,12 +13,15 @@ import {
   containerIndex,
   cssColor,
   droppedNote,
+  editedFiles,
   fillOfToken,
+  followedSrc,
   formatElapsed,
   hexOfComputedColor,
   invertChanges,
   linksIn,
   MAX_LINKS,
+  nearestIndex,
   needsLine,
   OPACITY_RANGE,
   type Point,
@@ -628,5 +632,87 @@ describe('sketching over a selected element', () => {
     expect(sketch.bounds.width).toBeCloseTo(all.width, 9);
     expect(sketch.bounds.height).toBeCloseTo(all.height, 9);
     expect(sketchAnchor(sketch)).toEqual(unionRect(element, sketch.bounds));
+  });
+});
+
+describe('editedFiles', () => {
+  const change = (file: string) => ({ file, line: 1, before: [], after: [] });
+
+  it('lists every existing file a variant changes, without the files it creates', () => {
+    expect(
+      editedFiles({
+        file: 'src/components/OrderButton.tsx',
+        changes: [
+          change('src/App.tsx'),
+          change('src/App.tsx'),
+          change('src/components/MenuCard.tsx'),
+          change('src/components/organisms/Plans.tsx'),
+        ],
+        created: ['src/components/organisms/Plans.tsx'],
+      }),
+    ).toEqual(['src/App.tsx', 'src/components/MenuCard.tsx']);
+  });
+
+  it('falls back to the selected file when nothing existing changes', () => {
+    expect(editedFiles({ file: 'src\\App.tsx', changes: [], created: [] })).toEqual([
+      'src/App.tsx',
+    ]);
+  });
+});
+
+describe('appliedMessage', () => {
+  it('names one or two files and counts the rest', () => {
+    expect(appliedMessage(['src/App.tsx'])).toBe('Applied to App.tsx.');
+    expect(appliedMessage(['src/App.tsx', 'src/components/MenuCard.tsx'])).toBe(
+      'Applied to App.tsx and MenuCard.tsx.',
+    );
+    expect(appliedMessage(['src/App.tsx', 'src/A.tsx', 'src/B.tsx'])).toBe(
+      'Applied to App.tsx and 2 other files.',
+    );
+  });
+});
+
+describe('nearestIndex', () => {
+  const sketch = { left: 600, top: 700, width: 400, height: 200 };
+
+  it('prefers what sits above or below the sketch, then the smallest gap', () => {
+    const page = { left: 0, top: 0, width: 1200, height: 640 };
+    const sidebar = { left: 1100, top: 690, width: 100, height: 300 };
+    const footer = { left: 0, top: 1000, width: 1200, height: 80 };
+
+    expect(nearestIndex(sketch, [sidebar, footer, page])).toBe(2);
+    expect(nearestIndex(sketch, [sidebar])).toBe(0);
+    expect(nearestIndex(sketch, [])).toBeNull();
+  });
+});
+
+describe('followedSrc', () => {
+  const selection = { file: 'src/components/OrderButton.tsx', line: 3, column: 5 };
+  const change = (file: string, line: number, before: string[], after: string[]) => ({
+    file,
+    line,
+    before,
+    after,
+  });
+
+  it('follows lines added above the element in its own file', () => {
+    expect(
+      followedSrc(selection, [change('src/components/OrderButton.tsx', 1, [], ['import x;'])]),
+    ).toEqual({ src: 'src/components/OrderButton.tsx:4:5', touched: false });
+  });
+
+  it('keeps the place when only another file changes', () => {
+    expect(followedSrc(selection, [change('src/App.tsx', 37, ['<OrderButton />'], [])])).toEqual({
+      src: 'src/components/OrderButton.tsx:3:5',
+      touched: false,
+    });
+  });
+
+  it('says when a change covers the element line itself', () => {
+    expect(
+      followedSrc(selection, [
+        change('src/components/OrderButton.tsx', 3, ['    <button>'], ['    <a>']),
+      ]).touched,
+    ).toBe(true);
   });
 });

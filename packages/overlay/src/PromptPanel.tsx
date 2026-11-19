@@ -151,6 +151,7 @@ export function PromptPanel({ store, controller }: PanelProps) {
   const style = useStore(store, (state) => state.style);
   const job = useStore(store, (state) => state.jobs.find((entry) => entry.id === state.focus));
   const busy = useStore(store, (state) => state.busy);
+  const gone = useStore(store, (state) => state.selectionGone);
   const now = useNow(job?.generation.status === 'running');
   const picker = useRef<HTMLInputElement>(null);
   const [dragging, setDragging] = useState(false);
@@ -196,6 +197,7 @@ export function PromptPanel({ store, controller }: PanelProps) {
       ) : status === 'ready' || arriving ? (
         <VariantsPanel
           generation={generation}
+          gone={gone}
           busy={busy}
           installing={job.installing}
           installError={job.installError}

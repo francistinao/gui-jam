@@ -53,10 +53,11 @@ export function App({ store, controller }: { store: Store<WidgetState>; controll
   const hovered = useStore(store, (state) => state.hovered);
   const anchor = useStore(store, (state) => state.anchor);
   const mode = useStore(store, (state) => state.mode);
+  const gone = useStore(store, (state) => state.selectionGone);
   return (
     <>
       {tool === 'select' && hovered ? <Outline rect={hovered} /> : null}
-      {anchor ? <Outline rect={anchor} dashed /> : null}
+      {anchor && !gone ? <Outline rect={anchor} dashed /> : null}
       {mode === 'prompt' ? (
         <PromptPanel store={store} controller={controller} />
       ) : (

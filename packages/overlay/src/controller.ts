@@ -22,15 +22,19 @@ import { DomPreview } from './dom-preview';
 import type { WidgetHost } from './host';
 import {
   addStroke,
+  appliedMessage,
   changesIn,
   classifyGesture,
   containerIndex,
   cssColor,
+  editedFiles,
+  followedSrc,
   type HexColor,
   hexOfComputedColor,
   intersects,
   invertChanges,
   MAX_JOBS,
+  nearestIndex,
   nextJobNumber,
   type Point,
   type Rect,
@@ -50,6 +54,7 @@ import type { Store } from './store';
 const PREVIEW_DEBOUNCE_MS = 120;
 const UNDO_WINDOW_MS = 10_000;
 const NOTICE_MS = 4_000;
+const FOLLOW_MS = 2_000;
 const SRC_ATTRIBUTE = 'data-gj-src';
 
 export interface Selection {
@@ -145,6 +150,7 @@ export interface WidgetState {
   preview: { changesetId: string; changes: CodeChange[] } | null;
   busy: boolean;
   notice: Notice | null;
+  selectionGone: boolean;
 }
 
 export const initialState: WidgetState = {
@@ -161,6 +167,7 @@ export const initialState: WidgetState = {
   preview: null,
   busy: false,
   notice: null,
+  selectionGone: false,
 };
 
 export function rectOf(element: Element): Rect {
@@ -206,6 +213,22 @@ function sketchContainer(bounds: Rect, exclude: Element): Element | null {
   return largest ?? document.querySelector(`[${SRC_ATTRIBUTE}]`);
 }
 
+function fileOf(element: Element | null): string | undefined {
+  const src = element?.getAttribute(SRC_ATTRIBUTE);
+  return src ? parseSrc(src)?.file : undefined;
+}
+
+function pageNear(container: Element, bounds: Rect, exclude: Element): string | undefined {
+  const file = fileOf(container);
+  const roots = [...container.querySelectorAll(`[${SRC_ATTRIBUTE}]`)].filter((element) => {
+    if (exclude.contains(element) || fileOf(element) === file) return false;
+    const parent = element.parentElement?.closest(`[${SRC_ATTRIBUTE}]`) ?? null;
+    return parent === container || fileOf(parent) === file;
+  });
+  const index = nearestIndex(bounds, roots.map(rectOf));
+  return index === null ? undefined : (roots[index]?.getAttribute(SRC_ATTRIBUTE) ?? undefined);
+}
+
 function touchedBy(bounds: Rect, exclude: Element): string[] {
   const sources = [...document.querySelectorAll(`[${SRC_ATTRIBUTE}]`)]
     .filter((element) => !exclude.contains(element))
@@ -245,14 +268,12 @@ function boxOf(rect: Rect): [number, number, number, number] {
   ];
 }
 
-function appliedTo(selection: Selection): string {
-  return `Applied to ${selection.file.split(/[\\/]/).pop() ?? selection.file}.`;
-}
-
 export type Controller = ReturnType<typeof createController>;
 
 export function createController(host: WidgetHost, store: Store<WidgetState>) {
   let previewTimer: ReturnType<typeof setTimeout> | undefined;
+  let following: MutationObserver | undefined;
+  let followTimer: ReturnType<typeof setTimeout> | undefined;
   let previewing: Promise<void> | undefined;
   let noticeTimer: ReturnType<typeof setTimeout> | undefined;
   let editSequence = 0;
@@ -274,6 +295,7 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
           .get()
           .jobs.map((entry) => (entry.id === jobId ? entry : { ...entry, previewed: false })),
       });
+      followSelection(jobId);
     }
     updateJob(jobId, (job) => {
       const before = job.generation.steps.find((step) => step.state === 'active')?.label;
@@ -331,7 +353,37 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
       style: null,
       current: null,
       mode: 'finetune',
+      selectionGone: false,
     });
+  }
+
+  function followSelection(jobId: string): void {
+    following?.disconnect();
+    clearTimeout(followTimer);
+    let scheduled = false;
+    const check = () => {
+      scheduled = false;
+      const { focus, selection } = store.get();
+      const job = jobById(jobId);
+      if (focus !== jobId || !job || job.sketch || !selection) return;
+      const variant = job.generation.variants[job.generation.active];
+      const { src, touched } = variant
+        ? followedSrc(selection, variant.changes)
+        : { src: selection.src, touched: false };
+      const element = elementsAt(src)[0] ?? elementsAt(selection.src)[0];
+      if (element) store.set({ anchor: rectOf(element), selectionGone: false });
+      else if (!touched) store.set({ selectionGone: true });
+    };
+    const schedule = () => {
+      if (scheduled) return;
+      scheduled = true;
+      requestAnimationFrame(check);
+    };
+    schedule();
+    const observer = new MutationObserver(schedule);
+    observer.observe(document.body, { childList: true, subtree: true });
+    following = observer;
+    followTimer = setTimeout(() => observer.disconnect(), FOLLOW_MS);
   }
 
   function notify(notice: Notice | null, durationMs = NOTICE_MS): void {
@@ -389,13 +441,14 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
     styled.clear();
   }
 
-  async function inspect(selection: Selection): Promise<void> {
+  async function inspect(selection: Selection, quiet = false): Promise<void> {
     const reply = await host.request({
       type: 'element.inspect',
       payload: { file: selection.file, line: selection.line, column: selection.column },
     });
     if (store.get().selection?.src !== selection.src) return;
     if (reply.type === 'element.style') store.set({ style: reply.payload });
+    else if (quiet) clearPanel();
     else notify(failure(reply));
   }
 
@@ -577,7 +630,10 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
       type: 'variant.select',
       payload: { runId: job.generation.runId, changesetId: variant.changesetId },
     });
-    if (reply.type === 'variant.selected') return;
+    if (reply.type === 'variant.selected') {
+      followSelection(job.id);
+      return;
+    }
     setGeneration(job.id, {
       ...IDLE_GENERATION,
       prompt: job.generation.prompt,
@@ -609,7 +665,10 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
       type: 'variant.select',
       payload: { runId: job.generation.runId, changesetId: variant.changesetId },
     });
-    if (reply.type === 'variant.selected') return;
+    if (reply.type === 'variant.selected') {
+      followSelection(jobId);
+      return;
+    }
     updateJob(jobId, (entry) => ({ ...entry, previewed: false }));
     if (sequence === selectSequence) notify(failure(reply), UNDO_WINDOW_MS);
   }
@@ -624,12 +683,15 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
       element ? sketchAnchor(sketch) : undefined,
     );
     const touching = touchedBy(bounds, host.hostElement);
+    const container = element ? undefined : elementsAt(target.src)[0];
+    const near = container ? pageNear(container, bounds, host.hostElement) : undefined;
     return {
       images,
       captureMs: Math.round(performance.now() - started),
       box: boxOf(bounds),
       touching: element ? touching.filter((src) => src !== target.src) : touching,
       ...(element ? { elementBox: boxOf(element) } : {}),
+      ...(near ? { near } : {}),
     };
   }
 
@@ -654,6 +716,7 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
       current: null,
       draft: {},
       preview: null,
+      selectionGone: false,
     });
     const { generation } = job;
     if (generation.status === 'ready' && generation.variants.length > 0 && !job.previewed) {
@@ -709,6 +772,7 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
       current: readCurrent(element),
       draft: {},
       preview: null,
+      selectionGone: false,
     });
     await inspect(selection);
   }
@@ -985,20 +1049,29 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
       });
       const moved = moveTarget(target);
       const element = elementsAt(moved.src)[0];
+      const applied = {
+        kind: 'info' as const,
+        message: appliedMessage(editedFiles(variant)),
+        undoJournalId: reply.payload.journalId,
+      };
+      if (!element) {
+        store.set({ busy: false });
+        clearPanel();
+        notify(applied, UNDO_WINDOW_MS);
+        return;
+      }
       store.set({
         busy: false,
         focus: null,
         mode: 'finetune',
         selection: moved,
-        anchor: element ? rectOf(element) : store.get().anchor,
+        anchor: rectOf(element),
         style: null,
-        current: element ? readCurrent(element) : null,
+        current: readCurrent(element),
+        selectionGone: false,
       });
-      notify(
-        { kind: 'info', message: appliedTo(target), undoJournalId: reply.payload.journalId },
-        UNDO_WINDOW_MS,
-      );
-      await inspect(moved);
+      notify(applied, UNDO_WINDOW_MS);
+      await inspect(moved, true);
     },
 
     hover(element: Element | null): void {
@@ -1045,10 +1118,14 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
       }
       domPreview.keep();
       notify(
-        { kind: 'info', message: appliedTo(selection), undoJournalId: reply.payload.journalId },
+        {
+          kind: 'info',
+          message: appliedMessage([selection.file]),
+          undoJournalId: reply.payload.journalId,
+        },
         UNDO_WINDOW_MS,
       );
-      await inspect(selection);
+      await inspect(selection, true);
     },
 
     revert: () => revert(),
@@ -1071,7 +1148,7 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
         src: `${selection.file}:${line}:${selection.column}`,
       };
       store.set({ selection: moved });
-      await inspect(moved);
+      await inspect(moved, true);
     },
 
     async close(): Promise<void> {

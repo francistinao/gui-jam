@@ -361,6 +361,39 @@ test('a question gets an answer whose file references open in the editor', async
   await expect(prompt.getByRole('textbox', { name: 'Describe the change' })).toHaveValue('');
 });
 
+test('a long answer wraps its paths and code inside the panel', async ({ page }) => {
+  const button = page.getByRole('button', { name: 'Order now' });
+
+  const prompt = await askAbout(page, button, 'where should this go, in the long version?');
+
+  const answer = prompt.getByRole('region', { name: 'Answer' });
+  const path =
+    'src/features/core-hr/dashboard/components/organisms/EmployeeDashboardRightColumnWithOnboardingTasks.tsx:106';
+  const link = answer.getByRole('button', { name: path });
+  await expect(link).toBeVisible();
+  const fits = await answer.evaluate((region) => {
+    const panel = region.getBoundingClientRect();
+    const inside = [...region.querySelectorAll('p, button')].every((element) => {
+      const box = element.getBoundingClientRect();
+      return box.left >= panel.left - 0.5 && box.right <= panel.right + 0.5;
+    });
+    const scroller = region.closest('[role="dialog"]');
+    return {
+      inside,
+      region: region.scrollWidth <= region.clientWidth,
+      dialog: scroller ? scroller.scrollWidth <= scroller.clientWidth : false,
+    };
+  });
+  expect(fits).toEqual({ inside: true, region: true, dialog: true });
+  const opened: string[] = [];
+  await page.route('**/__open-in-editor?**', async (route) => {
+    opened.push(new URL(route.request().url()).searchParams.get('file') ?? '');
+    await route.fulfill({ status: 200, body: '' });
+  });
+  await link.click();
+  await expect.poll(() => opened).toEqual([path]);
+});
+
 test('an open-ended request uses the standard tier, and a multi-file one says so', async ({
   page,
 }) => {
@@ -382,7 +415,7 @@ test('an open-ended request uses the standard tier, and a multi-file one says so
   await prompt.getByRole('button', { name: 'Generate' }).click();
 
   await expect(prompt.getByRole('note').first()).toContainText(
-    'Multi-file changes work best from your CLI session',
+    'Changes across many files work best from your CLI session. GUIJam edits the selected file and the files it shows the AI.',
   );
 });
 

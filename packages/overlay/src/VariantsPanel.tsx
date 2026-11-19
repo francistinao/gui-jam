@@ -2,11 +2,12 @@ import { LoaderCircle } from 'lucide-react';
 import type { Controller, Generation } from './controller';
 import { Button } from './figui/button';
 import { cn } from './figui/cn';
-import { droppedNote, type Needs, needsLine } from './model';
+import { droppedNote, editedFiles, type Needs, needsLine } from './model';
 import { CodeChanges, RunNotes } from './Popover';
 
 interface VariantsPanelProps {
   generation: Generation;
+  gone: boolean;
   busy: boolean;
   installing: boolean;
   installError: string | null;
@@ -63,6 +64,7 @@ function InstallBox({
 
 export function VariantsPanel({
   generation,
+  gone,
   busy,
   installing,
   installError,
@@ -143,13 +145,22 @@ export function VariantsPanel({
           {note}
         </p>
       ) : null}
+      {gone ? (
+        <p role="note" className="typography-body-small rounded-md bg-grey-100 p-2 text-grey-700">
+          Not on the page in this variant.
+        </p>
+      ) : null}
       <dl className="typography-body-small grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5">
         <dt className="text-grey-500">System</dt>
         <dd>{variant.system}</dd>
         <dt className="text-grey-500">Style</dt>
         <dd>{variant.style}</dd>
-        <dt className="text-grey-500">File</dt>
-        <dd className="truncate font-mono">{variant.file.split(/[\\/]/).pop()}</dd>
+        <dt className="text-grey-500">Edits</dt>
+        <dd className="truncate font-mono">
+          {editedFiles(variant)
+            .map((path) => path.split('/').pop())
+            .join(', ')}
+        </dd>
         {variant.created.length > 0 ? (
           <>
             <dt className="text-grey-500">Adds</dt>

@@ -6,6 +6,7 @@ use gjd_core::contracts::{
     GenerateProgressStepsItem, GenerateProgressStepsItemDetail, GenerateProgressStepsItemState,
     RouteTier, UpdateResult, VariantPreview,
 };
+use gjd_core::jsx::Component;
 use gjd_providers::{Effort, ProviderEvent, ProviderId};
 
 pub const MAX_OPS: usize = 40;
@@ -62,11 +63,12 @@ request asks for, with a one-word `style` (for example Solid, Soft, Outline). Se
 \"Your project\".
 
 If the request is a question rather than a change, answer it in `answer` in at most a few \
-sentences, name the files and lines involved (for example src/App.tsx:12), and return an \
-empty `variants` list.
+sentences of plain text without Markdown, name the files and lines involved (for example \
+src/App.tsx:12), and return an empty `variants` list.
 
 Rules:
-- Edit only the file you are shown, and copy its base_hash exactly into every op that edits \
+- Edit the file you are shown. When the request needs other files, edit only the files shown \
+in <file> blocks with a base_hash, and copy each file's own base_hash into every op that edits \
 it. The only other files you may add are new components, with create_file ops, as <new-ui> \
 describes.
 - For style changes, prefer one class_tokens op on the element itself, with `at` set to the \
@@ -81,19 +83,34 @@ to remove it.
 - Use replace_snippet only when classes and attributes cannot express the change, such as an \
 attribute whose value is an expression or a change to the element's text; its `find` must be \
 text copied exactly from the file (without the line-number prefix) that occurs exactly once.
+- To remove, delete, hide or comment out the selected element, change the file where it is \
+written. When the Component line says the element is its component's root and a <file> block \
+shows where that component is rendered (why=\"renders …\"), remove or comment out the \
+component's tag there instead, together with its import when nothing else in that file uses it \
+and any wrapper element that only holds it. Leave the component's own file as it is.
+- To move the selected element or its component, remove it from where it is and insert the \
+same markup or tag, with its props, where the request says, in the same variant, and move its \
+import too. Never leave a copy behind.
+- Comment out JSX by wrapping it in {/* */}. Comments can't nest, so remove any comment inside \
+the part you comment out. When you comment out a component's only use in a file, comment out \
+its import too.
+- A removal, move or comment-out happens in every variant; the Direction only changes the \
+exact spot or how the space left behind looks.
 - Reuse the project's theme tokens before arbitrary values such as bg-[#1D4ED8].
 - Change only what the request asks for. Keep the label short; the rationale says what \
 changed and any value you had to choose.
 - <page> lists what the running page shows, with each element's source location and \
-image asset; <assets> lists the project's image and font files; <file> blocks show files \
-the request names. Use them to resolve references such as \"the image in the navbar\".
+image asset; <assets> lists the project's image and font files; <file> blocks show the other \
+files you may edit: where the selected component is rendered, files the request names, and \
+the page next to a sketch. Use them to resolve references such as \"the image in the navbar\".
 - Refer to files under public/ by their URL from the site root (public/cup.svg is \
 \"/cup.svg\"); import any other asset with a path relative to the file you edit.
 - When a <sketch> is attached, the images show the page with the developer's strokes in \
 blue and the strokes alone. Build what the sketch depicts with the project's styles (layout, \
-cards, text, shapes) and insert it in the file you are shown, where the sketch sits relative \
-to the elements it overlaps. When the <sketch> is on a selected element, its second image is a \
-close-up instead: change that element to match the sketch rather than adding a copy of it.
+cards, text, shapes) and insert it where the <sketch> block says, positioned where the sketch \
+sits relative to the elements it overlaps. When the <sketch> is on a selected element, its \
+second image is a close-up instead: change that element to match the sketch rather than \
+adding a copy of it.
 - When the change needs an icon or illustration, add it to the variant's `assets`: a \
 kebab-case `name`, self-contained `svg` markup with a viewBox, and `format` svg (or webp, \
 with `width` in pixels, for a raster image). GUIJam saves it in the folder named in \
@@ -326,7 +343,13 @@ impl Progress {
 }
 
 #[must_use]
-pub fn user_prompt(style: &ElementStyle, source: &str, request: &str, tier: &TierConfig) -> String {
+pub fn user_prompt(
+    style: &ElementStyle,
+    source: &str,
+    request: &str,
+    tier: &TierConfig,
+    component: Option<&Component>,
+) -> String {
     let line = usize::try_from(style.line.get()).unwrap_or(usize::MAX);
     let lines: Vec<&str> = source
         .split('\n')
@@ -343,6 +366,14 @@ pub fn user_prompt(style: &ElementStyle, source: &str, request: &str, tier: &Tie
         column = style.column,
         hash = style.base_hash.as_str(),
     );
+    if let Some(component) = component {
+        let place = if component.root {
+            "the selected element is its root element"
+        } else {
+            "the selected element is inside it"
+        };
+        let _ = writeln!(prompt, "Component: {} ({place})", component.name);
+    }
     let class_note = match style.class_source {
         ElementStyleClassSource::Static => "a string literal",
         ElementStyleClassSource::Call => "a cn()/clsx() call; only its first literal is fixed",
@@ -432,6 +463,7 @@ mod tests {
         ElementStyle, GenerateProgress, GenerateProgressStepsItemState as State, UpdateResult,
         VariantPreview,
     };
+    use gjd_core::jsx::Component;
     use gjd_core::theme::Theme;
     use gjd_providers::ProviderEvent;
     use serde_json::json;
@@ -446,7 +478,49 @@ mod tests {
         assert!(SYSTEM_PROMPT.contains(
             "When the <sketch> is on a selected element, its second image is a close-up instead: change that element to match the sketch rather than adding a copy of it."
         ));
-        assert!(SYSTEM_PROMPT.contains("insert it in the file you are shown"));
+        assert!(SYSTEM_PROMPT.contains("insert it where the <sketch> block says"));
+    }
+
+    #[test]
+    fn the_system_prompt_lets_the_model_edit_the_files_it_is_shown_to_move_or_remove() {
+        for rule in [
+            "edit only the files shown in <file> blocks with a base_hash, and copy each file's own base_hash into every op that edits it.",
+            "remove or comment out the component's tag there instead, together with its import",
+            "Leave the component's own file as it is.",
+            "Never leave a copy behind.",
+            "Comments can't nest, so remove any comment inside the part you comment out.",
+            "A removal, move or comment-out happens in every variant",
+            "sentences of plain text without Markdown",
+        ] {
+            assert!(SYSTEM_PROMPT.contains(rule), "{rule}");
+        }
+        assert!(!SYSTEM_PROMPT.contains("Edit only the file you are shown"));
+    }
+
+    #[test]
+    fn names_the_component_and_whether_the_element_is_its_root() {
+        let style = inspect("src/OrderButton.tsx", BUTTON, 3, 5, &Theme::default());
+        let root = Component {
+            name: "OrderButton".to_owned(),
+            root: true,
+        };
+        let inner = Component {
+            name: "OrderButton".to_owned(),
+            root: false,
+        };
+
+        let with_root = user_prompt(&style, BUTTON, "remove this", &R2, Some(&root));
+        let with_inner = user_prompt(&style, BUTTON, "remove this", &R2, Some(&inner));
+        let without = user_prompt(&style, BUTTON, "remove this", &R2, None);
+
+        assert!(
+            with_root
+                .contains("\nComponent: OrderButton (the selected element is its root element)\n")
+        );
+        assert!(
+            with_inner.contains("\nComponent: OrderButton (the selected element is inside it)\n")
+        );
+        assert!(!without.contains("Component:"));
     }
 
     fn states(progress: &mut Progress) -> Vec<(String, State)> {
@@ -656,7 +730,7 @@ mod tests {
         let theme = Theme::from_css(["@theme { --color-brand: #be123c; --radius-card: 14px; }"]);
         let style = inspect("src/OrderButton.tsx", BUTTON, 3, 5, &theme);
 
-        let prompt = user_prompt(&style, BUTTON, "  make it blue ", &R1);
+        let prompt = user_prompt(&style, BUTTON, "  make it blue ", &R1, None);
 
         assert!(prompt.starts_with("Request: make it blue\n"));
         assert!(prompt.contains("Element: <button> at src/OrderButton.tsx:3:5\n"));
@@ -676,7 +750,7 @@ mod tests {
 
         let crlf = BUTTON.replace('\n', "\r\n");
         let style = inspect("src/OrderButton.tsx", &crlf, 3, 5, &theme);
-        let from_crlf = user_prompt(&style, &crlf, "  make it blue ", &R1);
+        let from_crlf = user_prompt(&style, &crlf, "  make it blue ", &R1, None);
         assert!(!from_crlf.contains('\r'));
         assert!(from_crlf.contains(
             "   3 |     <button type=\"button\" className=\"rounded-lg bg-brand px-6\">\n"
@@ -692,7 +766,7 @@ mod tests {
         source.push_str("export const A = () => <div className=\"p-2\" />;\n");
         let style = inspect("src/A.tsx", &source, 101, 24, &Theme::default());
 
-        let prompt = user_prompt(&style, &source, "x", &R1);
+        let prompt = user_prompt(&style, &source, "x", &R1, None);
 
         assert!(prompt.contains("lines=\"61-102\""));
         assert!(prompt.contains("  61 | // line 61\n"));
@@ -709,8 +783,14 @@ mod tests {
         source.push_str("export const A = () => <img src={logo} className=\"p-2\" />;\n");
         let style = inspect("src/A.tsx", &source, 61, 24, &Theme::default());
 
-        let narrow = user_prompt(&style, &source, "what is the path of this image?", &R1);
-        let wide = user_prompt(&style, &source, "x", &R2);
+        let narrow = user_prompt(
+            &style,
+            &source,
+            "what is the path of this image?",
+            &R1,
+            None,
+        );
+        let wide = user_prompt(&style, &source, "x", &R2, None);
 
         assert!(narrow.contains("<imports file=\"src/A.tsx\" lines=\"1-2\">\n   1 | import logo from './assets/logo.png';\n"));
         assert!(narrow.contains("lines=\"21-62\""));

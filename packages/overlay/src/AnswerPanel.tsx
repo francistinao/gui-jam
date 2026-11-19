@@ -24,14 +24,14 @@ export function AnswerPanel({ generation, controller }: AnswerPanelProps) {
   return (
     <section aria-label="Answer" className="flex flex-col gap-2">
       <RunNotes notes={notes} />
-      <p className="typography-body-medium whitespace-pre-wrap text-grey-800">
+      <p className="typography-body-medium min-w-0 whitespace-pre-wrap text-grey-800 [overflow-wrap:anywhere]">
         {splitPaths(answer).map((part) =>
           'path' in part ? (
             <button
               key={part.at}
               type="button"
               title="Open in your editor"
-              className="font-mono text-blue-600 underline-offset-2 hover:underline"
+              className="inline text-left font-mono text-blue-600 underline-offset-2 [overflow-wrap:anywhere] hover:underline"
               onClick={() => openInEditor(part.path)}
             >
               {part.path}

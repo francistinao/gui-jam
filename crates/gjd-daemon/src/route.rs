@@ -11,12 +11,12 @@ pub enum Tier {
 pub struct Decision {
     pub tier: Tier,
     pub question: bool,
+    pub needs_usages: bool,
     pub notice: Option<&'static str>,
 }
 
 pub const EXACT_NOTICE: &str = "Exact edit. No AI needed.";
-pub const MULTI_FILE_NOTICE: &str =
-    "Multi-file changes work best from your CLI session; this only changes the selected file.";
+pub const MULTI_FILE_NOTICE: &str = "Changes across many files work best from your CLI session. GUIJam edits the selected file and the files it shows the AI.";
 
 const SHORT_PROMPT_WORDS: usize = 60;
 
@@ -27,6 +27,18 @@ const QUESTION_STARTS: [&str; 18] = [
 const EDIT_VERBS: [&str; 16] = [
     "make", "change", "set", "turn", "add", "remove", "delete", "replace", "use", "move", "give",
     "swap", "insert", "put", "fix", "update",
+];
+const PLACEMENT: [&str; 10] = [
+    "remove",
+    "delete",
+    "move",
+    "relocate",
+    "comment",
+    "uncomment",
+    "hide",
+    "put",
+    "place",
+    "drop",
 ];
 const MULTI_FILE: [&str; 7] = [
     "refactor",
@@ -188,9 +200,12 @@ pub fn classify(prompt: &str, exact: bool, force_ai: bool, rich: bool) -> Decisi
     let words = words(prompt);
     let question = is_question(prompt, &words);
     let lowered = prompt.to_lowercase();
+    let has = |list: &[&str]| words.iter().any(|word| list.contains(&word.as_str()));
+    let needs_usages = !question && (has(&PLACEMENT) || mentions_file(prompt));
     let decision = |tier, notice| Decision {
         tier,
         question,
+        needs_usages,
         notice,
     };
     if rich {
@@ -199,7 +214,6 @@ pub fn classify(prompt: &str, exact: bool, force_ai: bool, rich: bool) -> Decisi
     if exact && !force_ai && !question {
         return decision(Tier::R0, Some(EXACT_NOTICE));
     }
-    let has = |list: &[&str]| words.iter().any(|word| list.contains(&word.as_str()));
     if has(&MULTI_FILE)
         || MULTI_FILE_PHRASES
             .iter()
@@ -301,6 +315,34 @@ mod tests {
             (Tier::R2, Some(MULTI_FILE_NOTICE))
         );
         assert_eq!(classify("what is this?", true, false, false).tier, Tier::R1);
+    }
+
+    #[test]
+    fn asks_for_the_files_that_render_the_element_when_the_request_moves_or_removes_it() {
+        for prompt in [
+            "remove this",
+            "Delete this card",
+            "move it to the employee dashboard",
+            "comment this out",
+            "hide it on the dashboard",
+            "put it under the onboarding tasks",
+            "use the layout from src/pages/Home.tsx",
+        ] {
+            let decision = classify(prompt, false, false, false);
+            assert!(decision.needs_usages, "{prompt}");
+            assert_eq!(decision.tier, Tier::R2, "{prompt}");
+        }
+        for prompt in [
+            "make it blue",
+            "where is this rendered?",
+            "add a soft shadow",
+        ] {
+            assert!(
+                !classify(prompt, false, false, false).needs_usages,
+                "{prompt}"
+            );
+        }
+        assert!(classify("move it below the header", false, false, true).needs_usages);
     }
 
     #[test]

@@ -558,3 +558,66 @@ export function needsLine(needs: Needs): string {
   const pronoun = needs.packages.length === 1 ? 'it' : 'them';
   return `Needs ${names}. It isn't previewed until you install ${pronoun}.`;
 }
+
+export function editedFiles(variant: {
+  file: string;
+  changes: readonly { file: string }[];
+  created: readonly string[];
+}): string[] {
+  const slashed = (path: string) => path.replaceAll('\\', '/');
+  const created = new Set(variant.created.map(slashed));
+  const files = [...new Set(variant.changes.map((change) => slashed(change.file)))].filter(
+    (file) => !created.has(file),
+  );
+  return files.length > 0 ? files : [slashed(variant.file)];
+}
+
+export function appliedMessage(files: readonly string[]): string {
+  const names = files.map((file) => file.split(/[\\/]/).pop() ?? file);
+  const [first = '', second = ''] = names;
+  if (names.length <= 1) return `Applied to ${first}.`;
+  if (names.length === 2) return `Applied to ${first} and ${second}.`;
+  return `Applied to ${first} and ${names.length - 1} other files.`;
+}
+
+export function nearestIndex(bounds: Rect, candidates: readonly Rect[]): number | null {
+  let best: number | null = null;
+  let bestAcross = false;
+  let bestGap = Number.POSITIVE_INFINITY;
+  for (const [index, rect] of candidates.entries()) {
+    const across =
+      Math.min(rect.left + rect.width, bounds.left + bounds.width) -
+        Math.max(rect.left, bounds.left) >
+      0;
+    const gap = Math.max(
+      0,
+      rect.top - (bounds.top + bounds.height),
+      bounds.top - (rect.top + rect.height),
+    );
+    if ((across && !bestAcross) || (across === bestAcross && gap < bestGap)) {
+      best = index;
+      bestAcross = across;
+      bestGap = gap;
+    }
+  }
+  return best;
+}
+
+export function followedSrc(
+  selection: { file: string; line: number; column: number },
+  changes: readonly {
+    file: string;
+    line: number;
+    before: readonly string[];
+    after: readonly string[];
+  }[],
+): { src: string; touched: boolean } {
+  const own = changesIn(selection.file, changes);
+  const touched = own.some(
+    (change) =>
+      change.line <= selection.line &&
+      selection.line < change.line + Math.max(change.before.length, 1),
+  );
+  const line = shiftedLine(selection.line, own);
+  return { src: `${selection.file}:${line}:${selection.column}`, touched };
+}

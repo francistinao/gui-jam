@@ -10,15 +10,15 @@ use futures_util::stream::FuturesUnordered;
 use gjd_core::codemod::{CodemodError, finetune_ops};
 use gjd_core::content_hash;
 use gjd_core::contracts::{
-    CodeChange, CommitDone, DependenciesInstall, DependenciesInstalled, DependencyNeeds, EditOp,
-    EditOpValue, ElementStyle, ErrorCode, ErrorPayload, FinetunePreview, FinetunePreviewed,
-    GenerateDone, GenerateDoneDroppedItem, GenerateDoneNotesItem, GenerateRequest, GuijamMessage,
-    HelloOk, JsxValue, OverlayClear, OverlaySet, Package, Route, RouteTier, RunRef, SourceRef,
-    UndoDone, UpdateResult, UpdateResultStatus, UpdateResultUpdateId, Variant,
-    VariantAssetsItemFormat, VariantPreview, VariantSelect, VariantSelected, VariantSet,
+    CodeChange, CommitDone, ContentHash, DependenciesInstall, DependenciesInstalled,
+    DependencyNeeds, EditOp, EditOpValue, ElementStyle, ErrorCode, ErrorPayload, FinetunePreview,
+    FinetunePreviewed, GenerateDone, GenerateDoneDroppedItem, GenerateDoneNotesItem,
+    GenerateRequest, GuijamMessage, HelloOk, JsxValue, OverlayClear, OverlaySet, Package, Route,
+    RouteTier, RunRef, SourceRef, UndoDone, UpdateResult, UpdateResultStatus, UpdateResultUpdateId,
+    Variant, VariantAssetsItemFormat, VariantPreview, VariantSelect, VariantSelected, VariantSet,
 };
 use gjd_core::journal::{CommitError, FileChange, Journal};
-use gjd_core::jsx::{JsxError, check_syntax, imports};
+use gjd_core::jsx::{self, Component, JsxError, check_syntax, imports};
 use gjd_core::patch::{self, PatchError};
 use gjd_core::policy::{PolicyError, ProjectRoot};
 use gjd_core::style::{Styling, inspect_with};
@@ -42,6 +42,7 @@ use crate::links::{self, Found};
 use crate::project::{self, PackageManager, Project};
 use crate::r0;
 use crate::references;
+use crate::related::{self, RelatedFile, RenderSite};
 use crate::route::{self, Tier};
 use crate::run_dir::RunDir;
 use crate::screenshot::{self, Browser};
@@ -53,6 +54,9 @@ const AUTH_CACHE: Duration = Duration::from_mins(5);
 const DEFAULT_PROVIDER: ProviderId = ProviderId::ClaudeCode;
 const VERSION_CACHE: Duration = Duration::from_hours(1);
 const MAX_NEEDS: usize = 4;
+const READ_CONCURRENCY: usize = 32;
+const PAGE_WHY: &str = "holds the routed page next to the sketch";
+const NAMED_WHY: &str = "named in the request";
 
 type VersionCache = HashMap<(String, Option<u64>), (String, Instant)>;
 
@@ -331,7 +335,9 @@ fn invalid_output(detail: &str) -> Failure {
     .with_action("Retry, or simplify the prompt.")
 }
 
-fn apply_variant(ops: &[EditOp], file: &str, current: &str) -> Result<String, Failure> {
+type Contents = BTreeMap<String, String>;
+
+fn apply_variant(ops: &[EditOp], editable: &Contents) -> Result<Contents, Failure> {
     if ops.is_empty() || ops.len() > generate::MAX_OPS {
         return Err(invalid_output(&format!(
             "it proposed {} edits; 1 to {} are allowed",
@@ -342,21 +348,21 @@ fn apply_variant(ops: &[EditOp], file: &str, current: &str) -> Result<String, Fa
     if let Some(other) = ops
         .iter()
         .map(generate::op_file)
-        .find(|op_file| *op_file != file)
+        .find(|op_file| !editable.contains_key(*op_file))
     {
         return Err(invalid_output(&format!(
             "it edits {other}, which it was not shown"
         )));
     }
-    let sources = BTreeMap::from([(file.to_owned(), current.to_owned())]);
-    let content = patch::apply(&sources, ops)
+    let changed: Contents = patch::apply(editable, ops)
         .map_err(model_patch_failure)?
-        .remove(file)
-        .unwrap_or_else(|| current.to_owned());
-    if content == current {
+        .into_iter()
+        .filter(|(file, content)| editable.get(file) != Some(content))
+        .collect();
+    if changed.is_empty() {
         return Err(invalid_output("it changed nothing"));
     }
-    Ok(content)
+    Ok(changed)
 }
 
 fn model_patch_failure(error: PatchError) -> Failure {
@@ -371,7 +377,7 @@ fn model_patch_failure(error: PatchError) -> Failure {
 }
 
 type Validated = (
-    Vec<(Variant, String, Vec<AssetFile>)>,
+    Vec<(Variant, Contents, Vec<AssetFile>)>,
     Vec<GenerateDoneDroppedItem>,
 );
 
@@ -408,18 +414,24 @@ struct Checks<'a> {
     root: &'a Path,
 }
 
-fn edits_of(ops: &[EditOp], shown: &str) -> Vec<EditOp> {
-    let hash = content_hash(shown.as_bytes());
+fn edits_of(ops: &[EditOp], editable: &Contents) -> Vec<EditOp> {
+    let hashes: BTreeMap<&str, ContentHash> = editable
+        .iter()
+        .map(|(file, shown)| (file.as_str(), content_hash(shown.as_bytes())))
+        .collect();
     ops.iter()
         .filter(|op| !matches!(op, EditOp::CreateFile { .. }))
         .cloned()
         .map(|mut op| {
+            let Some(hash) = hashes.get(generate::op_file(&op)).cloned() else {
+                return op;
+            };
             match &mut op {
                 EditOp::ReplaceSnippet { base_hash, .. }
                 | EditOp::ClassTokens { base_hash, .. }
                 | EditOp::JsxAttr { base_hash, .. }
                 | EditOp::StyleProp { base_hash, .. }
-                | EditOp::RewriteFile { base_hash, .. } => base_hash.clone_from(&hash),
+                | EditOp::RewriteFile { base_hash, .. } => *base_hash = hash,
                 EditOp::CreateFile { .. } => {}
             }
             op
@@ -485,17 +497,17 @@ fn files_for(variant: &Variant, checks: &Checks<'_>) -> Result<Vec<AssetFile>, S
 
 fn validate_variants(
     variants: Vec<Variant>,
+    editable: &Contents,
     file: &str,
-    current: &str,
     checks: &Checks<'_>,
 ) -> Result<Validated, Failure> {
-    let mut valid: Vec<(Variant, String, Vec<AssetFile>)> = Vec::new();
+    let mut valid: Vec<(Variant, Contents, Vec<AssetFile>)> = Vec::new();
     let mut dropped = Vec::new();
     for variant in variants.into_iter().take(generate::VARIANTS) {
         let label = String::from(variant.label.clone());
-        let edits = edits_of(&variant.ops, current);
+        let edits = edits_of(&variant.ops, editable);
         let creates = variant.ops.len() - edits.len();
-        let reason = match apply_variant(&edits, file, current) {
+        let reason = match apply_variant(&edits, editable) {
             Ok(content) if valid.iter().any(|(_, other, _)| *other == content) => {
                 "It is the same as another variant.".to_owned()
             }
@@ -525,6 +537,55 @@ fn validate_variants(
         });
     }
     Ok((valid, dropped))
+}
+
+fn preview_outcome(
+    selected: Option<UpdateResult>,
+    others: Vec<UpdateResult>,
+) -> Option<UpdateResult> {
+    let failed = |update: &UpdateResult| {
+        matches!(
+            update.status,
+            UpdateResultStatus::CompileError | UpdateResultStatus::RuntimeError
+        )
+    };
+    if let Some(update) = others.iter().find(|update| failed(update)) {
+        return Some(update.clone());
+    }
+    selected.or_else(|| others.into_iter().next())
+}
+
+fn also_edits(selected: &str, contents: &Contents) -> String {
+    let others: Vec<&str> = contents
+        .keys()
+        .filter(|path| *path != selected)
+        .map(|path| path.rsplit('/').next().unwrap_or(path))
+        .collect();
+    if others.is_empty() {
+        String::new()
+    } else {
+        format!(" · also {}", others.join(", "))
+    }
+}
+
+fn full_prompt(job: &Job<'_>, tier: &TierConfig, references: &str, linked: &str) -> String {
+    let element = generate::user_prompt(
+        job.style,
+        job.source,
+        job.prompt,
+        tier,
+        job.related.component.as_ref(),
+    );
+    format!("{element}{references}{linked}")
+}
+
+fn rendered_by(site: RenderSite, name: &str) -> RelatedFile {
+    RelatedFile {
+        path: site.path,
+        content: site.content,
+        anchors: site.lines,
+        why: format!("renders {name}"),
+    }
 }
 
 fn sketch_count(request: &GenerateRequest) -> usize {
@@ -662,6 +723,22 @@ struct VariantRun {
     shown: Vec<String>,
 }
 
+#[derive(Default)]
+struct Related {
+    files: Vec<RelatedFile>,
+    component: Option<Component>,
+    page_near: Option<String>,
+}
+
+impl Related {
+    fn place_file<'a>(&'a self, selected: &'a str) -> &'a str {
+        self.page_near
+            .as_deref()
+            .and_then(|near| references::parse_src(near))
+            .map_or(selected, |(file, _, _)| file)
+    }
+}
+
 struct Job<'a> {
     request: &'a GenerateRequest,
     prompt: &'a str,
@@ -669,6 +746,8 @@ struct Job<'a> {
     project: &'a Project,
     source: &'a str,
     style: &'a ElementStyle,
+    related: &'a Related,
+    editable: &'a Contents,
     started: Instant,
     cancel: &'a CancellationToken,
 }
@@ -754,30 +833,36 @@ impl Held {
 }
 
 fn libraries_needed(
-    file: &str,
-    current: &str,
-    content: &str,
+    bases: &Contents,
+    contents: &Contents,
     created: &[AssetFile],
     project: &Project,
     root: &Path,
 ) -> Result<Vec<String>, String> {
-    let before = imports(file, current).unwrap_or_default();
+    let before: BTreeSet<String> = contents
+        .keys()
+        .filter_map(|file| Some((file, bases.get(file)?)))
+        .flat_map(|(file, base)| imports(file, base).unwrap_or_default())
+        .collect();
     let known: BTreeSet<&str> = before
         .iter()
         .filter(|specifier| !specifier.starts_with('.'))
         .filter_map(|specifier| specifier.split('/').next())
         .collect();
     let allowed = libraries::allowed(project);
-    let sources = std::iter::once((file, content)).chain(
-        created
-            .iter()
-            .filter(|asset| {
-                Path::new(&asset.path).extension().is_some_and(|extension| {
-                    matches!(extension.to_str(), Some("tsx" | "jsx" | "ts" | "js"))
+    let sources = contents
+        .iter()
+        .map(|(file, content)| (file.as_str(), content.as_str()))
+        .chain(
+            created
+                .iter()
+                .filter(|asset| {
+                    Path::new(&asset.path).extension().is_some_and(|extension| {
+                        matches!(extension.to_str(), Some("tsx" | "jsx" | "ts" | "js"))
+                    })
                 })
-            })
-            .map(|asset| (asset.path.as_str(), asset.preview.as_str())),
-    );
+                .map(|asset| (asset.path.as_str(), asset.preview.as_str())),
+        );
     let mut needed: Vec<String> = Vec::new();
     for (path, source) in sources {
         let Ok(specifiers) = imports(path, source) else {
@@ -785,7 +870,7 @@ fn libraries_needed(
         };
         for specifier in specifiers
             .iter()
-            .filter(|specifier| !before.contains(specifier))
+            .filter(|specifier| !before.contains(specifier.as_str()))
         {
             let Some(package) = libraries::package_of(specifier) else {
                 continue;
@@ -1235,7 +1320,7 @@ impl Daemon {
             return Ok(None);
         }
         let holder = held.filter(|holder| holder != run_id);
-        let (file, version, previews, waiting) = {
+        let (file, versions, mut previews, waiting) = {
             let runs = locked(&self.variant_runs);
             let run = runs
                 .get(run_id)
@@ -1245,11 +1330,6 @@ impl Daemon {
             let changeset = changesets
                 .get(changeset_id)
                 .ok_or_else(|| unknown_changeset(changeset_id))?;
-            let version = changeset
-                .files
-                .get(&run.file)
-                .cloned()
-                .ok_or_else(|| unknown_changeset(changeset_id))?;
             let waiting = !changeset.needs.is_empty();
             let previews: Vec<(String, String)> = changeset
                 .created
@@ -1257,14 +1337,22 @@ impl Daemon {
                 .filter(|_| !waiting)
                 .map(|asset| (asset.path.clone(), asset.preview.clone()))
                 .collect();
-            (run.file.clone(), version, previews, waiting)
+            (run.file.clone(), changeset.files.clone(), previews, waiting)
         };
-        let disk = self.read_project_file(&file).await?;
-        let content = if waiting {
-            disk.clone()
+        let mut main = None;
+        if waiting {
+            main = Some(self.read_project_file(&file).await?);
         } else {
-            materialize(&file, &version, &disk)?
-        };
+            for (path, version) in &versions {
+                let disk = self.read_project_file(path).await?;
+                let content = materialize(path, version, &disk)?;
+                if *path == file {
+                    main = Some(content);
+                } else {
+                    previews.push((path.clone(), content));
+                }
+            }
+        }
         let cleared: BTreeSet<String> = {
             let mut runs = locked(&self.variant_runs);
             let mut cleared = BTreeSet::new();
@@ -1283,15 +1371,26 @@ impl Daemon {
             }
             cleared
         };
+        let mut updates = Vec::new();
         for (path, preview) in &previews {
-            self.show(path, Some(preview)).await?;
+            updates.push(self.show(path, Some(preview)).await?);
         }
-        let update = self.show(&file, Some(&content)).await?;
+        let selected = match &main {
+            Some(content) => Some(self.show(&file, Some(content)).await?),
+            None => self.clear_shown(&file).await?,
+        };
         for path in &cleared {
-            self.show(path, None).await?;
+            self.clear_shown(path).await?;
         }
         *slot = Some(run_id.to_owned());
-        Ok(Some(update))
+        Ok(preview_outcome(selected, updates))
+    }
+
+    async fn clear_shown(&self, file: &str) -> Result<Option<UpdateResult>, Failure> {
+        if !locked(&self.overlays).contains_key(file) {
+            return Ok(None);
+        }
+        self.show(file, None).await.map(Some)
     }
 
     async fn select_variant(&self, request: VariantSelect) -> Result<VariantSelected, Failure> {
@@ -1315,9 +1414,9 @@ impl Daemon {
             .get_mut(run_id)
             .map(|run| (run.file.clone(), std::mem::take(&mut run.shown)));
         if let Some((file, shown)) = shown {
-            self.show(&file, None).await?;
+            self.clear_shown(&file).await?;
             for path in &shown {
-                self.show(path, None).await?;
+                self.clear_shown(path).await?;
             }
         }
         Ok(())
@@ -1338,9 +1437,9 @@ impl Daemon {
             return Ok(());
         }
         *slot = None;
-        self.show(&run.file, None).await?;
+        self.clear_shown(&run.file).await?;
         for path in &run.shown {
-            self.show(path, None).await?;
+            self.clear_shown(path).await?;
         }
         Ok(())
     }
@@ -1408,6 +1507,18 @@ impl Daemon {
             force_ai,
             extras(&request, &found).any(),
         );
+        let related = if decision.tier == Tier::R0 && exact.is_some() {
+            Related::default()
+        } else {
+            self.related(&request, &prompt, &source, &files, decision.needs_usages)
+                .await
+        };
+        let mut editable = Contents::from([(request.file.clone(), source.clone())]);
+        for file in &related.files {
+            editable
+                .entry(file.path.clone())
+                .or_insert_with(|| file.content.clone());
+        }
         let job = Job {
             request: &request,
             prompt: &prompt,
@@ -1415,6 +1526,8 @@ impl Daemon {
             project: &project,
             source: &source,
             style: &style,
+            related: &related,
+            editable: &editable,
             started,
             cancel,
         };
@@ -1458,8 +1571,12 @@ impl Daemon {
         };
         let (variants, first) = self.hold_variants(
             job.request,
-            job.source,
-            vec![(held, content, ops.to_vec())],
+            job.editable,
+            vec![(
+                held,
+                Contents::from([(file.to_owned(), content)]),
+                ops.to_vec(),
+            )],
             "R0",
             job.project.package_manager,
         );
@@ -1519,11 +1636,7 @@ impl Daemon {
             model: model.clone(),
             effort: Some(effort),
             system_prompt: generate::SYSTEM_PROMPT.to_owned(),
-            user_prompt: format!(
-                "{}{references}{}",
-                generate::user_prompt(job.style, job.source, job.prompt, tier),
-                linked.section
-            ),
+            user_prompt: full_prompt(job, tier, &references, &linked.section),
             images,
             tools: ToolPolicy::None,
             timeout,
@@ -1867,22 +1980,21 @@ impl Daemon {
             project: job.project,
             root: self.project.path(),
         };
-        let (valid, dropped) = validate_variants(proposed, file, job.source, &checks)?;
+        let (valid, dropped) = validate_variants(proposed, job.editable, file, &checks)?;
         if job.cancel.is_cancelled() {
             return Err(ProviderError::Cancelled.into());
         }
         let mut dropped = dropped;
         let mut wanting = Vec::new();
-        for (variant, content, files) in valid {
+        for (variant, contents, files) in valid {
             match libraries_needed(
-                file,
-                job.source,
-                &content,
+                job.editable,
+                &contents,
                 &files,
                 job.project,
                 self.project.path(),
             ) {
-                Ok(names) => wanting.push((variant, content, files, names)),
+                Ok(names) => wanting.push((variant, contents, files, names)),
                 Err(reason) => dropped.push(GenerateDoneDroppedItem {
                     label: Some(String::from(variant.label.clone())),
                     reason,
@@ -1894,8 +2006,8 @@ impl Daemon {
             .flat_map(|(_, _, _, names)| names.iter().cloned())
             .collect();
         let versions = self.versions_for(&names, job.project).await;
-        let mut held: Vec<(Held, String, Vec<EditOp>)> = Vec::new();
-        for (variant, content, files, names) in wanting {
+        let mut held: Vec<(Held, Contents, Vec<EditOp>)> = Vec::new();
+        for (variant, contents, files, names) in wanting {
             let found: Result<Vec<Need>, String> = names
                 .iter()
                 .map(|name| match versions.get(name) {
@@ -1909,8 +2021,8 @@ impl Daemon {
                 .collect();
             match found {
                 Ok(needs) => {
-                    let ops = edits_of(&variant.ops, job.source);
-                    held.push((Held::from_variant(variant, files, needs), content, ops));
+                    let ops = edits_of(&variant.ops, job.editable);
+                    held.push((Held::from_variant(variant, files, needs), contents, ops));
                 }
                 Err(reason) => dropped.push(GenerateDoneDroppedItem {
                     label: Some(String::from(variant.label.clone())),
@@ -1928,7 +2040,7 @@ impl Daemon {
         held.sort_by_key(|(variant, _, _)| !variant.needs.is_empty());
         let (variants, first) = self.hold_variants(
             job.request,
-            job.source,
+            job.editable,
             held,
             route_label,
             job.project.package_manager,
@@ -2030,12 +2142,6 @@ impl Daemon {
 
     async fn references(&self, job: &Job<'_>) -> String {
         let files = self.index.files().await;
-        let mut mentioned = Vec::new();
-        for path in references::mentioned_sources(&files, job.prompt, &job.request.file) {
-            if let Ok(content) = self.read_project_file(path).await {
-                mentioned.push((path.to_owned(), content));
-            }
-        }
         let container = format!(
             "{}:{}:{}",
             job.request.file, job.request.line, job.request.column
@@ -2045,23 +2151,180 @@ impl Daemon {
             .sketch
             .as_ref()
             .map_or_else(String::new, |sketch| {
-                references::sketch_section(sketch, &container)
+                references::sketch_section(sketch, &container, job.related.page_near.as_deref())
             });
         let found = references::section(
             job.request.page.as_ref(),
             &files,
             &self.project.path().to_string_lossy(),
             job.prompt,
-            &mentioned,
         );
+        let shown = related::render(&job.related.files);
         let inspiration = references::inspiration_section(
             sketch_count(job.request) + 1,
             inspiration_count(job.request),
         );
-        let folder = assets::prompt_note(&job.request.file, &assets::assets_dir(&files));
-        let new_ui = project::new_ui_section(job.project, &files, &job.request.file);
+        let place = job.related.place_file(&job.request.file);
+        let folder = assets::prompt_note(place, &assets::assets_dir(&files));
+        let new_ui = project::new_ui_section(job.project, &files, place);
         let libraries = libraries::prompt_section(job.project);
-        format!("{sketch}{inspiration}{found}{folder}{new_ui}{libraries}")
+        format!("{sketch}{inspiration}{found}{shown}{folder}{new_ui}{libraries}")
+    }
+
+    async fn related(
+        &self,
+        request: &GenerateRequest,
+        prompt: &str,
+        source: &str,
+        files: &[String],
+        needs_usages: bool,
+    ) -> Related {
+        let started = Instant::now();
+        let selected = request.file.as_str();
+        let component =
+            jsx::enclosing_component(selected, source, request.line.get(), request.column.get());
+        let on_page = references::page_files(request.page.as_ref());
+        let mentioned: Vec<String> =
+            references::mentioned_sources(files, prompt, selected, &on_page)
+                .into_iter()
+                .map(str::to_owned)
+                .collect();
+        let mut names: Vec<String> = Vec::new();
+        if needs_usages {
+            names.extend(component.iter().map(|component| component.name.clone()));
+            names.extend(
+                mentioned
+                    .iter()
+                    .filter_map(|path| related::component_name(path))
+                    .map(str::to_owned),
+            );
+            names.sort();
+            names.dedup();
+        }
+        let mut sites = self.render_sites(files, &names).await;
+        let mut found: Vec<RelatedFile> = Vec::new();
+        if let Some(component) = component.as_ref().filter(|_| needs_usages) {
+            let candidates: Vec<RenderSite> = sites
+                .remove(&component.name)
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|site| site.path != selected)
+                .collect();
+            for site in related::ranked(candidates, &on_page, related::MAX_RENDER_SITES) {
+                related::add(&mut found, rendered_by(site, &component.name));
+            }
+        }
+        let page_near = self.page_near(request, source).await;
+        if let Some((_, file)) = &page_near {
+            related::add(&mut found, file.clone());
+        }
+        for path in &mentioned {
+            if let Ok(content) = self.read_project_file(path).await {
+                related::add(
+                    &mut found,
+                    RelatedFile {
+                        path: path.clone(),
+                        content,
+                        anchors: Vec::new(),
+                        why: NAMED_WHY.to_owned(),
+                    },
+                );
+            }
+        }
+        for path in &mentioned {
+            let Some(name) = related::component_name(path) else {
+                continue;
+            };
+            let candidates: Vec<RenderSite> = sites
+                .remove(name)
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|site| site.path != selected && site.path != *path)
+                .collect();
+            for site in related::ranked(candidates, &on_page, 1) {
+                related::add(&mut found, rendered_by(site, name));
+            }
+        }
+        tracing::info!(
+            files = found.len(),
+            searched = names.len(),
+            ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+            "gathered the files around the element"
+        );
+        Related {
+            files: found,
+            component,
+            page_near: page_near.map(|(near, _)| near),
+        }
+    }
+
+    async fn render_sites(
+        &self,
+        files: &[String],
+        names: &[String],
+    ) -> BTreeMap<String, Vec<RenderSite>> {
+        let mut sites: BTreeMap<String, Vec<RenderSite>> = BTreeMap::new();
+        if names.is_empty() {
+            return sites;
+        }
+        let paths: Vec<String> = related::candidates(files)
+            .into_iter()
+            .map(str::to_owned)
+            .collect();
+        let mut reads = futures_util::stream::iter(paths)
+            .map(|path| async move {
+                let content = self.read_project_file(&path).await;
+                (path, content)
+            })
+            .buffer_unordered(READ_CONCURRENCY);
+        while let Some((path, content)) = reads.next().await {
+            let Ok(content) = content else {
+                continue;
+            };
+            for name in names {
+                let lines = related::render_lines(&path, &content, name);
+                if !lines.is_empty() {
+                    sites.entry(name.clone()).or_default().push(RenderSite {
+                        path: path.clone(),
+                        content: content.clone(),
+                        lines,
+                    });
+                }
+            }
+        }
+        sites
+    }
+
+    async fn page_near(
+        &self,
+        request: &GenerateRequest,
+        source: &str,
+    ) -> Option<(String, RelatedFile)> {
+        let sketch = request
+            .sketch
+            .as_ref()
+            .filter(|sketch| sketch.element_box.is_none())?;
+        let near = sketch.near.as_ref()?.to_string();
+        let (file, line, _) = references::parse_src(&near)?;
+        if file == request.file
+            || !jsx::renders_children(
+                &request.file,
+                source,
+                request.line.get(),
+                request.column.get(),
+            )
+            .unwrap_or(false)
+        {
+            return None;
+        }
+        let content = self.read_project_file(file).await.ok()?;
+        let page = RelatedFile {
+            path: file.to_owned(),
+            content,
+            anchors: vec![line],
+            why: PAGE_WHY.to_owned(),
+        };
+        Some((near, page))
     }
 
     async fn prepare(&self, job: &Job<'_>, tier: &TierConfig) -> Result<Prepared, Failure> {
@@ -2173,20 +2436,31 @@ impl Daemon {
     fn hold_variants(
         &self,
         request: &GenerateRequest,
-        current: &str,
-        held: Vec<(Held, String, Vec<EditOp>)>,
+        bases: &Contents,
+        held: Vec<(Held, Contents, Vec<EditOp>)>,
         route_label: &str,
         manager: PackageManager,
     ) -> (Vec<VariantPreview>, Option<String>) {
         let file = &request.file;
         let variants: Vec<VariantPreview> = held
             .into_iter()
-            .map(|(variant, content, ops)| {
+            .map(|(variant, contents, ops)| {
                 let summary = format!(
-                    "{file}:{} · {} ({route_label})",
-                    request.line, variant.label
+                    "{file}:{} · {}{} ({route_label})",
+                    request.line,
+                    variant.label,
+                    also_edits(file, &contents)
                 );
-                let mut changes = code_changes(file, current, &content);
+                let order =
+                    std::iter::once(file).chain(contents.keys().filter(|path| *path != file));
+                let mut changes: Vec<CodeChange> = order
+                    .filter_map(|path| {
+                        let content = contents.get(path)?;
+                        let base = bases.get(path).map_or("", String::as_str);
+                        Some(code_changes(path, base, content))
+                    })
+                    .flatten()
+                    .collect();
                 for created in variant.assets.iter().filter(|asset| {
                     std::path::Path::new(&asset.path)
                         .extension()
@@ -2199,20 +2473,23 @@ impl Daemon {
                     .iter()
                     .map(|asset| asset.path.clone())
                     .collect();
-                let changeset_id = self.store_changeset(
-                    None,
-                    BTreeMap::from([(
-                        file.clone(),
-                        Version {
-                            base: current.to_owned(),
+                let versions: BTreeMap<String, Version> = contents
+                    .into_iter()
+                    .map(|(path, content)| {
+                        let version = Version {
+                            base: bases.get(&path).cloned().unwrap_or_default(),
                             content,
-                            ops,
-                        },
-                    )]),
-                    summary,
-                    "ai",
-                    variant.assets,
-                );
+                            ops: ops
+                                .iter()
+                                .filter(|op| generate::op_file(op) == path)
+                                .cloned()
+                                .collect(),
+                        };
+                        (path, version)
+                    })
+                    .collect();
+                let changeset_id =
+                    self.store_changeset(None, versions, summary, "ai", variant.assets);
                 if let Some(changeset) = locked(&self.changesets).get_mut(&changeset_id) {
                     changeset.needs.clone_from(&variant.needs);
                 }
@@ -2668,8 +2945,8 @@ mod tests {
     use std::path::Path;
 
     use super::{
-        Checks, Version, apply_variant, materialize, provider_failure, validate_variants,
-        without_account_ids,
+        Checks, Contents, Version, apply_variant, edits_of, materialize, provider_failure,
+        validate_variants, without_account_ids,
     };
     use crate::project::{PackageManager, Project, Ui};
 
@@ -2791,11 +3068,11 @@ mod tests {
         )];
 
         let (valid, dropped) =
-            validate_variants(proposed, FILE, SOURCE, &checks(&react(), &[], &[]))
+            validate_variants(proposed, &only(), FILE, &checks(&react(), &[], &[]))
                 .expect("the variant applies");
 
         assert!(dropped.is_empty(), "{dropped:?}");
-        assert_eq!(valid[0].1, SOURCE.replace("bg-brand", "bg-sea"));
+        assert_eq!(valid[0].1[FILE], SOURCE.replace("bg-brand", "bg-sea"));
     }
 
     #[test]
@@ -2808,7 +3085,7 @@ mod tests {
         ];
 
         let (valid, dropped) =
-            validate_variants(proposed, FILE, SOURCE, &checks(&react(), &[], &[]))
+            validate_variants(proposed, &only(), FILE, &checks(&react(), &[], &[]))
                 .expect("one survives");
 
         let kept: Vec<String> = valid
@@ -2875,12 +3152,12 @@ mod tests {
         let project = react();
 
         let (valid, dropped) =
-            validate_variants(proposed, FILE, SOURCE, &checks(&project, &[], &[]))
+            validate_variants(proposed, &only(), FILE, &checks(&project, &[], &[]))
                 .expect("one survives");
 
         assert_eq!(valid.len(), 1);
-        let (_, content, files) = &valid[0];
-        assert!(content.contains("bg-sea"));
+        let (_, contents, files) = &valid[0];
+        assert!(contents[FILE].contains("bg-sea"));
         let paths: Vec<&str> = files.iter().map(|file| file.path.as_str()).collect();
         assert_eq!(
             paths,
@@ -2958,7 +3235,7 @@ mod tests {
             ),
         ];
         for (ops, checks, reason) in cases {
-            let failure = validate_variants(vec![variant("Only", &ops)], FILE, SOURCE, &checks)
+            let failure = validate_variants(vec![variant("Only", &ops)], &only(), FILE, &checks)
                 .expect_err(reason);
             assert!(
                 failure.message.contains(reason),
@@ -2985,8 +3262,10 @@ mod tests {
             content: Vec::new(),
             preview: "import { Canvas } from '@react-three/fiber';\nexport function Scene() { return <Canvas />; }\n".to_owned(),
         };
+        let bases = Contents::from([(FILE.to_owned(), current.to_owned())]);
         let needed = |content: &str, created: &[crate::assets::AssetFile]| {
-            super::libraries_needed(FILE, current, content, created, &project, dir.path())
+            let contents = Contents::from([(FILE.to_owned(), content.to_owned())]);
+            super::libraries_needed(&bases, &contents, created, &project, dir.path())
         };
 
         assert_eq!(needed(current, &[]), Ok(Vec::new()));
@@ -3031,13 +3310,190 @@ mod tests {
             "Lost",
             &[snippet(FILE, SOURCE, "bg-nowhere", "bg-sky")],
         )];
-        let failure = validate_variants(lost, FILE, SOURCE, &checks(&react(), &[], &[]))
+        let failure = validate_variants(lost, &only(), FILE, &checks(&react(), &[], &[]))
             .expect_err("none survive");
         assert_eq!(failure.code, ErrorCode::ProviderInvalidOutput);
     }
 
     const FILE: &str = "src/B.tsx";
     const SOURCE: &str = "export const B = () => <b className=\"bg-brand p-2\" />;\n";
+    const APP: &str = "src/App.tsx";
+    const APP_SOURCE: &str = "import { B } from './B';\nimport { C } from './C';\n\nexport function App() {\n  return (\n    <main>\n      <B />\n      <C />\n    </main>\n  );\n}\n";
+    const CARD: &str = "src/C.tsx";
+    const CARD_SOURCE: &str =
+        "export function C() {\n  return <section className=\"p-4\">Menu</section>;\n}\n";
+
+    fn only() -> Contents {
+        Contents::from([(FILE.to_owned(), SOURCE.to_owned())])
+    }
+
+    fn shown() -> Contents {
+        Contents::from([
+            (FILE.to_owned(), SOURCE.to_owned()),
+            (APP.to_owned(), APP_SOURCE.to_owned()),
+            (CARD.to_owned(), CARD_SOURCE.to_owned()),
+        ])
+    }
+
+    #[test]
+    fn a_removal_may_edit_only_the_file_that_renders_the_component() {
+        let proposed = vec![variant(
+            "Remove",
+            &[
+                snippet(APP, APP_SOURCE, "import { B } from './B';\n", ""),
+                snippet(APP, APP_SOURCE, "      <B />\n", ""),
+            ],
+        )];
+
+        let (valid, dropped) =
+            validate_variants(proposed, &shown(), FILE, &checks(&react(), &[], &[]))
+                .expect("the removal applies");
+
+        assert!(dropped.is_empty(), "{dropped:?}");
+        let contents = &valid[0].1;
+        assert_eq!(contents.keys().collect::<Vec<_>>(), [APP]);
+        assert!(!contents[APP].contains("<B />"));
+        assert!(!contents[APP].contains("from './B'"));
+    }
+
+    #[test]
+    fn a_move_edits_both_files_in_one_variant() {
+        let proposed = vec![variant(
+            "Into the card",
+            &[
+                snippet(APP, APP_SOURCE, "      <B />\n", ""),
+                snippet(APP, APP_SOURCE, "import { B } from './B';\n", ""),
+                snippet(
+                    CARD,
+                    CARD_SOURCE,
+                    "export function C() {",
+                    "import { B } from './B';\n\nexport function C() {",
+                ),
+                snippet(CARD, CARD_SOURCE, ">Menu</section>", ">Menu<B /></section>"),
+            ],
+        )];
+
+        let (valid, _) = validate_variants(proposed, &shown(), FILE, &checks(&react(), &[], &[]))
+            .expect("the move applies");
+
+        let contents = &valid[0].1;
+        assert_eq!(contents.keys().collect::<Vec<_>>(), [APP, CARD]);
+        let tags = contents
+            .values()
+            .map(|content| content.matches("<B />").count())
+            .sum::<usize>();
+        assert_eq!(tags, 1);
+        assert!(contents[CARD].contains("<B /></section>"));
+    }
+
+    #[test]
+    fn edits_to_a_file_that_was_not_shown_are_dropped_with_the_reason() {
+        let proposed = vec![variant(
+            "Elsewhere",
+            &[snippet("src/Hidden.tsx", SOURCE, "bg-brand", "bg-sea")],
+        )];
+
+        let failure = validate_variants(proposed, &shown(), FILE, &checks(&react(), &[], &[]))
+            .expect_err("dropped");
+
+        assert_eq!(
+            failure.message,
+            "The model's answer wasn't valid edits: it edits src/Hidden.tsx, which it was not shown"
+        );
+    }
+
+    #[test]
+    fn each_op_gets_the_hash_of_the_file_it_edits() {
+        let wrong = content_hash(b"anything else");
+        let op: EditOp = serde_json::from_value(json!({
+            "kind": "replace_snippet", "file": APP, "base_hash": wrong.as_str(),
+            "find": "      <B />\n", "replace": "",
+        }))
+        .expect("op");
+
+        let stamped = edits_of(&[op, snippet(FILE, "other", "p-2", "p-3")], &shown());
+
+        let hashes: Vec<String> = stamped
+            .iter()
+            .map(|op| {
+                serde_json::to_value(op).expect("json")["base_hash"]
+                    .as_str()
+                    .expect("hash")
+                    .to_owned()
+            })
+            .collect();
+        assert_eq!(
+            hashes,
+            [
+                content_hash(APP_SOURCE.as_bytes()).as_str().to_owned(),
+                content_hash(SOURCE.as_bytes()).as_str().to_owned()
+            ]
+        );
+    }
+
+    #[test]
+    fn variants_that_end_in_the_same_files_are_duplicates() {
+        let remove = || snippet(APP, APP_SOURCE, "      <B />\n", "");
+        let proposed = vec![
+            variant("Remove", &[remove()]),
+            variant("Remove again", &[remove()]),
+            variant("Blue", &[snippet(FILE, SOURCE, "bg-brand", "bg-sea")]),
+        ];
+
+        let (valid, dropped) =
+            validate_variants(proposed, &shown(), FILE, &checks(&react(), &[], &[]))
+                .expect("two survive");
+
+        assert_eq!(valid.len(), 2);
+        assert_eq!(dropped[0].reason, "It is the same as another variant.");
+    }
+
+    #[test]
+    fn a_comment_that_breaks_on_a_nested_comment_is_dropped() {
+        let nested = APP_SOURCE.replace("      <C />\n", "      {/* menu */}\n      <C />\n");
+        let editable = Contents::from([
+            (FILE.to_owned(), SOURCE.to_owned()),
+            (APP.to_owned(), nested.clone()),
+        ]);
+        let proposed = vec![variant(
+            "Comment out",
+            &[snippet(
+                APP,
+                &nested,
+                "      <B />\n      {/* menu */}\n      <C />\n",
+                "      {/* <B />\n      {/* menu */}\n      <C /> */}\n",
+            )],
+        )];
+
+        let failure = validate_variants(proposed, &editable, FILE, &checks(&react(), &[], &[]))
+            .expect_err("dropped");
+
+        assert!(
+            failure.message.contains("would no longer parse"),
+            "{}",
+            failure.message
+        );
+    }
+
+    #[test]
+    fn new_imports_in_any_changed_file_are_checked() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let bases = shown();
+        let contents = Contents::from([
+            (APP.to_owned(), APP_SOURCE.replace("      <B />\n", "")),
+            (
+                CARD.to_owned(),
+                format!("import debounce from 'lodash';\n{CARD_SOURCE}"),
+            ),
+        ]);
+
+        let needed = super::libraries_needed(&bases, &contents, &[], &react(), dir.path());
+
+        assert_eq!(
+            needed,
+            Err("It imports lodash, which isn't installed.".to_owned())
+        );
+    }
 
     fn snippet(file: &str, base: &str, find: &str, replace: &str) -> EditOp {
         serde_json::from_value(json!({
@@ -3051,9 +3507,12 @@ mod tests {
     fn applies_a_variant_to_the_file_it_was_shown() {
         let ops = [snippet(FILE, SOURCE, "bg-brand", "bg-sea")];
 
-        let content = apply_variant(&ops, FILE, SOURCE).expect("applied");
+        let contents = apply_variant(&ops, &only()).expect("applied");
 
-        assert_eq!(content, SOURCE.replace("bg-brand", "bg-sea"));
+        assert_eq!(
+            contents,
+            Contents::from([(FILE.to_owned(), SOURCE.replace("bg-brand", "bg-sea"))])
+        );
     }
 
     #[test]
@@ -3062,7 +3521,7 @@ mod tests {
         let unchanged = [snippet(FILE, SOURCE, "bg-brand", "bg-brand")];
 
         for ops in [&elsewhere[..], &[], &unchanged[..]] {
-            let failure = apply_variant(ops, FILE, SOURCE).expect_err("rejected");
+            let failure = apply_variant(ops, &only()).expect_err("rejected");
             assert_eq!(failure.code, ErrorCode::ProviderInvalidOutput);
         }
     }
@@ -3105,9 +3564,140 @@ mod tests {
         let ops = [snippet(FILE, SOURCE, "bg-brand", "bg-sea")];
         let saved = SOURCE.replace("p-2", "p-4");
 
-        let failure = apply_variant(&ops, FILE, &saved).expect_err("stale");
+        let failure =
+            apply_variant(&ops, &Contents::from([(FILE.to_owned(), saved)])).expect_err("stale");
 
         assert_eq!(failure.code, ErrorCode::StaleBase);
         assert_eq!(failure.message, "src/B.tsx changed since the AI read it.");
+    }
+
+    fn assert_live_result(request: &str, contents: &Contents, original: &dyn Fn(&str) -> String) {
+        let (app, card) = ("src/App.tsx", "src/components/MenuCard.tsx");
+        assert!(
+            !contents.contains_key("src/components/OrderButton.tsx"),
+            "{request}: it edited the component's own file"
+        );
+        let renders = |file: &str| {
+            let content = contents
+                .get(file)
+                .cloned()
+                .unwrap_or_else(|| original(file));
+            gjd_core::jsx::usages(file, &content, "OrderButton")
+                .expect("parses")
+                .len()
+        };
+        let imports = |file: &str| {
+            contents.get(file).is_some_and(|content| {
+                content
+                    .lines()
+                    .any(|line| line.starts_with("import { OrderButton }"))
+            })
+        };
+        assert_eq!(renders(app), 0, "{request}: {}", contents[app]);
+        assert!(!imports(app), "{request}: {}", contents[app]);
+        if request == "comment this out" {
+            assert!(contents[app].contains("{/*"), "{}", contents[app]);
+        }
+        if request.starts_with("move") {
+            assert_eq!(renders(card), 1, "{}", contents[card]);
+            assert!(imports(card), "{}", contents[card]);
+        }
+    }
+
+    #[tokio::test]
+    #[ignore = "runs the real Claude Code CLI and spends tokens"]
+    async fn live_cross_file_requests_edit_where_the_component_is_rendered() {
+        use std::num::NonZeroU64;
+        use std::time::{Duration, Instant};
+
+        use gjd_core::jsx;
+        use gjd_core::theme::Theme;
+        use gjd_providers::{Effort, GenerationRequest, ProviderId, ToolPolicy, adapter};
+        use tokio_util::sync::CancellationToken;
+
+        use crate::generate;
+        use crate::related::{self, RelatedFile};
+
+        let fixture =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/small-react-tailwind4");
+        let read = |path: &str| std::fs::read_to_string(fixture.join(path)).expect("fixture file");
+        let button = "src/components/OrderButton.tsx";
+        let app = "src/App.tsx";
+        let card = "src/components/MenuCard.tsx";
+        let source = read(button);
+        let theme = Theme::from_css([read("src/index.css").as_str()]);
+        let at = |value| NonZeroU64::new(value).expect("positions are 1-based");
+        let style =
+            gjd_core::style::inspect(button, &source, at(3), at(5), &theme).expect("element");
+        let component = jsx::enclosing_component(button, &source, 3, 5);
+        let provider = adapter(ProviderId::ClaudeCode).expect("adapter");
+        let discovery = provider.discover().await.expect("Claude Code is installed");
+        let model = std::env::var("GUIJAM_LIVE_MODEL").unwrap_or_else(|_| "sonnet".to_owned());
+        let cwd = tempfile::tempdir().expect("tempdir");
+        let cases: [(&str, &[(&str, &str)]); 3] = [
+            ("remove this", &[(app, "renders OrderButton")]),
+            (
+                "move this into the menu card, next to the price",
+                &[(app, "renders OrderButton"), (card, "named in the request")],
+            ),
+            ("comment this out", &[(app, "renders OrderButton")]),
+        ];
+        for (request, files) in cases {
+            let shown: Vec<RelatedFile> = files
+                .iter()
+                .map(|(path, why)| RelatedFile {
+                    path: (*path).to_owned(),
+                    content: read(path),
+                    anchors: Vec::new(),
+                    why: (*why).to_owned(),
+                })
+                .collect();
+            let mut editable = Contents::from([(button.to_owned(), source.clone())]);
+            for file in &shown {
+                editable.insert(file.path.clone(), file.content.clone());
+            }
+            let user_prompt = format!(
+                "{}{}\n{}\n",
+                generate::user_prompt(&style, &source, request, &generate::R2, component.as_ref()),
+                related::render(&shown),
+                generate::DIRECTIONS[0]
+            );
+            let started = Instant::now();
+            let output = provider
+                .generate(
+                    &discovery,
+                    GenerationRequest {
+                        model: Some(model.clone()),
+                        effort: Some(Effort::Medium),
+                        system_prompt: generate::SYSTEM_PROMPT.to_owned(),
+                        user_prompt,
+                        images: Vec::new(),
+                        tools: ToolPolicy::None,
+                        timeout: Duration::from_mins(3),
+                        cwd: cwd.path().to_path_buf(),
+                        events: None,
+                    },
+                    CancellationToken::new(),
+                )
+                .await
+                .unwrap_or_else(|error| panic!("{request}: {error}"));
+            let (valid, _) = validate_variants(
+                output.variant_set.variants,
+                &editable,
+                button,
+                &checks(&react(), &[], &[]),
+            )
+            .unwrap_or_else(|failure| panic!("{request}: {}", failure.message));
+            let (variant, contents, _) = &valid[0];
+            println!(
+                "{request} ({model}, {} ms, ${:.3}): {} | {} | edits {:?}",
+                started.elapsed().as_millis(),
+                output.cost_usd.unwrap_or_default(),
+                String::from(variant.label.clone()),
+                String::from(variant.rationale.clone()),
+                contents.keys().collect::<Vec<_>>()
+            );
+            assert_live_result(request, contents, &read);
+        }
     }
 }

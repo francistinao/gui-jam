@@ -1854,6 +1854,11 @@
             "type": "integer"
           },
           "description": "Set when the developer selected the element and sketched over it: its x, y, width and height in CSS pixels of the viewport. The strokes then show what the developer wants for that element, not new UI."
+        },
+        "near": {
+          "type": "string",
+          "maxLength": 300,
+          "description": "For a sketch where no element was meant: the data-gj-src of the element nearest the sketch among those inside the container that another file renders, such as the routed page inside a layout."
         }
       }
     },

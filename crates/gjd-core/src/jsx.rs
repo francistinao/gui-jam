@@ -1,9 +1,10 @@
 use std::ops::Range;
 
 use oxc_allocator::Allocator;
+use oxc_ast::AstKind;
 use oxc_ast::ast::{
-    Expression, JSXAttributeItem, JSXAttributeName, JSXAttributeValue, JSXOpeningElement,
-    ObjectPropertyKind, PropertyKey, StringLiteral,
+    BindingPattern, Expression, JSXAttributeItem, JSXAttributeName, JSXAttributeValue,
+    JSXElementName, JSXOpeningElement, ObjectPropertyKind, PropertyKey, StringLiteral,
 };
 use oxc_ast_visit::{Visit, walk};
 use oxc_parser::Parser;
@@ -15,6 +16,7 @@ use crate::template::{self, AttributeSlot};
 const SOLID_IMPORT: [&str; 2] = ["from 'solid-js", "from \"solid-js"];
 
 const CLASS_HELPERS: [&str; 5] = ["cn", "clsx", "classnames", "classNames", "cx"];
+const PAGE_SLOTS: [&str; 1] = ["Outlet"];
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum JsxError {
@@ -63,6 +65,12 @@ pub enum StyleSource {
     Object(StyleObject),
     Css(ClassLiteral),
     Dynamic,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Component {
+    pub name: String,
+    pub root: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -139,6 +147,213 @@ pub fn find_element(
     };
     finder.visit_program(&parsed.program);
     finder.found.ok_or(not_found)
+}
+
+#[must_use]
+pub fn enclosing_component(path: &str, source: &str, line: u64, column: u64) -> Option<Component> {
+    if template::is_template(path) {
+        return None;
+    }
+    let offset = LineIndex::new(source).offset(line, column)?;
+    let allocator = Allocator::default();
+    let parsed = Parser::new(&allocator, source, source_type(path).ok()?).parse();
+    first_error(&parsed.diagnostics, parsed.fatal_error).ok()?;
+    let mut finder = ComponentFinder {
+        offset,
+        components: Vec::new(),
+        functions: Vec::new(),
+        wrappers: Vec::new(),
+    };
+    finder.visit_program(&parsed.program);
+    let (name, own) = finder
+        .components
+        .into_iter()
+        .min_by_key(|(_, range)| range.len())?;
+    let inside =
+        |range: &Range<usize>| *range != own && own.start <= range.start && range.end <= own.end;
+    let root = !finder.wrappers.iter().any(inside) && !finder.functions.iter().any(inside);
+    Some(Component { name, root })
+}
+
+pub fn usages(path: &str, source: &str, name: &str) -> Result<Vec<(u64, u64)>, JsxError> {
+    if template::is_template(path) {
+        return Ok(Vec::new());
+    }
+    let allocator = Allocator::default();
+    let parsed = Parser::new(&allocator, source, source_type(path)?).parse();
+    first_error(&parsed.diagnostics, parsed.fatal_error)?;
+    let mut finder = UsageFinder {
+        name,
+        starts: Vec::new(),
+    };
+    finder.visit_program(&parsed.program);
+    let index = LineIndex::new(source);
+    Ok(finder
+        .starts
+        .into_iter()
+        .map(|offset| index.position(offset))
+        .collect())
+}
+
+pub fn renders_children(
+    path: &str,
+    source: &str,
+    line: u64,
+    column: u64,
+) -> Result<bool, JsxError> {
+    if template::is_template(path) {
+        return Ok(false);
+    }
+    let not_found = JsxError::ElementNotFound { line, column };
+    let offset = LineIndex::new(source)
+        .offset(line, column)
+        .ok_or_else(|| not_found.clone())?;
+    let allocator = Allocator::default();
+    let parsed = Parser::new(&allocator, source, source_type(path)?).parse();
+    first_error(&parsed.diagnostics, parsed.fatal_error)?;
+    let mut finder = SlotFinder {
+        offset,
+        target: None,
+        slots: Vec::new(),
+    };
+    finder.visit_program(&parsed.program);
+    let target = finder.target.ok_or(not_found)?;
+    Ok(finder
+        .slots
+        .iter()
+        .any(|slot| *slot > target.start && *slot < target.end))
+}
+
+fn is_component_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    chars.next().is_some_and(|first| first.is_ascii_uppercase())
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+fn names_element(name: &JSXElementName<'_>, wanted: &str) -> bool {
+    match name {
+        JSXElementName::IdentifierReference(identifier) => identifier.name == wanted,
+        JSXElementName::Identifier(identifier) => identifier.name == wanted,
+        _ => false,
+    }
+}
+
+fn component_body(init: &Expression<'_>) -> Option<Span> {
+    match init {
+        Expression::ArrowFunctionExpression(arrow) => Some(arrow.span),
+        Expression::FunctionExpression(function) => Some(function.span),
+        Expression::ParenthesizedExpression(inner) => component_body(&inner.expression),
+        Expression::CallExpression(call) => call
+            .arguments
+            .first()
+            .and_then(|argument| argument.as_expression())
+            .and_then(component_body),
+        _ => None,
+    }
+}
+
+struct ComponentFinder {
+    offset: usize,
+    components: Vec<(String, Range<usize>)>,
+    functions: Vec<Range<usize>>,
+    wrappers: Vec<Range<usize>>,
+}
+
+impl ComponentFinder {
+    fn holds(&self, span: Span) -> bool {
+        let range = span_range(span);
+        range.start <= self.offset && self.offset < range.end
+    }
+}
+
+impl<'a> Visit<'a> for ComponentFinder {
+    fn enter_node(&mut self, kind: AstKind<'a>) {
+        match kind {
+            AstKind::Function(function) if self.holds(function.span) => {
+                self.functions.push(span_range(function.span));
+                if let Some(id) = &function.id
+                    && is_component_name(&id.name)
+                {
+                    self.components
+                        .push((id.name.to_string(), span_range(function.span)));
+                }
+            }
+            AstKind::ArrowFunctionExpression(arrow) if self.holds(arrow.span) => {
+                self.functions.push(span_range(arrow.span));
+            }
+            AstKind::VariableDeclarator(declarator) => {
+                if let BindingPattern::BindingIdentifier(id) = &declarator.id
+                    && is_component_name(&id.name)
+                    && let Some(body) = declarator.init.as_ref().and_then(component_body)
+                    && self.holds(body)
+                {
+                    self.components
+                        .push((id.name.to_string(), span_range(body)));
+                }
+            }
+            AstKind::JSXElement(element)
+                if self.holds(element.span) && span_range(element.span).start < self.offset =>
+            {
+                self.wrappers.push(span_range(element.span));
+            }
+            AstKind::JSXFragment(fragment) if self.holds(fragment.span) => {
+                self.wrappers.push(span_range(fragment.span));
+            }
+            _ => {}
+        }
+    }
+}
+
+struct UsageFinder<'n> {
+    name: &'n str,
+    starts: Vec<usize>,
+}
+
+impl<'a> Visit<'a> for UsageFinder<'_> {
+    fn visit_jsx_opening_element(&mut self, it: &JSXOpeningElement<'a>) {
+        if names_element(&it.name, self.name) {
+            self.starts.push(span_range(it.span).start);
+        }
+        walk::walk_jsx_opening_element(self, it);
+    }
+}
+
+struct SlotFinder {
+    offset: usize,
+    target: Option<Range<usize>>,
+    slots: Vec<usize>,
+}
+
+impl<'a> Visit<'a> for SlotFinder {
+    fn enter_node(&mut self, kind: AstKind<'a>) {
+        match kind {
+            AstKind::JSXElement(element)
+                if self.target.is_none() && span_range(element.span).start == self.offset =>
+            {
+                self.target = Some(span_range(element.span));
+            }
+            AstKind::JSXOpeningElement(opening)
+                if PAGE_SLOTS
+                    .iter()
+                    .any(|slot| names_element(&opening.name, slot)) =>
+            {
+                self.slots.push(span_range(opening.span).start);
+            }
+            AstKind::JSXExpressionContainer(container) => {
+                let children = match container.expression.as_expression() {
+                    Some(Expression::Identifier(identifier)) => identifier.name == "children",
+                    Some(Expression::StaticMemberExpression(member)) => {
+                        member.property.name == "children"
+                    }
+                    _ => false,
+                };
+                if children {
+                    self.slots.push(span_range(container.span).start);
+                }
+            }
+            _ => {}
+        }
+    }
 }
 
 pub fn attribute(
@@ -450,9 +665,146 @@ impl<'a> Visit<'a> for StringCollector {
 
 #[cfg(test)]
 mod tests {
-    use super::{ClassLiteral, ClassSource, JsxError, check_syntax, find_element, imports};
+    use super::{
+        ClassLiteral, ClassSource, Component, JsxError, check_syntax, enclosing_component,
+        find_element, imports, renders_children, usages,
+    };
+    use crate::srcloc::LineIndex;
 
     const FILE: &str = "src/A.tsx";
+
+    fn at(source: &str, needle: &str) -> (u64, u64) {
+        LineIndex::new(source).position(source.find(needle).expect("needle present"))
+    }
+
+    fn component_at(source: &str, needle: &str) -> Option<Component> {
+        let (line, column) = at(source, needle);
+        enclosing_component(FILE, source, line, column)
+    }
+
+    fn component(name: &str, root: bool) -> Component {
+        Component {
+            name: name.to_owned(),
+            root,
+        }
+    }
+
+    #[test]
+    fn finds_the_component_an_element_belongs_to_and_whether_it_is_the_root() {
+        let source = r#"import { forwardRef, memo } from 'react';
+export function Card({ items }: { items: string[] }) {
+  if (items.length === 0) return <p>Empty</p>;
+  return (
+    <section className="p-4">
+      <h2>Title</h2>
+      {items.map((item) => <li key={item}>{item}</li>)}
+    </section>
+  );
+}
+export const Badge = () => <span>new</span>;
+export const Price = memo(function Price() { return <b>9</b>; });
+export const Field = forwardRef<HTMLInputElement, object>((props, ref) => <input ref={ref} {...props} />);
+export default function Page() { return <><main /></>; }
+const label = <i>x</i>;
+"#;
+
+        assert_eq!(
+            component_at(source, "<section"),
+            Some(component("Card", true))
+        );
+        assert_eq!(
+            component_at(source, "<p>Empty"),
+            Some(component("Card", true))
+        );
+        assert_eq!(component_at(source, "<h2>"), Some(component("Card", false)));
+        assert_eq!(component_at(source, "<li "), Some(component("Card", false)));
+        assert_eq!(
+            component_at(source, "<span>"),
+            Some(component("Badge", true))
+        );
+        assert_eq!(component_at(source, "<b>"), Some(component("Price", true)));
+        assert_eq!(
+            component_at(source, "<input"),
+            Some(component("Field", true))
+        );
+        assert_eq!(
+            component_at(source, "<main"),
+            Some(component("Page", false))
+        );
+        assert_eq!(component_at(source, "<i>"), None);
+        assert_eq!(enclosing_component("src/App.vue", source, 5, 5), None);
+        assert_eq!(enclosing_component(FILE, "const a = <b>;", 1, 11), None);
+    }
+
+    #[test]
+    fn lists_where_a_component_is_rendered() {
+        let source = r#"import { Card } from './Card';
+export function App() {
+  return (
+    <main>
+      <Card title="a" />
+      <Card>
+        <CardHeader />
+      </Card>
+      {'<Card />'}
+      {/* <Card /> */}
+    </main>
+  );
+}
+"#;
+
+        assert_eq!(
+            usages("src/App.tsx", source, "Card").expect("parses"),
+            [(5, 7), (6, 7)]
+        );
+        assert_eq!(
+            usages("src/App.tsx", source, "CardHeader").expect("parses"),
+            [(7, 9)]
+        );
+        assert_eq!(
+            usages("src/App.tsx", source, "Missing").expect("parses"),
+            Vec::<(u64, u64)>::new()
+        );
+        assert!(usages("src/B.tsx", "const b = <b>;", "Card").is_err());
+        assert_eq!(
+            usages("src/App.vue", "<Card />", "Card").expect("templates are skipped"),
+            Vec::<(u64, u64)>::new()
+        );
+    }
+
+    #[test]
+    fn tells_whether_an_element_renders_the_routed_page_or_its_children() {
+        let layout = r#"export function Shell() {
+  return (
+    <div>
+      <main className="p-6">
+        <Outlet />
+      </main>
+      <aside><nav /></aside>
+    </div>
+  );
+}
+"#;
+        let children = "export const L = ({ children }) => <main>{children}</main>;";
+        let props = "export const L = (props) => <main>{props.children}</main>;";
+        let neither = "export const L = () => <main>{title}</main>;";
+        let check = |source: &str, needle: &str| {
+            let (line, column) = at(source, needle);
+            renders_children(FILE, source, line, column).expect("element found")
+        };
+
+        assert!(check(layout, "<main"));
+        assert!(check(layout, "<div>"));
+        assert!(!check(layout, "<aside>"));
+        assert!(check(children, "<main>"));
+        assert!(check(props, "<main>"));
+        assert!(!check(neither, "<main>"));
+        assert_eq!(
+            renders_children(FILE, neither, 1, 2),
+            Err(JsxError::ElementNotFound { line: 1, column: 2 })
+        );
+        assert_eq!(renders_children("src/App.vue", layout, 4, 7), Ok(false));
+    }
 
     fn class_of(source: &str, line: u64, column: u64) -> ClassSource {
         find_element(FILE, source, line, column)

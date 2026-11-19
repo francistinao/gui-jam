@@ -12,6 +12,7 @@ pub mod links;
 pub mod project;
 pub mod r0;
 pub mod references;
+pub mod related;
 pub mod route;
 pub mod run_dir;
 pub mod screenshot;

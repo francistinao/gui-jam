@@ -20,6 +20,9 @@ const FAKE_CLI_DIR = fileURLToPath(new URL('../fake-cli/', import.meta.url));
 const ORDER_BUTTON = join(ROUTER_DIR, 'app/components/OrderButton.tsx');
 const HOME = join(ROUTER_DIR, 'app/routes/home.tsx');
 const MENU = join(ROUTER_DIR, 'app/routes/menu.tsx');
+const ORDERS = join(ROUTER_DIR, 'app/routes/orders.tsx');
+const SHOP_LAYOUT = join(ROUTER_DIR, 'app/routes/shop-layout.tsx');
+const ORGANISMS = join(ROUTER_DIR, 'app/components/organisms');
 const BLUE_RGB = 'rgb(29, 78, 216)';
 const BRAND_RGB = 'rgb(190, 18, 60)';
 const LIGHT_BLUE_RGB = 'rgb(37, 99, 235)';
@@ -79,7 +82,10 @@ test.beforeAll(async () => {
   process.env.GUIJAM_GJD_BIN = GJD_BINARY;
   process.env.GUIJAM_FAKE_CLAUDE_LOG = join(workDir, 'runs.jsonl');
   process.env.PATH = searchPath(FAKE_CLI_DIR, savedPath);
-  for (const file of [ORDER_BUTTON, HOME, MENU]) originals.set(file, await readFile(file, 'utf8'));
+  for (const file of [ORDER_BUTTON, HOME, MENU, ORDERS, SHOP_LAYOUT]) {
+    originals.set(file, await readFile(file, 'utf8'));
+  }
+  await rm(ORGANISMS, { recursive: true, force: true });
   process.chdir(ROUTER_DIR);
   fixture = await startFixtureServer(undefined, ROUTER_DIR);
   await waitForDaemon(widgetRequests(fixture.api), {
@@ -94,6 +100,7 @@ test.afterEach(async ({ page }) => {
   for (const [file, content] of originals) {
     if ((await readFile(file, 'utf8')) !== content) await writeFile(file, content);
   }
+  await rm(ORGANISMS, { recursive: true, force: true });
 });
 
 test.afterAll(async () => {
@@ -232,4 +239,68 @@ test('a drawn prompt previews a variant in a route component and Use writes it',
 
   await expect(page.getByRole('status')).toContainText('Applied to OrderButton.tsx.');
   expect(await readFile(ORDER_BUTTON, 'utf8')).toBe(before.replace('bg-brand', 'bg-[#2563EB]'));
+});
+
+test('a sketch in the empty part of a layout lands in the routed page, not the layout', async ({
+  page,
+}) => {
+  await openFixture(page, new URL('orders', fixture.url).href);
+  const draw = page.getByRole('toolbar', { name: 'GUIJam' }).getByRole('button', { name: 'Draw' });
+  await draw.click();
+  await expect(draw).toHaveAttribute('aria-pressed', 'true');
+  const note = await page.getByText('No orders yet.').boundingBox();
+  if (!note) throw new Error('the page is not visible');
+  const left = note.x + 40;
+  const top = note.y + note.height + 120;
+  for (const points of [
+    [
+      [left, top],
+      [left + 260, top],
+      [left + 260, top + 80],
+      [left, top + 80],
+      [left + 2, top + 4],
+    ],
+    [
+      [left + 20, top + 24],
+      [left + 140, top + 24],
+    ],
+  ] as const) {
+    const [first, ...rest] = points;
+    await page.mouse.move(first[0], first[1]);
+    await page.mouse.down();
+    for (const [x, y] of rest) await page.mouse.move(x, y, { steps: 6 });
+    await page.mouse.up();
+  }
+  const prompt = page.getByRole('dialog', { name: 'Ask AI app/routes/shop-layout.tsx' });
+  await prompt
+    .getByRole('textbox', { name: 'Describe the change' })
+    .fill('a promo banner like this');
+  await prompt.getByRole('button', { name: 'Generate' }).click();
+
+  const variants = prompt.getByRole('region', { name: 'Variants' });
+  await expect(page.getByText('Free pastry with any latte', { exact: true })).toBeVisible();
+  const runs = (await readFile(process.env.GUIJAM_FAKE_CLAUDE_LOG ?? '', 'utf8'))
+    .split('\n')
+    .filter(Boolean)
+    .map(
+      (line) => JSON.parse(line) as { layout?: boolean; files?: { path: string; why: string }[] },
+    );
+  const run = runs.at(-1);
+  expect(run?.layout).toBe(true);
+  expect(run?.files).toContainEqual({
+    path: 'app/routes/orders.tsx',
+    why: 'holds the routed page next to the sketch',
+  });
+  expect(await readFile(ORDERS, 'utf8')).toBe(originals.get(ORDERS));
+
+  await variants.getByRole('button', { name: 'Use V1' }).click();
+
+  await expect(
+    page.getByRole('status').filter({ hasText: 'Applied to orders.tsx.' }),
+  ).toBeVisible();
+  expect(await readFile(ORDERS, 'utf8')).toContain('<PromoBanner />');
+  expect(await readFile(SHOP_LAYOUT, 'utf8')).toBe(originals.get(SHOP_LAYOUT));
+  expect(await readFile(join(ORGANISMS, 'PromoBanner.tsx'), 'utf8')).toContain(
+    'Free pastry with any latte',
+  );
 });
