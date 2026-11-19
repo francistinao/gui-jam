@@ -8,7 +8,6 @@
 
 <p align="center">
   <a href="https://www.npmjs.com/package/guijam"><img src="https://img.shields.io/npm/v/guijam?color=0d99ff&label=npm" alt="npm version" /></a>
-  <a href="https://github.com/francistinao/gui-jam/actions/workflows/test.yml"><img src="https://github.com/francistinao/gui-jam/actions/workflows/test.yml/badge.svg" alt="CI" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-22c55e" alt="MIT license" /></a>
 </p>
 
