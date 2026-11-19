@@ -39,6 +39,7 @@ export function serialize(jobs: readonly Job[], focus: string | null, images: bo
     focus,
     jobs: jobs.map((job) => ({
       ...job,
+      strokes: job.sketch ? [] : job.strokes,
       installing: false,
       attachments: images ? job.attachments : [],
     })),
@@ -56,6 +57,8 @@ export function parseSaved(text: string | null): Saved | null {
   if (!isRecord(value) || value.version !== VERSION || !Array.isArray(value.jobs)) return null;
   const jobs = value.jobs.filter(isJob).map((job) => ({
     ...job,
+    strokes:
+      isRecord(job.sketch) && Array.isArray(job.sketch.strokes) ? job.sketch.strokes : job.strokes,
     attachments: Array.isArray(job.attachments) ? job.attachments : [],
     attachError: null,
     installing: false,
@@ -78,16 +81,20 @@ function write(text: string): boolean {
   }
 }
 
-export function save(jobs: readonly Job[], focus: string | null): void {
-  if (jobs.length === 0) {
-    try {
-      sessionStorage.removeItem(JOBS_KEY);
-    } catch {
-      return;
-    }
+function forget(): void {
+  try {
+    sessionStorage.removeItem(JOBS_KEY);
+  } catch {
     return;
   }
-  if (!write(serialize(jobs, focus, true))) write(serialize(jobs, focus, false));
+}
+
+export function save(jobs: readonly Job[], focus: string | null): void {
+  if (jobs.length === 0) {
+    forget();
+    return;
+  }
+  if (!write(serialize(jobs, focus, true)) && !write(serialize(jobs, focus, false))) forget();
 }
 
 export function load(): Saved | null {

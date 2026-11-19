@@ -1,7 +1,7 @@
 import type { SketchImage } from '@guijam/contracts-ts';
 import { domToCanvas } from 'modern-screenshot';
 import { strokePath } from './draw-layer';
-import type { Point, Rect } from './model';
+import { closeUpRect, type Point, type Rect } from './model';
 
 const MAX_SIDE = 1568;
 const PADDING = 24;
@@ -35,7 +35,7 @@ function encoded(canvas: HTMLCanvasElement, mediaType: SketchImage['mediaType'])
 async function pageWithStrokes(
   strokes: readonly Point[][],
   exclude: Element,
-): Promise<SketchImage | null> {
+): Promise<HTMLCanvasElement | null> {
   try {
     const page = await domToCanvas(document.documentElement, {
       filter: (node) => node !== exclude,
@@ -55,10 +55,26 @@ async function pageWithStrokes(
       view.height,
     );
     for (const stroke of strokes) strokePath(context, stroke);
-    return encoded(view, 'image/jpeg');
+    return view;
   } catch {
     return null;
   }
+}
+
+function cropped(source: HTMLCanvasElement, rect: Rect): HTMLCanvasElement {
+  const [canvas, context] = canvasOf(rect.width, rect.height);
+  context.drawImage(
+    source,
+    rect.left,
+    rect.top,
+    rect.width,
+    rect.height,
+    0,
+    0,
+    rect.width,
+    rect.height,
+  );
+  return canvas;
 }
 
 function strokesAlone(strokes: readonly Point[][], bounds: Rect): SketchImage {
@@ -72,8 +88,12 @@ export async function captureSketch(
   strokes: readonly Point[][],
   bounds: Rect,
   exclude: Element,
+  closeUpOf?: Rect,
 ): Promise<[SketchImage] | [SketchImage, SketchImage]> {
-  const alone = strokesAlone(strokes, bounds);
   const page = await pageWithStrokes(strokes, exclude);
-  return page ? [page, alone] : [alone];
+  if (!page) return [strokesAlone(strokes, bounds)];
+  const shown = encoded(page, 'image/jpeg');
+  if (!closeUpOf) return [shown, strokesAlone(strokes, bounds)];
+  const crop = closeUpRect(closeUpOf, { width: page.width, height: page.height });
+  return crop ? [shown, encoded(cropped(page, crop), 'image/jpeg')] : [shown];
 }

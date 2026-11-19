@@ -1,4 +1,4 @@
-import { Circle, CircleCheck, ImagePlus, Link2, LoaderCircle, X } from 'lucide-react';
+import { Circle, CircleCheck, ImagePlus, Link2, LoaderCircle, Pencil, X } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { AnswerPanel } from './AnswerPanel';
 import { ACCEPTED_TYPES, type Attachment, imageFiles, MAX_ATTACHMENTS } from './attachments';
@@ -7,7 +7,7 @@ import { Button } from './figui/button';
 import { cn } from './figui/cn';
 import { INPUT_BASE_CLASS } from './figui/text-input';
 import { formatElapsed, linksIn, MAX_LINKS, stillWorking } from './model';
-import { Popover, PopoverHeader } from './Popover';
+import { Popover, PopoverHeader, SKETCH_LABEL } from './Popover';
 import { type Store, useStore } from './store';
 import { VariantsPanel } from './VariantsPanel';
 
@@ -156,8 +156,10 @@ export function PromptPanel({ store, controller }: PanelProps) {
   const [dragging, setDragging] = useState(false);
 
   if (!selection || !anchor || !job) return null;
-  const { generation } = job;
-  const sketched = job.sketch !== null;
+  const { generation, sketch } = job;
+  const sketched = sketch !== null;
+  const over = sketch?.element !== undefined;
+  const strokes = sketch?.strokes.length ?? 0;
   const { prompt, status, steps, error } = generation;
   const answered =
     status === 'ready' && generation.answer !== null && generation.variants.length === 0;
@@ -222,6 +224,14 @@ export function PromptPanel({ store, controller }: PanelProps) {
             void controller.attach([...event.dataTransfer.files]);
           }}
         >
+          {over && status === 'idle' ? (
+            <p
+              role="note"
+              className="typography-body-small m-0 rounded-md bg-blue-100 p-2 text-blue-800"
+            >
+              Sketch anywhere on the page now, then describe it below.
+            </p>
+          ) : null}
           <textarea
             aria-label="Describe the change"
             placeholder={sketched ? 'Describe what you sketched' : 'Make it pill-shaped and darker'}
@@ -287,7 +297,7 @@ export function PromptPanel({ store, controller }: PanelProps) {
                   className="typography-body-small mr-auto min-w-0 flex-1 text-grey-500"
                 >
                   {stillWorking(now - (generation.startedAt ?? now), generation.timeoutMs, {
-                    sketch: sketched,
+                    sketch: strokes > 0,
                     images: job.attachments.length,
                     links: linksIn(prompt).links.length,
                     expectedMs: generation.expectedMs,
@@ -305,14 +315,29 @@ export function PromptPanel({ store, controller }: PanelProps) {
             ) : (
               <>
                 <span className="mr-auto flex items-center gap-1">
-                  {sketched ? (
+                  {sketched && (!over || strokes > 0) ? (
                     <Button
                       key="clear"
                       type="button"
                       variant="secondary"
-                      onClick={() => void controller.discardJob()}
+                      onClick={() =>
+                        over ? controller.clearSketch() : void controller.discardJob()
+                      }
                     >
                       Clear sketch
+                    </Button>
+                  ) : null}
+                  {!sketched && job.strokes.length === 0 ? (
+                    <Button
+                      key="sketch"
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      aria-label={SKETCH_LABEL}
+                      title={SKETCH_LABEL}
+                      onClick={() => void controller.startSketch()}
+                    >
+                      <Pencil aria-hidden="true" />
                     </Button>
                   ) : null}
                   <Button

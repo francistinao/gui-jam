@@ -212,9 +212,20 @@ take to the project's theme tokens and components. Don't copy their text, logos,
 #[must_use]
 pub fn sketch_section(sketch: &Sketch, container: &str) -> String {
     let [x, y, width, height] = sketch.box_;
-    let mut out = format!(
-        "\n<sketch box=\"{x},{y},{width},{height}\">\nImage 1 is the page as the developer sees it, with their strokes in blue. Image 2, when present, is the strokes alone.\nPlace what it shows inside the element at {container}, at the position of the sketch.\n"
-    );
+    let mut out = match sketch.element_box {
+        Some([left, top, element_width, element_height]) => format!(
+            "\n<sketch on=\"{container}\" element-box=\"{left},{top},{element_width},{element_height}\" box=\"{x},{y},{width},{height}\">\n\
+The developer selected the element at {container} and sketched over it to show what they want for it. \
+Image 1 is the page as they see it, with their strokes in blue. Image 2, when present, is a close-up of the \
+element with the strokes.\n\
+Read the strokes as a mockup or markup of that element: shapes are parts it should have or its new layout, \
+arrows and circles point at what to change, and crossed-out parts are to be removed. Change that element \
+(its classes, text and children) to match. Put new parts inside it, or beside it in the same file.\n"
+        ),
+        None => format!(
+            "\n<sketch box=\"{x},{y},{width},{height}\">\nImage 1 is the page as the developer sees it, with their strokes in blue. Image 2, when present, is the strokes alone.\nPlace what it shows inside the element at {container}, at the position of the sketch.\n"
+        ),
+    };
     let touching: Vec<&str> = sketch
         .touching
         .iter()
@@ -365,5 +376,66 @@ mod tests {
         assert!(text.starts_with("\n<sketch box=\"500,260,300,80\">\n"));
         assert!(text.contains("inside the element at src/App.tsx:30:9"));
         assert!(text.ends_with("It overlaps: src/App.tsx:36:11\n</sketch>\n"));
+        assert!(!text.contains("selected the element"), "{text}");
+    }
+
+    #[test]
+    fn describes_a_sketch_over_the_selected_element_as_a_change_to_it() {
+        let touching: Vec<String> = (1..=50)
+            .map(|line| format!("src/App.tsx:{line}:3"))
+            .collect();
+        let sketch: Sketch = serde_json::from_value(json!({
+            "images": [
+                { "mediaType": "image/jpeg", "base64": "AA==" },
+                { "mediaType": "image/jpeg", "base64": "AA==" },
+            ],
+            "box": [96, 300, 180, 64],
+            "elementBox": [100, 310, 140, 48],
+            "touching": touching,
+        }))
+        .expect("sketch");
+
+        let text = sketch_section(&sketch, "src/components/OrderButton.tsx:3:5");
+
+        assert!(
+            text.starts_with(
+                "\n<sketch on=\"src/components/OrderButton.tsx:3:5\" element-box=\"100,310,140,48\" box=\"96,300,180,64\">\n"
+            ),
+            "{text}"
+        );
+        assert!(text.contains(
+            "selected the element at src/components/OrderButton.tsx:3:5 and sketched over it"
+        ));
+        assert!(
+            text.contains("Image 2, when present, is a close-up of the element with the strokes.")
+        );
+        assert!(text.contains("Change that element (its classes, text and children) to match."));
+        assert!(!text.contains("Place what it shows"), "{text}");
+        let overlaps = text
+            .lines()
+            .find_map(|line| line.strip_prefix("It overlaps: "))
+            .expect("overlaps");
+        assert_eq!(overlaps.split(", ").count(), 20);
+        assert!(text.ends_with("src/App.tsx:20:3\n</sketch>\n"), "{text}");
+    }
+
+    #[test]
+    fn a_sketch_without_an_element_box_still_parses_and_one_with_it_keeps_the_box() {
+        let space: Sketch = serde_json::from_value(json!({
+            "images": [{ "mediaType": "image/png", "base64": "AA==" }],
+            "box": [1, 2, 3, 4],
+            "touching": [],
+        }))
+        .expect("space sketch");
+        assert_eq!(space.element_box, None);
+
+        let over: Sketch = serde_json::from_value(json!({
+            "images": [{ "mediaType": "image/png", "base64": "AA==" }],
+            "box": [1, 2, 3, 4],
+            "elementBox": [5, 6, 7, 8],
+            "touching": [],
+        }))
+        .expect("sketch over an element");
+        assert_eq!(over.element_box, Some([5, 6, 7, 8]));
     }
 }

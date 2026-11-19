@@ -21,6 +21,7 @@ import {
 import { DomPreview } from './dom-preview';
 import type { WidgetHost } from './host';
 import {
+  addStroke,
   changesIn,
   classifyGesture,
   containerIndex,
@@ -33,10 +34,12 @@ import {
   nextJobNumber,
   type Point,
   type Rect,
+  type SketchState,
   samplePoints,
   shiftedLine,
+  sketchAnchor,
+  sketchOver,
   type Tool,
-  unionRect,
   withoutInstalled,
 } from './model';
 import { collectPageOutline } from './page-outline';
@@ -112,11 +115,6 @@ const IDLE_GENERATION: Generation = {
   expectedMs: null,
   waiting: 0,
 };
-
-export interface SketchState {
-  strokes: Point[][];
-  bounds: Rect;
-}
 
 export interface Job {
   id: string;
@@ -236,6 +234,15 @@ function failure(reply: GuijamMessage): Notice {
     return notice;
   }
   return { kind: 'error', message: `Unexpected reply: ${reply.type}` };
+}
+
+function boxOf(rect: Rect): [number, number, number, number] {
+  return [
+    Math.round(rect.left),
+    Math.round(rect.top),
+    Math.round(rect.width),
+    Math.round(rect.height),
+  ];
 }
 
 function appliedTo(selection: Selection): string {
@@ -479,7 +486,10 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
           : entry,
       ),
     });
-    const drawn = job.sketch ? await sketchRequest(job.sketch) : null;
+    const drawn =
+      job.sketch && job.sketch.strokes.length > 0
+        ? await sketchRequest(job.sketch, job.target)
+        : null;
     if (!runs.has(runId)) return;
     const reply = await host.request({
       type: 'generate.request',
@@ -604,20 +614,22 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
     if (sequence === selectSequence) notify(failure(reply), UNDO_WINDOW_MS);
   }
 
-  async function sketchRequest(sketch: SketchState): Promise<Sketch> {
-    const { bounds } = sketch;
+  async function sketchRequest(sketch: SketchState, target: Selection): Promise<Sketch> {
+    const { bounds, element } = sketch;
     const started = performance.now();
-    const images = await captureSketch(sketch.strokes, bounds, host.hostElement);
+    const images = await captureSketch(
+      sketch.strokes,
+      bounds,
+      host.hostElement,
+      element ? sketchAnchor(sketch) : undefined,
+    );
+    const touching = touchedBy(bounds, host.hostElement);
     return {
       images,
       captureMs: Math.round(performance.now() - started),
-      box: [
-        Math.round(bounds.left),
-        Math.round(bounds.top),
-        Math.round(bounds.width),
-        Math.round(bounds.height),
-      ],
-      touching: touchedBy(bounds, host.hostElement),
+      box: boxOf(bounds),
+      touching: element ? touching.filter((src) => src !== target.src) : touching,
+      ...(element ? { elementBox: boxOf(element) } : {}),
     };
   }
 
@@ -709,17 +721,10 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
     async draw(points: Point[], bounds: Rect): Promise<boolean> {
       const job = focused();
       if (job?.sketch && job.generation.status === 'idle') {
-        const sketch = {
-          strokes: [...job.sketch.strokes, points],
-          bounds: unionRect(job.sketch.bounds, bounds),
-        };
-        updateJob(job.id, (entry) => ({
-          ...entry,
-          sketch,
-          strokes: sketch.strokes,
-          anchor: sketch.bounds,
-        }));
-        store.set({ anchor: sketch.bounds });
+        const sketch = addStroke(job.sketch, points, bounds);
+        const anchor = sketchAnchor(sketch);
+        updateJob(job.id, (entry) => ({ ...entry, sketch, strokes: sketch.strokes, anchor }));
+        store.set({ anchor });
         return true;
       }
       if (atLimit()) return false;
@@ -746,6 +751,35 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
       await revert(hasUnsaved() ? 'Unsaved tweaks were reverted.' : undefined);
       if (!selection || !anchor || atLimit()) return;
       await addJob(selection, anchor, [], null);
+    },
+
+    async startSketch(): Promise<void> {
+      const job = focused();
+      if (job) {
+        if (job.sketch || job.strokes.length > 0 || job.generation.status !== 'idle') return;
+        const element = elementsAt(job.target.src)[0];
+        const anchor = element ? rectOf(element) : job.anchor;
+        updateJob(job.id, (entry) => ({ ...entry, anchor, sketch: sketchOver(anchor) }));
+        store.set({ anchor });
+        return;
+      }
+      const { selection, anchor } = store.get();
+      await revert(hasUnsaved() ? 'Unsaved tweaks were reverted.' : undefined);
+      if (!selection || !anchor || atLimit()) return;
+      await addJob(selection, anchor, [], sketchOver(anchor));
+    },
+
+    clearSketch(): void {
+      const job = focused();
+      const element = job?.sketch?.element;
+      if (!job || !element || job.generation.status !== 'idle') return;
+      updateJob(job.id, (entry) => ({
+        ...entry,
+        strokes: [],
+        sketch: sketchOver(element),
+        anchor: element,
+      }));
+      store.set({ anchor: element });
     },
 
     setPrompt(prompt: string): void {
@@ -843,7 +877,7 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
         return {
           ...job,
           generation: { ...IDLE_GENERATION, ...job.generation },
-          anchor: element ? rectOf(element) : job.anchor,
+          anchor: job.sketch ? sketchAnchor(job.sketch) : element ? rectOf(element) : job.anchor,
         };
       });
       store.set({ jobs });

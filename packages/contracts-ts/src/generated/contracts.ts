@@ -488,6 +488,7 @@ export interface Sketch {
   box: [number, number, number, number];
   touching: string[];
   captureMs?: number;
+  elementBox?: [number, number, number, number];
 }
 export interface SketchImage {
   mediaType: 'image/png' | 'image/jpeg';

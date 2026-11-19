@@ -1807,7 +1807,7 @@
       }
     },
     "Sketch": {
-      "description": "Strokes the developer drew where no single element was meant, with images of the page and of the sketch.",
+      "description": "Strokes the developer drew, with images of the page and of the sketch. Without elementBox they were drawn where no single element was meant; with it, over an element the developer selected.",
       "type": "object",
       "required": [
         "images",
@@ -1845,6 +1845,15 @@
           "description": "How long the widget took to capture the sketch images.",
           "type": "integer",
           "minimum": 0
+        },
+        "elementBox": {
+          "type": "array",
+          "minItems": 4,
+          "maxItems": 4,
+          "items": {
+            "type": "integer"
+          },
+          "description": "Set when the developer selected the element and sketched over it: its x, y, width and height in CSS pixels of the viewport. The strokes then show what the developer wants for that element, not new UI."
         }
       }
     },

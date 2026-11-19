@@ -534,6 +534,14 @@ fn sketch_count(request: &GenerateRequest) -> usize {
         .map_or(0, |sketch| sketch.images.len())
 }
 
+fn sketch_kind(request: &GenerateRequest) -> &'static str {
+    match &request.sketch {
+        Some(sketch) if sketch.element_box.is_some() => "element",
+        Some(_) => "space",
+        None => "none",
+    }
+}
+
 fn inspiration_count(request: &GenerateRequest) -> usize {
     request
         .attachments
@@ -704,6 +712,7 @@ impl RunLabels {
         tracing::info!(
             run = %self.key,
             effort = %effort,
+            sketch = sketch_kind(job.request),
             capture_ms = capture_ms(job),
             first_variant_ms = first_ms,
             all_ms = job.elapsed_ms(),

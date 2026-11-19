@@ -1,11 +1,14 @@
 import type { ElementStyle, StyleToken } from '@guijam/contracts-ts';
 import { describe, expect, it } from 'vitest';
 import {
+  activeLayers,
+  addStroke,
   boundsOf,
   changesIn,
   chooseDrawTarget,
   clamp,
   classifyGesture,
+  closeUpRect,
   containerIndex,
   cssColor,
   droppedNote,
@@ -17,12 +20,19 @@ import {
   MAX_LINKS,
   needsLine,
   OPACITY_RANGE,
+  type Point,
   panelSections,
   parseHex,
   placePopover,
   RADIUS_RANGE,
+  type Rect,
   radiusOfToken,
+  type SketchOwner,
+  type SketchState,
   shiftedLine,
+  sketchAnchor,
+  sketchingOver,
+  sketchOver,
   splitPaths,
   stillWorking,
   unionRect,
@@ -496,5 +506,127 @@ describe('withoutInstalled', () => {
     expect(needsLine({ ...needs, packages: needs.packages.slice(0, 1) })).toBe(
       "Needs three 0.187.0. It isn't previewed until you install it.",
     );
+  });
+});
+
+describe('sketching over a selected element', () => {
+  const element: Rect = { left: 100, top: 200, width: 140, height: 48 };
+  const owner = (
+    sketch: SketchState | null,
+    status: SketchOwner['generation']['status'] = 'idle',
+  ): SketchOwner => ({ sketch, generation: { status } });
+
+  it('turns drawing on for the Draw tool or while sketching over, and Select off while sketching', () => {
+    expect(activeLayers(null, false)).toEqual({ select: false, draw: false });
+    expect(activeLayers(null, true)).toEqual({ select: false, draw: true });
+    expect(activeLayers('select', false)).toEqual({ select: true, draw: false });
+    expect(activeLayers('select', true)).toEqual({ select: false, draw: true });
+    expect(activeLayers('draw', false)).toEqual({ select: false, draw: true });
+    expect(activeLayers('draw', true)).toEqual({ select: false, draw: true });
+  });
+
+  it('sketches over only an idle prompt job that has a selected element', () => {
+    const over = sketchOver(element);
+    expect(sketchingOver('prompt', owner(over))).toBe(true);
+    expect(sketchingOver('finetune', owner(over))).toBe(false);
+    expect(sketchingOver('prompt', owner(over, 'running'))).toBe(false);
+    expect(sketchingOver('prompt', owner(over, 'ready'))).toBe(false);
+    expect(sketchingOver('prompt', owner({ strokes: [[{ x: 1, y: 1 }]], bounds: element }))).toBe(
+      false,
+    );
+    expect(sketchingOver('prompt', owner(null))).toBe(false);
+    expect(sketchingOver('prompt', undefined)).toBe(false);
+  });
+
+  it('starts empty on the element, then takes the bounds of the first stroke and grows', () => {
+    const empty = sketchOver(element);
+    expect(empty.strokes).toEqual([]);
+    expect(sketchAnchor(empty)).toEqual(element);
+
+    const inside = [
+      { x: 120, y: 210 },
+      { x: 150, y: 230 },
+    ];
+    const first = addStroke(empty, inside, boundsOf(inside));
+    expect(first.bounds).toEqual({ left: 120, top: 210, width: 30, height: 20 });
+    expect(first.element).toEqual(element);
+    expect(sketchAnchor(first)).toEqual(element);
+
+    const outside = [
+      { x: 300, y: 190 },
+      { x: 340, y: 260 },
+    ];
+    const second = addStroke(first, outside, boundsOf(outside));
+    expect(second.strokes).toEqual([inside, outside]);
+    expect(second.bounds).toEqual({ left: 120, top: 190, width: 220, height: 70 });
+    expect(sketchAnchor(second)).toEqual({ left: 100, top: 190, width: 240, height: 70 });
+  });
+
+  it('anchors an empty-space sketch on its strokes alone', () => {
+    const stroke = [
+      { x: 10, y: 10 },
+      { x: 50, y: 30 },
+    ];
+    const space: SketchState = { strokes: [stroke], bounds: boundsOf(stroke) };
+    expect(sketchAnchor(space)).toEqual({ left: 10, top: 10, width: 40, height: 20 });
+  });
+
+  it('pads the close-up and keeps it inside the viewport', () => {
+    const viewport = { width: 1280, height: 720 };
+    expect(closeUpRect(element, viewport)).toEqual({
+      left: 76,
+      top: 176,
+      width: 188,
+      height: 96,
+    });
+    expect(closeUpRect({ left: 5, top: 700, width: 60, height: 40 }, viewport)).toEqual({
+      left: 0,
+      top: 676,
+      width: 89,
+      height: 44,
+    });
+    expect(closeUpRect({ left: 10.4, top: 20.6, width: 0, height: 0 }, viewport)).toEqual({
+      left: 0,
+      top: 0,
+      width: 35,
+      height: 45,
+    });
+  });
+
+  it('skips the close-up when it would show almost the whole viewport, or nothing of it', () => {
+    const viewport = { width: 1000, height: 800 };
+    expect(closeUpRect({ left: 20, top: 20, width: 960, height: 760 }, viewport)).toBeNull();
+    expect(closeUpRect({ left: 40, top: 40, width: 800, height: 600 }, viewport)).not.toBeNull();
+    expect(closeUpRect({ left: 1200, top: 100, width: 80, height: 40 }, viewport)).toBeNull();
+    expect(closeUpRect({ left: 100, top: -300, width: 80, height: 40 }, viewport)).toBeNull();
+  });
+
+  it('folds a thousand long strokes into the same bounds as all their points', () => {
+    let seed = 7;
+    const next = () => {
+      seed = (seed * 48271) % 2147483647;
+      return seed / 2147483647;
+    };
+    const strokes: Point[][] = Array.from({ length: 1000 }, () => {
+      const x = next() * 1800 - 200;
+      const y = next() * 1200 - 100;
+      return Array.from({ length: 100 }, (_, index) => ({
+        x: x + Math.sin(index) * next() * 90,
+        y: y + Math.cos(index) * next() * 90,
+      }));
+    });
+
+    const sketch = strokes.reduce(
+      (current, stroke) => addStroke(current, stroke, boundsOf(stroke)),
+      sketchOver(element),
+    );
+
+    expect(sketch.strokes).toHaveLength(1000);
+    const all = boundsOf(strokes.flat());
+    expect(sketch.bounds.left).toBeCloseTo(all.left, 9);
+    expect(sketch.bounds.top).toBeCloseTo(all.top, 9);
+    expect(sketch.bounds.width).toBeCloseTo(all.width, 9);
+    expect(sketch.bounds.height).toBeCloseTo(all.height, 9);
+    expect(sketchAnchor(sketch)).toEqual(unionRect(element, sketch.bounds));
   });
 });

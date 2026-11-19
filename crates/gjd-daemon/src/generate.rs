@@ -92,7 +92,8 @@ the request names. Use them to resolve references such as \"the image in the nav
 - When a <sketch> is attached, the images show the page with the developer's strokes in \
 blue and the strokes alone. Build what the sketch depicts with the project's styles (layout, \
 cards, text, shapes) and insert it in the file you are shown, where the sketch sits relative \
-to the elements it overlaps.
+to the elements it overlaps. When the <sketch> is on a selected element, its second image is a \
+close-up instead: change that element to match the sketch rather than adding a copy of it.
 - When the change needs an icon or illustration, add it to the variant's `assets`: a \
 kebab-case `name`, self-contained `svg` markup with a viewBox, and `format` svg (or webp, \
 with `width` in pixels, for a raster image). GUIJam saves it in the folder named in \
@@ -436,8 +437,17 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        Extras, Progress, R1, R2, Step, ask_label, budget, event_detail, runs_detail, user_prompt,
+        Extras, Progress, R1, R2, SYSTEM_PROMPT, Step, ask_label, budget, event_detail,
+        runs_detail, user_prompt,
     };
+
+    #[test]
+    fn the_system_prompt_reads_a_sketch_over_a_selected_element_as_a_change_to_it() {
+        assert!(SYSTEM_PROMPT.contains(
+            "When the <sketch> is on a selected element, its second image is a close-up instead: change that element to match the sketch rather than adding a copy of it."
+        ));
+        assert!(SYSTEM_PROMPT.contains("insert it in the file you are shown"));
+    }
 
     fn states(progress: &mut Progress) -> Vec<(String, State)> {
         progress

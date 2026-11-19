@@ -7,6 +7,8 @@ import { placePopover, type Rect } from './model';
 
 const POPOVER_WIDTH = 300;
 
+export const SKETCH_LABEL = 'Sketch what you want for this component';
+
 interface PopoverProps {
   label: string;
   anchor: Rect;

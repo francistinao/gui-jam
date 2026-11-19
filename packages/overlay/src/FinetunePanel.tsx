@@ -1,5 +1,5 @@
 import type { ElementStyle, StyleGroup, StyleToken } from '@guijam/contracts-ts';
-import { Minus } from 'lucide-react';
+import { Minus, Pencil } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import type { Controller, Draft, WidgetState } from './controller';
 import { Button } from './figui/button';
@@ -18,7 +18,7 @@ import {
   RADIUS_RANGE,
   radiusOfToken,
 } from './model';
-import { CodeChanges, Popover, PopoverHeader } from './Popover';
+import { CodeChanges, Popover, PopoverHeader, SKETCH_LABEL } from './Popover';
 import { type Store, useStore } from './store';
 
 const GROUP_LABELS: Record<StyleGroup, string> = {
@@ -309,6 +309,16 @@ export function FinetunePanel({ store, controller }: PanelProps) {
           Ask AI
         </Button>
       </PopoverHeader>
+      <Button
+        variant="secondary"
+        size="large"
+        className="mb-2 w-full cursor-pointer transition-colors hover:border-blue-500 hover:bg-blue-200 hover:text-blue-800 active:border-blue-500 active:bg-blue-300"
+        disabled={busy}
+        onClick={() => void controller.startSketch()}
+      >
+        <Pencil aria-hidden="true" />
+        {SKETCH_LABEL}
+      </Button>
       {selection.instances > 1 ? (
         <p
           role="note"

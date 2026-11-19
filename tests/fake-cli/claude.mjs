@@ -37,6 +37,14 @@ const sizeOf = (image) => {
   return null;
 };
 const sketched = text.includes('<sketch');
+const numbers = (list) => list.split(',').map(Number);
+const over = /<sketch on="([^"]+)" element-box="([^"]+)" box="([^"]+)">/.exec(text);
+const space = /<sketch box="([^"]+)">/.exec(text);
+const sketch = over
+  ? { on: over[1], elementBox: numbers(over[2]), box: numbers(over[3]) }
+  : space
+    ? { on: null, elementBox: null, box: numbers(space[1]) }
+    : null;
 const direction = /^Direction: (.*)$/m.exec(text)?.[1] ?? null;
 const slot =
   direction === null
@@ -72,11 +80,14 @@ log({
   gitInstructions: process.env.CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS !== '1',
   images: images.map((image) => image.source.media_type),
   imageSizes: images.map(sizeOf),
+  imageBytes: images.map((image) => image.source.data.length),
   inspiration: /<inspiration images="([^"]+)">/.exec(text)?.[1] ?? null,
   newUi: /<new-ui components="([^"]+)"/.exec(text)?.[1] ?? null,
   libraries: /<libraries installed="([^"]*)">/.exec(text)?.[1] ?? null,
   links,
   assets: [...text.matchAll(/ · asset (\S+)/g)].map((match) => match[1]),
+  sketch,
+  closeUp: text.includes('is a close-up of the element'),
 });
 
 print({ type: 'system', subtype: 'init' });
@@ -121,7 +132,7 @@ if (/slow/i.test(request) || (/staggered/i.test(request) && slot === 2)) {
   const iconName = `${icon[0].toUpperCase()}${icon.slice(1)} icon`;
   const cardText = icon === 'cup' ? 'Sketched card' : `Sketched ${icon} card`;
   const sketchedCard = `<OrderButton />\n            <span className="flex items-center gap-2 rounded-card bg-white px-4 py-2 shadow"><img src={${icon}Icon} alt="${iconName}" className="size-6" />${cardText}</span>`;
-  const [, file] = /^Element: <\w+> at (.+):\d+:\d+$/m.exec(text);
+  const [, file, line, column] = /^Element: <\w+> at (.+):(\d+):(\d+)$/m.exec(text);
   const [, baseHash] = /^base_hash: ([0-9a-f]{64})$/m.exec(text);
   const headerImage = /image/i.test(request)
     ? /^- header > img \(image\).* · asset (\S+)/m.exec(text)?.[1]
@@ -186,6 +197,25 @@ if (/slow/i.test(request) || (/staggered/i.test(request) && slot === 2)) {
       ),
     ],
   };
+  const sketchedOver = {
+    variants: ['V1', 'V2', 'V3'].map((name, index) => ({
+      label: `Sketched ${name}`,
+      system: 'Your project',
+      style: ['Pill', 'Ring', 'Plain'][index],
+      rationale: 'Follows the sketch over the selected element.',
+      missing: [],
+      ops: [
+        {
+          kind: 'jsx_attr',
+          file,
+          base_hash: baseHash,
+          at: { line: Number(line), column: Number(column) },
+          name: 'data-sketched',
+          value: { string: name },
+        },
+      ],
+    })),
+  };
   const scene = {
     variants: [
       {
@@ -222,74 +252,88 @@ if (/slow/i.test(request) || (/staggered/i.test(request) && slot === 2)) {
         ? scene
         : /pricing/i.test(request)
           ? pricing
-          : sketched
-            ? {
-                variants: Array.from({ length: /\btwin\b/i.test(request) ? 2 : 1 }, () => ({
-                  ...variant(
-                    cardText,
-                    'Card',
-                    `A card with a ${icon} icon, built from the sketch.`,
-                    '<OrderButton />',
-                    sketchedCard,
-                  ),
-                  ops: [
-                    {
-                      kind: 'replace_snippet',
-                      file,
-                      base_hash: baseHash,
-                      find: "import { Counter } from './components/Counter';",
-                      replace: `import ${icon}Icon from './assets/icons/${icon}-icon.svg';\nimport { Counter } from './components/Counter';`,
-                    },
-                    {
-                      kind: 'replace_snippet',
-                      file,
-                      base_hash: baseHash,
-                      find: '<OrderButton />',
-                      replace: sketchedCard,
-                    },
-                  ],
-                  assets: [
-                    {
-                      name: `${icon}-icon`,
-                      format: 'svg',
-                      svg: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 9h12v5a5 5 0 0 1-5 5H9a5 5 0 0 1-5-5z" fill="#3b2418"/></svg>',
-                    },
-                  ],
-                })),
-              }
-            : headerImage
+          : over
+            ? sketchedOver
+            : sketched
               ? {
-                  variants: [
-                    variant(
-                      'Header image',
-                      'Icon',
-                      'Adds the header image before the label.',
-                      'Order now',
-                      `<img src="${headerImage.replace(/^public/, '')}" alt="" className="size-4" />Order now`,
+                  variants: Array.from({ length: /\btwin\b/i.test(request) ? 2 : 1 }, () => ({
+                    ...variant(
+                      cardText,
+                      'Card',
+                      `A card with a ${icon} icon, built from the sketch.`,
+                      '<OrderButton />',
+                      sketchedCard,
                     ),
-                  ],
+                    ops: [
+                      {
+                        kind: 'replace_snippet',
+                        file,
+                        base_hash: baseHash,
+                        find: "import { Counter } from './components/Counter';",
+                        replace: `import ${icon}Icon from './assets/icons/${icon}-icon.svg';\nimport { Counter } from './components/Counter';`,
+                      },
+                      {
+                        kind: 'replace_snippet',
+                        file,
+                        base_hash: baseHash,
+                        find: '<OrderButton />',
+                        replace: sketchedCard,
+                      },
+                    ],
+                    assets: [
+                      {
+                        name: `${icon}-icon`,
+                        format: 'svg',
+                        svg: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 9h12v5a5 5 0 0 1-5 5H9a5 5 0 0 1-5-5z" fill="#3b2418"/></svg>',
+                      },
+                    ],
+                  })),
                 }
-              : {
-                  variants: [
-                    variant(
-                      'Blue button',
-                      'Solid',
-                      'Swapped the brand fill for blue.',
-                      'bg-brand',
-                      'bg-[#2563EB]',
-                    ),
-                    /invalid/i.test(request)
-                      ? variant('Deep blue', 'Deep', 'A darker blue.', 'bg-nowhere', 'bg-[#1D4ED8]')
-                      : variant('Deep blue', 'Deep', 'A darker blue.', 'bg-brand', 'bg-[#1D4ED8]'),
-                    variant(
-                      'Outline',
-                      'Outline',
-                      'A white button with a blue border.',
-                      'bg-brand',
-                      'border-2 border-[#2563EB] bg-white',
-                    ),
-                  ],
-                },
+              : headerImage
+                ? {
+                    variants: [
+                      variant(
+                        'Header image',
+                        'Icon',
+                        'Adds the header image before the label.',
+                        'Order now',
+                        `<img src="${headerImage.replace(/^public/, '')}" alt="" className="size-4" />Order now`,
+                      ),
+                    ],
+                  }
+                : {
+                    variants: [
+                      variant(
+                        'Blue button',
+                        'Solid',
+                        'Swapped the brand fill for blue.',
+                        'bg-brand',
+                        'bg-[#2563EB]',
+                      ),
+                      /invalid/i.test(request)
+                        ? variant(
+                            'Deep blue',
+                            'Deep',
+                            'A darker blue.',
+                            'bg-nowhere',
+                            'bg-[#1D4ED8]',
+                          )
+                        : variant(
+                            'Deep blue',
+                            'Deep',
+                            'A darker blue.',
+                            'bg-brand',
+                            'bg-[#1D4ED8]',
+                          ),
+                      variant(
+                        'Outline',
+                        'Outline',
+                        'A white button with a blue border.',
+                        'bg-brand',
+                        'border-2 border-[#2563EB] bg-white',
+                      ),
+                    ],
+                  },
     ),
   });
 }

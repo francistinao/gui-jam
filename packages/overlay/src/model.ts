@@ -1,4 +1,5 @@
 import type { ElementStyle, GenerateDone, StyleGroup, StyleToken } from '@guijam/contracts-ts';
+import type { Tool } from './host';
 
 export type { Tool } from './host';
 
@@ -298,6 +299,66 @@ export function unionRect(a: Rect, b: Rect): Rect {
 
 export function intersects(a: Rect, b: Rect): boolean {
   return overlap(a, b) > 0;
+}
+
+export interface SketchState {
+  strokes: Point[][];
+  bounds: Rect;
+  element?: Rect;
+}
+
+export function sketchOver(element: Rect): SketchState {
+  return { strokes: [], bounds: element, element };
+}
+
+export function addStroke(sketch: SketchState, stroke: Point[], bounds: Rect): SketchState {
+  return {
+    ...sketch,
+    strokes: [...sketch.strokes, stroke],
+    bounds: sketch.strokes.length === 0 ? bounds : unionRect(sketch.bounds, bounds),
+  };
+}
+
+export function sketchAnchor(sketch: SketchState): Rect {
+  const { element, strokes, bounds } = sketch;
+  if (!element) return bounds;
+  return strokes.length === 0 ? element : unionRect(element, bounds);
+}
+
+export interface SketchOwner {
+  sketch: SketchState | null;
+  generation: { status: 'idle' | 'running' | 'ready' };
+}
+
+export function sketchingOver(mode: 'finetune' | 'prompt', job: SketchOwner | undefined): boolean {
+  return (
+    mode === 'prompt' && job?.sketch?.element !== undefined && job.generation.status === 'idle'
+  );
+}
+
+export interface Layers {
+  select: boolean;
+  draw: boolean;
+}
+
+export function activeLayers(tool: Tool | null, sketching: boolean): Layers {
+  return {
+    select: tool === 'select' && !sketching,
+    draw: tool === 'draw' || sketching,
+  };
+}
+
+const CLOSE_UP_PADDING = 24;
+const CLOSE_UP_MAX_COVER = 0.9;
+
+export function closeUpRect(focus: Rect, viewport: Size, padding = CLOSE_UP_PADDING): Rect | null {
+  const left = Math.max(0, Math.floor(focus.left - padding));
+  const top = Math.max(0, Math.floor(focus.top - padding));
+  const right = Math.min(viewport.width, Math.ceil(focus.left + focus.width + padding));
+  const bottom = Math.min(viewport.height, Math.ceil(focus.top + focus.height + padding));
+  if (right <= left || bottom <= top) return null;
+  const rect = { left, top, width: right - left, height: bottom - top };
+  return area(rect) >= viewport.width * viewport.height * CLOSE_UP_MAX_COVER ? null : rect;
 }
 
 export function shiftedLine(

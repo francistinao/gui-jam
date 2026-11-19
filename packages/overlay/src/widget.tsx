@@ -3,6 +3,7 @@ import { App } from './App';
 import { createController, initialState, type WidgetState } from './controller';
 import { createDrawLayer } from './draw-layer';
 import type { Widget, WidgetHost } from './host';
+import { activeLayers, type Layers, sketchingOver } from './model';
 import { load, save } from './persist';
 import { createSelectLayer } from './select-layer';
 import { createStore } from './store';
@@ -58,16 +59,35 @@ export function mount(host: WidgetHost): Widget {
     repaint();
   });
 
+  let layers: Layers = { select: false, draw: false };
+  function syncLayers(): void {
+    const { tool, mode, jobs, focus } = store.get();
+    const next = activeLayers(
+      tool,
+      sketchingOver(
+        mode,
+        jobs.find((job) => job.id === focus),
+      ),
+    );
+    const previous = layers;
+    layers = next;
+    if (next.select !== previous.select) {
+      if (next.select) selectLayer.enable();
+      else selectLayer.disable();
+    }
+    if (next.draw !== previous.draw) {
+      if (next.draw) {
+        drawLayer.enable();
+        repaint();
+      } else {
+        drawLayer.disable();
+      }
+    }
+  }
+  store.subscribe(syncLayers);
+
   function setTool(tool: WidgetState['tool']): void {
     store.set({ tool });
-    if (tool === 'select') selectLayer.enable();
-    else selectLayer.disable();
-    if (tool === 'draw') {
-      drawLayer.enable();
-      repaint();
-    } else {
-      drawLayer.disable();
-    }
   }
 
   document.addEventListener('keydown', (event) => {

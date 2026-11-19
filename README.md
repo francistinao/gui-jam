@@ -41,6 +41,7 @@ Then start your dev server as usual, for example `npm run dev`. The GUIJam toolb
 | Tool | What to do |
 |---|---|
 | **Select** | Click any element. Tweak its fill and corner radius in a Figma-style panel, then **Apply**. |
+| **Select** (sketch) | Click an element, then **Sketch what you want for this component**. Draw over it and describe the change: the sketch goes to the AI with your prompt, and the AI changes that component to match. |
 | **Draw** | Circle an element and describe the change. Pick one of three live variants and **Use** it. Up to three drawings can generate at once, each behind a numbered badge. |
 | **Draw** (sketch) | Sketch a card, a section or an icon where you want it. GUIJam works out the component and where it goes. |
 | **Ask** | Ask a question about what you see, such as "what's the path of this image?" |
@@ -133,6 +134,7 @@ With Laravel's `@vite` directive, Inertia, or any server that renders the HTML i
 - **Answers, not just edits.** Ask about an element and get an answer that points at the files involved.
 - **References across the page.** "Use the image from the navbar here" works, because GUIJam indexes your project's assets and the page you are looking at.
 - **Sketch to UI.** Rough out a layout or an icon. GUIJam sends the sketch and a screenshot of the page, then places the new markup in the right component. A self-contained piece becomes one component file, split into atoms and molecules only when its parts are reused.
+- **Sketch over a component.** Select an element and draw on it what you want: a new shape, an icon, an arrow at the part to change. The AI gets the page, a close-up of the element with your strokes and your prompt, and changes that component instead of adding a new one.
 - **Inspiration and links.** Paste or drop images next to your prompt, or paste a link: GUIJam reads the page's text, colors and fonts, and takes a screenshot with your installed Chromium browser.
 - **3D and motion when asked.** Requests that need three.js, Motion or GSAP can use them, after you approve the install.
 - **Safe writes.** Edits are journaled with the exact previous bytes, conflicts with your own unsaved work are refused, and undo restores files exactly.
