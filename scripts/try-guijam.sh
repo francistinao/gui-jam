@@ -3,6 +3,7 @@ set -euo pipefail
 
 repo="$(cd "$(dirname "$0")/.." && pwd)"
 trial="vite.guijam.config.mjs"
+marker=".try-guijam"
 gjd="$repo/target/debug/gjd"
 
 usage() {
@@ -31,14 +32,25 @@ import { defineConfig, mergeConfig, searchForWorkspaceRoot } from 'vite';
 import base from './$config';
 import { guijam } from '$repo/packages/guijam/dist/vite.js';
 
+async function withoutGuijam(option) {
+  const value = await option;
+  if (Array.isArray(value)) return (await Promise.all(value.map(withoutGuijam))).flat();
+  return value?.name === 'guijam' ? [] : [value];
+}
+
 export default defineConfig(async (env) => {
   const resolved = typeof base === 'function' ? await base(env) : base;
-  return mergeConfig(resolved, {
+  const plugins = await withoutGuijam(resolved.plugins ?? []);
+  return mergeConfig({ ...resolved, plugins }, {
     plugins: [guijam()],
     server: { fs: { allow: [searchForWorkspaceRoot(process.cwd()), '$repo/packages'] } },
   });
 });
 EOF
+  if [ ! -d "$project/.guijam" ]; then
+    mkdir "$project/.guijam"
+    touch "$project/.guijam/$marker"
+  fi
   if [ -f "$exclude" ]; then
     for entry in "$trial" ".guijam/"; do
       grep -qxF "$entry" "$exclude" || echo "$entry" >> "$exclude"
@@ -52,7 +64,9 @@ EOF
 clean() {
   [ -x "$gjd" ] && "$gjd" daemon stop --project "$project" >/dev/null 2>&1 || true
   rm -f "$project/$trial"
-  rm -rf "$project/.guijam"
+  if [ -f "$project/.guijam/$marker" ]; then
+    rm -rf "$project/.guijam"
+  fi
   if [ -f "$exclude" ]; then
     grep -vxF -e "$trial" -e ".guijam/" "$exclude" > "$exclude.tmp" || true
     mv "$exclude.tmp" "$exclude"
