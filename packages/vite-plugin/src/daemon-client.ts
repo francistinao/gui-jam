@@ -37,7 +37,22 @@ interface Pending {
   timer: NodeJS.Timeout;
 }
 
-export class DaemonUnavailableError extends Error {}
+export class DaemonUnavailableError extends Error {
+  readonly action: string | undefined;
+
+  constructor(message: string, action?: string) {
+    super(message);
+    this.action = action;
+  }
+}
+
+function otherVersion(version: unknown): DaemonUnavailableError {
+  const which = typeof version === 'string' ? `GUIJam ${version}` : 'another version of GUIJam';
+  return new DaemonUnavailableError(
+    `Another dev server runs ${which} for this project.`,
+    'Stop it, then restart this dev server.',
+  );
+}
 
 export interface OutgoingMessage {
   type: string;
@@ -94,6 +109,8 @@ export class DaemonClient {
   #outageReported = false;
   #unreachablePid: number | undefined;
   #binaryVersion: Promise<string | undefined> | undefined;
+  #mayReplace = true;
+  #failure: DaemonUnavailableError | undefined;
 
   constructor(options: DaemonClientOptions) {
     this.#options = options;
@@ -118,7 +135,9 @@ export class DaemonClient {
   request(message: OutgoingMessage, timeoutMs = REQUEST_TIMEOUT_MS): Promise<GuijamMessage> {
     const socket = this.#socket;
     if (socket?.readyState !== WebSocket.OPEN) {
-      return Promise.reject(new DaemonUnavailableError('the GUIJam daemon is not connected'));
+      return Promise.reject(
+        this.#failure ?? new DaemonUnavailableError('the GUIJam daemon is not connected'),
+      );
     }
     const id = `p${this.#nextId++}`;
     return new Promise((resolve, reject) => {
@@ -151,35 +170,47 @@ export class DaemonClient {
       this.#socket = socket;
       this.#reconnectMs = RECONNECT_MIN_MS;
       this.#outageReported = false;
+      this.#failure = undefined;
       socket.addEventListener('message', (event) => void this.#receive(String(event.data)));
       socket.addEventListener('close', () => this.#lost());
       socket.send(JSON.stringify(this.#options.hello()));
       this.#options.onConnectionChange(true);
     } catch (error) {
+      this.#failure = error instanceof DaemonUnavailableError ? error : undefined;
       if (!this.#outageReported) {
         this.#outageReported = true;
-        this.#options.onUnavailable(error instanceof Error ? error.message : String(error));
+        const reason = error instanceof Error ? error.message : String(error);
+        this.#options.onUnavailable(
+          this.#failure?.action ? `${reason} ${this.#failure.action}` : reason,
+        );
       }
       this.#scheduleReconnect();
     }
   }
 
   async #daemonInfo(): Promise<DaemonInfo> {
+    const mayReplace = this.#mayReplace;
+    this.#mayReplace = false;
     const existing = await this.#readInfo();
-    const alive = existing !== undefined && isAlive(existing.pid);
-    if (existing && alive && existing.pid !== this.#unreachablePid) {
-      const bundled = await this.#bundledVersion();
-      if (bundled === undefined || existing.version === bundled) return existing;
+    const ours = await this.#bundledVersion();
+    const foreign = (info: DaemonInfo) => ours !== undefined && info.version !== ours;
+    if (existing && isAlive(existing.pid) && existing.pid !== this.#unreachablePid) {
+      if (!foreign(existing)) return existing;
+      if (!mayReplace) throw otherVersion(existing.version);
       await this.#command(['daemon', 'stop', '--project', this.#options.root]);
     }
     await this.#spawnDaemon();
     const deadline = Date.now() + SPAWN_WAIT_MS;
     while (Date.now() < deadline) {
       const info = await this.#readInfo();
-      if (info && info.pid !== existing?.pid) return info;
+      if (info && info.pid !== existing?.pid) {
+        if (foreign(info)) throw otherVersion(info.version);
+        return info;
+      }
       await new Promise((resolve) => setTimeout(resolve, SPAWN_POLL_MS));
     }
     if (existing && isAlive(existing.pid)) {
+      if (foreign(existing)) throw otherVersion(existing.version);
       this.#unreachablePid = undefined;
       return existing;
     }

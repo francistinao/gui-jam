@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { GuijamMessage, UpdateResult } from '@guijam/contracts-ts';
 import { findDaemonBinary, platformKey } from './daemon-binary.js';
-import { DaemonClient } from './daemon-client.js';
+import { DaemonClient, DaemonUnavailableError } from './daemon-client.js';
 import { Pages } from './pages.js';
 import {
   checkWidgetRequest,
@@ -134,7 +134,8 @@ export function createBridge(options: BridgeOptions): Bridge {
         'DAEMON_UNAVAILABLE',
         error instanceof Error ? error.message : String(error),
         id,
-        'Check `gjd daemon status`, then retry.',
+        (error instanceof DaemonUnavailableError ? error.action : undefined) ??
+          'Check `gjd daemon status`, then retry.',
       );
     }
   }
