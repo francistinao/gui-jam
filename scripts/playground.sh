@@ -62,6 +62,7 @@ for dir in "$play"/apps/*/; do
     printf "minimumReleaseAgeExclude:\n  - guijam\n  - '@guijam/*'\n" >> "$dir/pnpm-workspace.yaml"
   fi
   node "$repo/scripts/pin-mature.mjs" "$dir/package.json" guijam
+  rm -rf "$dir"/node_modules/.pnpm/guijam@*
   (cd "$dir" && PATH="$path_prefix$PATH" pnpm add -D "$spec" > /dev/null)
   (cd "$dir" && env PATH="$path_prefix$PATH" "$gjd_env" \
     node node_modules/guijam/dist/cli.js init --yes --skip-install --provider claude-code)
