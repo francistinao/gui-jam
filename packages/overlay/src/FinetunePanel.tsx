@@ -319,6 +319,9 @@ export function FinetunePanel({ store, controller }: PanelProps) {
         <Pencil aria-hidden="true" />
         {SKETCH_LABEL}
       </Button>
+      <p className="typography-body-small mb-2 text-grey-500">
+        Shift+click to add more components to one Ask AI prompt.
+      </p>
       {selection.instances > 1 ? (
         <p
           role="note"

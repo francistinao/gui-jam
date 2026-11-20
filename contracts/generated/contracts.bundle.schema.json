@@ -1733,6 +1733,15 @@
         },
         "attachments": {
           "$ref": "#/$defs/Attachments"
+        },
+        "alsoSelected": {
+          "description": "Other elements the developer selected with Shift+click. The request applies to each of them as well as to file:line:column.",
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 4,
+          "items": {
+            "$ref": "#/$defs/SourceRef"
+          }
         }
       }
     },

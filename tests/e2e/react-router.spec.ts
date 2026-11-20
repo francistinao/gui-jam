@@ -11,6 +11,7 @@ import {
   widgetRequests,
 } from './support/daemon.js';
 import { type FixtureServer, openFixture, startFixtureServer } from './support/fixture.js';
+import { promptForTwo, sketchWithUndo } from './support/new-features.js';
 import { searchPath } from './support/process.js';
 
 const ROUTER_DIR = fileURLToPath(
@@ -303,4 +304,28 @@ test('a sketch in the empty part of a layout lands in the routed page, not the l
   expect(await readFile(join(ORGANISMS, 'PromoBanner.tsx'), 'utf8')).toContain(
     'Free pastry with any latte',
   );
+});
+
+test('Shift+click puts two components in one prompt, and Use and Undo cover both files', async ({
+  page,
+}) => {
+  await select(page);
+  await promptForTwo(
+    page,
+    {
+      element: page.getByRole('button', { name: 'Order now' }),
+      file: 'app/components/OrderButton.tsx',
+      path: ORDER_BUTTON,
+    },
+    { element: page.getByRole('heading', { level: 1 }), file: 'app/routes/home.tsx', path: HOME },
+  );
+});
+
+test('a sketch over a component undoes and redoes strokes, then generates', async ({ page }) => {
+  await select(page);
+  await sketchWithUndo(page, {
+    element: page.getByRole('button', { name: 'Order now' }),
+    file: 'app/components/OrderButton.tsx',
+    path: ORDER_BUTTON,
+  });
 });

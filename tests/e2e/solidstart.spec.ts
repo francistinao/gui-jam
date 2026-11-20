@@ -11,6 +11,7 @@ import {
   widgetRequests,
 } from './support/daemon.js';
 import { type FixtureServer, openFixture, startFixtureServer } from './support/fixture.js';
+import { promptForTwo, sketchWithUndo } from './support/new-features.js';
 import { searchPath } from './support/process.js';
 
 const START_DIR = fileURLToPath(
@@ -236,4 +237,28 @@ test('a drawn prompt previews a variant in a solidstart component and Use writes
 
   await expect(page.getByRole('status')).toContainText('Applied to OrderButton.tsx.');
   expect(await readFile(ORDER_BUTTON, 'utf8')).toBe(before.replace('bg-brand', 'bg-[#2563EB]'));
+});
+
+test('Shift+click puts two components in one prompt, and Use and Undo cover both files', async ({
+  page,
+}) => {
+  await select(page);
+  await promptForTwo(
+    page,
+    {
+      element: page.getByRole('button', { name: 'Order now' }),
+      file: 'src/components/OrderButton.tsx',
+      path: ORDER_BUTTON,
+    },
+    { element: page.getByRole('heading', { level: 1 }), file: 'src/routes/index.tsx', path: HOME },
+  );
+});
+
+test('a sketch over a component undoes and redoes strokes, then generates', async ({ page }) => {
+  await select(page);
+  await sketchWithUndo(page, {
+    element: page.getByRole('button', { name: 'Order now' }),
+    file: 'src/components/OrderButton.tsx',
+    path: ORDER_BUTTON,
+  });
 });

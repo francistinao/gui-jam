@@ -6,6 +6,7 @@ import { expect, type Locator, type Page, test } from '@playwright/test';
 import { type AstroServer, startAstro } from './support/astro.js';
 import { GJD_BINARY, requireDaemonBinary, stopDaemon } from './support/daemon.js';
 import { openFixture } from './support/fixture.js';
+import { promptForTwo, sketchWithUndo } from './support/new-features.js';
 import { searchPath } from './support/process.js';
 
 const ASTRO_DIR = fileURLToPath(new URL('../../fixtures/small-astro-tailwind4/', import.meta.url));
@@ -237,4 +238,34 @@ test('a drawn prompt previews an astro variant through a reload and Use writes i
 
   await expect(page.getByRole('status')).toContainText('Applied to OrderButton.astro.');
   expect(await readFile(ORDER_BUTTON, 'utf8')).toBe(before.replace('bg-brand', 'bg-[#2563EB]'));
+});
+
+test('Shift+click puts two components in one prompt, and Use and Undo cover both files', async ({
+  page,
+}) => {
+  await openFixture(page, astro.url);
+  await chooseTool(page, 'Select');
+  await promptForTwo(
+    page,
+    {
+      element: page.getByRole('button', { name: 'Order now' }),
+      file: 'src/components/OrderButton.astro',
+      path: ORDER_BUTTON,
+    },
+    {
+      element: page.getByRole('heading', { level: 1 }),
+      file: 'src/pages/index.astro',
+      path: INDEX,
+    },
+  );
+});
+
+test('a sketch over a component undoes and redoes strokes, then generates', async ({ page }) => {
+  await openFixture(page, astro.url);
+  await chooseTool(page, 'Select');
+  await sketchWithUndo(page, {
+    element: page.getByRole('button', { name: 'Order now' }),
+    file: 'src/components/OrderButton.astro',
+    path: ORDER_BUTTON,
+  });
 });

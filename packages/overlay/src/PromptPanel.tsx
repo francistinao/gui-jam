@@ -1,8 +1,18 @@
-import { Circle, CircleCheck, ImagePlus, Link2, LoaderCircle, Pencil, X } from 'lucide-react';
+import {
+  Circle,
+  CircleCheck,
+  ImagePlus,
+  Link2,
+  LoaderCircle,
+  Pencil,
+  Redo2,
+  Undo2,
+  X,
+} from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { AnswerPanel } from './AnswerPanel';
 import { ACCEPTED_TYPES, type Attachment, imageFiles, MAX_ATTACHMENTS } from './attachments';
-import type { Controller, ProgressStep, WidgetState } from './controller';
+import type { Controller, ProgressStep, Selection, WidgetState } from './controller';
 import { Button } from './figui/button';
 import { cn } from './figui/cn';
 import { INPUT_BASE_CLASS } from './figui/text-input';
@@ -119,6 +129,46 @@ function Thumbnails({
   );
 }
 
+function TargetList({
+  targets,
+  editable,
+  controller,
+}: {
+  targets: readonly Selection[];
+  editable: boolean;
+  controller: Controller;
+}) {
+  return (
+    <section aria-label="Selected components" className="mb-2 flex flex-col gap-1">
+      <p className="typography-body-small m-0 text-grey-500">{`${targets.length} components`}</p>
+      <ul className="m-0 flex list-none flex-wrap gap-1 p-0">
+        {targets.map((target) => {
+          const place = `${target.file.split('/').at(-1)}:${target.line}`;
+          return (
+            <li
+              key={target.src}
+              title={target.src}
+              className="typography-body-small flex max-w-full items-center gap-1 rounded-full bg-blue-100 py-0.5 pr-1 pl-2 text-blue-800"
+            >
+              <span className="truncate">{place}</span>
+              {editable ? (
+                <button
+                  type="button"
+                  aria-label={`Remove ${place}`}
+                  onClick={() => controller.removeTarget(target.src)}
+                  className="grid size-4 cursor-pointer place-items-center rounded-full border-0 bg-transparent p-0 text-blue-800 hover:bg-blue-200"
+                >
+                  <X aria-hidden="true" className="size-3" />
+                </button>
+              ) : null}
+            </li>
+          );
+        })}
+      </ul>
+    </section>
+  );
+}
+
 function LinkChips({ prompt }: { prompt: string }) {
   const { links, skipped } = linksIn(prompt);
   if (links.length === 0) return null;
@@ -161,7 +211,11 @@ export function PromptPanel({ store, controller }: PanelProps) {
   const sketched = sketch !== null;
   const over = sketch?.element !== undefined;
   const strokes = sketch?.strokes.length ?? 0;
+  const undone = sketch?.undone.length ?? 0;
   const { prompt, status, steps, error } = generation;
+  const targets = [job.target, ...job.also];
+  const grouped = targets.length > 1;
+  const reused = targets.filter((target) => target.instances > 1);
   const answered =
     status === 'ready' && generation.answer !== null && generation.variants.length === 0;
   const arriving = status === 'running' && generation.variants.length > 0;
@@ -184,12 +238,21 @@ export function PromptPanel({ store, controller }: PanelProps) {
         selection={selection}
         controller={controller}
       />
-      {selection.instances > 1 ? (
+      {grouped ? (
+        <TargetList
+          targets={targets}
+          editable={status === 'idle' && generation.variants.length === 0}
+          controller={controller}
+        />
+      ) : null}
+      {reused.length > 0 ? (
         <p
           role="note"
           className="typography-body-small mb-2 rounded-md bg-blue-100 p-2 text-blue-800"
         >
-          {`Used ${selection.instances}× on this page. Changes apply to every instance.`}
+          {grouped
+            ? `${reused.length === 1 ? 'One of these is' : 'Some of these are'} used more than once on this page. Changes apply to every instance.`
+            : `Used ${selection.instances}× on this page. Changes apply to every instance.`}
         </p>
       ) : null}
       {answered ? (
@@ -317,6 +380,34 @@ export function PromptPanel({ store, controller }: PanelProps) {
             ) : (
               <>
                 <span className="mr-auto flex items-center gap-1">
+                  {strokes > 0 || undone > 0 ? (
+                    <>
+                      <Button
+                        key="undo"
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        aria-label="Undo stroke"
+                        title="Undo stroke (Ctrl+Z)"
+                        disabled={strokes === 0}
+                        onClick={() => controller.undoSketch()}
+                      >
+                        <Undo2 aria-hidden="true" />
+                      </Button>
+                      <Button
+                        key="redo"
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        aria-label="Redo stroke"
+                        title="Redo stroke (Ctrl+Y)"
+                        disabled={undone === 0}
+                        onClick={() => controller.redoSketch()}
+                      >
+                        <Redo2 aria-hidden="true" />
+                      </Button>
+                    </>
+                  ) : null}
                   {sketched && (!over || strokes > 0) ? (
                     <Button
                       key="clear"
@@ -329,7 +420,7 @@ export function PromptPanel({ store, controller }: PanelProps) {
                       Clear sketch
                     </Button>
                   ) : null}
-                  {!sketched && job.strokes.length === 0 ? (
+                  {!sketched && job.strokes.length === 0 && !grouped ? (
                     <Button
                       key="sketch"
                       type="button"

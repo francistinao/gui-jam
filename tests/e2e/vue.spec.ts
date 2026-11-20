@@ -11,6 +11,7 @@ import {
   widgetRequests,
 } from './support/daemon.js';
 import { type FixtureServer, openFixture, startFixtureServer } from './support/fixture.js';
+import { promptForTwo, sketchWithUndo } from './support/new-features.js';
 import { searchPath } from './support/process.js';
 
 const VUE_DIR = fileURLToPath(new URL('../../fixtures/small-vue-tailwind4/', import.meta.url));
@@ -189,4 +190,28 @@ test('a drawn prompt previews a variant in the vue file and Use writes it', asyn
 
   await expect(page.getByRole('status')).toContainText('Applied to OrderButton.vue.');
   expect(await readFile(ORDER_BUTTON, 'utf8')).toBe(before.replace('bg-brand', 'bg-[#2563EB]'));
+});
+
+test('Shift+click puts two components in one prompt, and Use and Undo cover both files', async ({
+  page,
+}) => {
+  await select(page);
+  await promptForTwo(
+    page,
+    {
+      element: page.getByRole('button', { name: 'Order now' }),
+      file: 'src/components/OrderButton.vue',
+      path: ORDER_BUTTON,
+    },
+    { element: page.getByRole('heading', { level: 1 }), file: 'src/App.vue', path: APP },
+  );
+});
+
+test('a sketch over a component undoes and redoes strokes, then generates', async ({ page }) => {
+  await select(page);
+  await sketchWithUndo(page, {
+    element: page.getByRole('button', { name: 'Order now' }),
+    file: 'src/components/OrderButton.vue',
+    path: ORDER_BUTTON,
+  });
 });

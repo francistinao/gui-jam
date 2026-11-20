@@ -21,6 +21,7 @@ import {
   invertChanges,
   linksIn,
   MAX_LINKS,
+  MAX_TARGETS,
   nearestIndex,
   needsLine,
   OPACITY_RANGE,
@@ -31,6 +32,7 @@ import {
   RADIUS_RANGE,
   type Rect,
   radiusOfToken,
+  redoStroke,
   type SketchOwner,
   type SketchState,
   shiftedLine,
@@ -39,6 +41,9 @@ import {
   sketchOver,
   splitPaths,
   stillWorking,
+  strokeShortcut,
+  toggleTarget,
+  undoStroke,
   unionRect,
   withoutInstalled,
 } from './model';
@@ -535,9 +540,9 @@ describe('sketching over a selected element', () => {
     expect(sketchingOver('finetune', owner(over))).toBe(false);
     expect(sketchingOver('prompt', owner(over, 'running'))).toBe(false);
     expect(sketchingOver('prompt', owner(over, 'ready'))).toBe(false);
-    expect(sketchingOver('prompt', owner({ strokes: [[{ x: 1, y: 1 }]], bounds: element }))).toBe(
-      false,
-    );
+    expect(
+      sketchingOver('prompt', owner({ strokes: [[{ x: 1, y: 1 }]], undone: [], bounds: element })),
+    ).toBe(false);
     expect(sketchingOver('prompt', owner(null))).toBe(false);
     expect(sketchingOver('prompt', undefined)).toBe(false);
   });
@@ -571,8 +576,96 @@ describe('sketching over a selected element', () => {
       { x: 10, y: 10 },
       { x: 50, y: 30 },
     ];
-    const space: SketchState = { strokes: [stroke], bounds: boundsOf(stroke) };
+    const space: SketchState = { strokes: [stroke], undone: [], bounds: boundsOf(stroke) };
     expect(sketchAnchor(space)).toEqual({ left: 10, top: 10, width: 40, height: 20 });
+  });
+
+  describe('undo and redo', () => {
+    const left = [
+      { x: 120, y: 210 },
+      { x: 150, y: 230 },
+    ];
+    const right = [
+      { x: 300, y: 190 },
+      { x: 340, y: 260 },
+    ];
+    const low = [
+      { x: 200, y: 400 },
+      { x: 210, y: 420 },
+    ];
+    const drawn = (start: SketchState, strokes: Point[][]) =>
+      strokes.reduce((sketch, stroke) => addStroke(sketch, stroke, boundsOf(stroke)), start);
+
+    it('takes strokes off one at a time and puts them back in order', () => {
+      const full = drawn(sketchOver(element), [left, right, low]);
+
+      const once = undoStroke(full);
+      expect(once.strokes).toEqual([left, right]);
+      expect(once.undone).toEqual([low]);
+      expect(once.bounds).toEqual(drawn(sketchOver(element), [left, right]).bounds);
+      expect(sketchAnchor(once)).toEqual({ left: 100, top: 190, width: 240, height: 70 });
+
+      const twice = undoStroke(once);
+      expect(twice.strokes).toEqual([left]);
+      expect(twice.undone).toEqual([low, right]);
+      expect(twice.bounds).toEqual(boundsOf(left));
+
+      const back = redoStroke(twice);
+      expect(back.strokes).toEqual([left, right]);
+      expect(back.undone).toEqual([low]);
+      expect(redoStroke(back)).toEqual(full);
+    });
+
+    it('falls back to the element box once every stroke over it is undone', () => {
+      const empty = undoStroke(drawn(sketchOver(element), [left]));
+      expect(empty.strokes).toEqual([]);
+      expect(empty.undone).toEqual([left]);
+      expect(empty.bounds).toEqual(element);
+      expect(sketchAnchor(empty)).toEqual(element);
+    });
+
+    it('keeps an empty-space sketch where it was when its only stroke is undone', () => {
+      const space: SketchState = { strokes: [right], undone: [], bounds: boundsOf(right) };
+      const empty = undoStroke(space);
+      expect(empty.strokes).toEqual([]);
+      expect(empty.bounds).toEqual(boundsOf(right));
+      expect(sketchAnchor(empty)).toEqual(boundsOf(right));
+      expect(redoStroke(empty)).toEqual(space);
+    });
+
+    it('drops the redo history when a new stroke is drawn', () => {
+      const undone = undoStroke(undoStroke(drawn(sketchOver(element), [left, right])));
+      const next = addStroke(undone, low, boundsOf(low));
+      expect(next.strokes).toEqual([low]);
+      expect(next.undone).toEqual([]);
+      expect(next.bounds).toEqual(boundsOf(low));
+    });
+
+    it('returns the same sketch when there is nothing to undo or redo', () => {
+      const empty = sketchOver(element);
+      expect(undoStroke(empty)).toBe(empty);
+      expect(redoStroke(empty)).toBe(empty);
+      const full = drawn(empty, [left]);
+      expect(redoStroke(full)).toBe(full);
+    });
+  });
+
+  it.each([
+    ['Ctrl+Z', { key: 'z', ctrlKey: true }, 'undo'],
+    ['Cmd+Z', { key: 'z', metaKey: true }, 'undo'],
+    ['Ctrl+Y', { key: 'y', ctrlKey: true }, 'redo'],
+    ['Cmd+Y', { key: 'y', metaKey: true }, 'redo'],
+    ['Ctrl+Shift+Z', { key: 'Z', ctrlKey: true, shiftKey: true }, 'redo'],
+    ['Cmd+Shift+Z', { key: 'Z', metaKey: true, shiftKey: true }, 'redo'],
+    ['Ctrl+Z with Caps Lock', { key: 'Z', ctrlKey: true }, 'undo'],
+    ['Z alone', { key: 'z' }, null],
+    ['Shift+Z', { key: 'Z', shiftKey: true }, null],
+    ['Ctrl+Alt+Z', { key: 'z', ctrlKey: true, altKey: true }, null],
+    ['Ctrl+Shift+Y', { key: 'Y', ctrlKey: true, shiftKey: true }, null],
+    ['Ctrl+X', { key: 'x', ctrlKey: true }, null],
+  ] as const)('reads %s as %s', (_label, pressed, expected) => {
+    const keys = { ctrlKey: false, metaKey: false, shiftKey: false, altKey: false, ...pressed };
+    expect(strokeShortcut(keys)).toBe(expected);
   });
 
   it('pads the close-up and keeps it inside the viewport', () => {
@@ -714,5 +807,35 @@ describe('followedSrc', () => {
         change('src/components/OrderButton.tsx', 3, ['    <button>'], ['    <a>']),
       ]).touched,
     ).toBe(true);
+  });
+});
+
+describe('toggleTarget', () => {
+  const at = (src: string) => ({ src });
+  const [a, b, c] = [at('src/A.tsx:1:1'), at('src/B.tsx:2:1'), at('src/C.tsx:3:1')];
+
+  it('adds a new component at the end', () => {
+    expect(toggleTarget([a], b)).toEqual({ targets: [a, b] });
+    expect(toggleTarget([a, b], c)).toEqual({ targets: [a, b, c] });
+  });
+
+  it('removes a component picked again, by its source, even the first one', () => {
+    expect(toggleTarget([a, b, c], at(b.src))).toEqual({ targets: [a, c] });
+    expect(toggleTarget([a, b], a)).toEqual({ targets: [b] });
+  });
+
+  it('keeps the last one', () => {
+    const only = [a];
+    const result = toggleTarget(only, at(a.src));
+    expect(result).toEqual({ targets: [a] });
+    expect('targets' in result && result.targets).toBe(only);
+  });
+
+  it(`stops at ${MAX_TARGETS} components but still lets one be removed`, () => {
+    const five = Array.from({ length: MAX_TARGETS }, (_, index) => at(`src/F${index}.tsx:1:1`));
+    expect(toggleTarget(five, a)).toEqual({ full: true });
+    expect(toggleTarget(five, at('src/F2.tsx:1:1'))).toEqual({
+      targets: five.filter((target) => target.src !== 'src/F2.tsx:1:1'),
+    });
   });
 });

@@ -470,6 +470,11 @@ export interface GenerateRequest {
   page?: PageOutline;
   sketch?: Sketch;
   attachments?: Attachments;
+  alsoSelected?:
+    | [SourceRef]
+    | [SourceRef, SourceRef]
+    | [SourceRef, SourceRef, SourceRef]
+    | [SourceRef, SourceRef, SourceRef, SourceRef];
 }
 export interface PageOutline {
   items: PageItem[];

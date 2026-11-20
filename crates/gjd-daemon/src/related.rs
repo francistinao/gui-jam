@@ -21,6 +21,7 @@ pub struct RelatedFile {
     pub content: String,
     pub anchors: Vec<u64>,
     pub why: String,
+    pub selected: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -88,9 +89,10 @@ pub fn add(related: &mut Vec<RelatedFile>, file: RelatedFile) {
         existing.anchors.extend(file.anchors);
         existing.anchors.sort_unstable();
         existing.anchors.dedup();
+        existing.selected |= file.selected;
         return;
     }
-    if related.len() < MAX_FILES {
+    if file.selected || related.iter().filter(|other| !other.selected).count() < MAX_FILES {
         related.push(file);
     }
 }
@@ -167,7 +169,12 @@ fn block(file: &RelatedFile) -> String {
 #[must_use]
 pub fn render(related: &[RelatedFile]) -> String {
     let mut out = String::new();
-    for file in related {
+    let selected = related.iter().filter(|file| file.selected);
+    let others = related.iter().filter(|file| !file.selected);
+    for file in selected {
+        out.push_str(&block(file));
+    }
+    for file in others {
         let block = block(file);
         if !out.is_empty() && out.len() + block.len() > BUDGET {
             break;
@@ -195,6 +202,7 @@ mod tests {
             content: content.to_owned(),
             anchors: anchors.to_vec(),
             why: why.to_owned(),
+            selected: false,
         }
     }
 
@@ -363,5 +371,50 @@ mod tests {
 
         assert!(text.contains("path=\"src/A.tsx\""));
         assert!(!text.contains("path=\"src/B.tsx\""));
+    }
+
+    fn picked(path: &str, content: &str, line: u64) -> RelatedFile {
+        RelatedFile {
+            selected: true,
+            ..related(path, content, &[line], "selected too")
+        }
+    }
+
+    #[test]
+    fn keeps_every_selected_file_on_top_of_the_limit() {
+        let mut found = Vec::new();
+        for index in 0..4 {
+            add(&mut found, picked(&format!("src/S{index}.tsx"), "s", 3));
+        }
+        for index in 0..10 {
+            add(
+                &mut found,
+                related(&format!("src/F{index}.tsx"), "x", &[], "named"),
+            );
+        }
+        add(&mut found, related("src/S0.tsx", "s", &[9], "renders Card"));
+
+        assert_eq!(found.len(), 4 + MAX_FILES);
+        assert!(found[..4].iter().all(|file| file.selected));
+        assert_eq!(found[0].anchors, [3, 9]);
+        assert_eq!(found[0].why, "selected too");
+    }
+
+    #[test]
+    fn shows_selected_files_first_and_whatever_the_budget() {
+        let big = "x\n".repeat(399).replace('x', &"y".repeat(100));
+        let files = [
+            related("src/A.tsx", &big, &[], "renders Card"),
+            picked("src/B.tsx", &big, 2),
+            picked("src/C.tsx", &big, 2),
+        ];
+
+        let text = render(&files);
+
+        let b = text.find("path=\"src/B.tsx\"");
+        let c = text.find("path=\"src/C.tsx\"");
+        assert!(b.is_some() && c.is_some());
+        assert!(b < c);
+        assert!(!text.contains("path=\"src/A.tsx\""));
     }
 }

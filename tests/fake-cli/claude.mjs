@@ -45,6 +45,9 @@ const sketch = over
   : space
     ? { on: null, elementBox: null, box: numbers(space[1]) }
     : null;
+const group = [...text.matchAll(/^- <\w+> at (.+):(\d+):(\d+), base_hash: ([0-9a-f]{64})/gm)].map(
+  ([, path, line, column, hash]) => ({ path, line: Number(line), column: Number(column), hash }),
+);
 const shown = [
   ...text.matchAll(/<file path="([^"]+)" base_hash="([0-9a-f]{64})" lines="[^"]*" why="([^"]+)">/g),
 ].map(([, path, hash, why]) => ({ path, hash, why }));
@@ -97,6 +100,7 @@ log({
   files: shown.map(({ path, why }) => ({ path, why })),
   component,
   layout,
+  alsoSelected: group.map(({ path, line, column }) => `${path}:${line}:${column}`),
 });
 
 print({ type: 'system', subtype: 'init' });
@@ -208,6 +212,23 @@ if (/slow/i.test(request) || (/staggered/i.test(request) && slot === 2)) {
         'Order now · from $9',
       ),
     ],
+  };
+  const grouped = {
+    variants: ['V1', 'V2', 'V3'].map((name, index) => ({
+      label: `Grouped ${name}`,
+      system: 'Your project',
+      style: ['Solid', 'Soft', 'Plain'][index],
+      rationale: 'Marks every selected element.',
+      missing: [],
+      ops: [{ path: file, line, column, hash: baseHash }, ...group].map((target) => ({
+        kind: 'jsx_attr',
+        file: target.path,
+        base_hash: target.hash,
+        at: { line: Number(target.line), column: Number(target.column) },
+        name: 'data-grouped',
+        value: { string: name },
+      })),
+    })),
   };
   const sketchedOver = {
     variants: ['V1', 'V2', 'V3'].map((name, index) => ({
@@ -359,94 +380,96 @@ if (/slow/i.test(request) || (/staggered/i.test(request) && slot === 2)) {
     is_error: false,
     total_cost_usd: 0,
     structured_output: pick(
-      crossFile
-        ? crossFile
-        : /\b3d\b/i.test(request)
-          ? scene
-          : /pricing/i.test(request)
-            ? pricing
-            : over
-              ? sketchedOver
-              : sketched
-                ? {
-                    variants: Array.from({ length: /\btwin\b/i.test(request) ? 2 : 1 }, () => ({
-                      ...variant(
-                        cardText,
-                        'Card',
-                        `A card with a ${icon} icon, built from the sketch.`,
-                        '<OrderButton />',
-                        sketchedCard,
-                      ),
-                      ops: [
-                        {
-                          kind: 'replace_snippet',
-                          file,
-                          base_hash: baseHash,
-                          find: "import { Counter } from './components/Counter';",
-                          replace: `import ${icon}Icon from './assets/icons/${icon}-icon.svg';\nimport { Counter } from './components/Counter';`,
-                        },
-                        {
-                          kind: 'replace_snippet',
-                          file,
-                          base_hash: baseHash,
-                          find: '<OrderButton />',
-                          replace: sketchedCard,
-                        },
-                      ],
-                      assets: [
-                        {
-                          name: `${icon}-icon`,
-                          format: 'svg',
-                          svg: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 9h12v5a5 5 0 0 1-5 5H9a5 5 0 0 1-5-5z" fill="#3b2418"/></svg>',
-                        },
-                      ],
-                    })),
-                  }
-                : headerImage
+      group.length > 0
+        ? grouped
+        : crossFile
+          ? crossFile
+          : /\b3d\b/i.test(request)
+            ? scene
+            : /pricing/i.test(request)
+              ? pricing
+              : over
+                ? sketchedOver
+                : sketched
                   ? {
-                      variants: [
-                        variant(
-                          'Header image',
-                          'Icon',
-                          'Adds the header image before the label.',
-                          'Order now',
-                          `<img src="${headerImage.replace(/^public/, '')}" alt="" className="size-4" />Order now`,
+                      variants: Array.from({ length: /\btwin\b/i.test(request) ? 2 : 1 }, () => ({
+                        ...variant(
+                          cardText,
+                          'Card',
+                          `A card with a ${icon} icon, built from the sketch.`,
+                          '<OrderButton />',
+                          sketchedCard,
                         ),
-                      ],
+                        ops: [
+                          {
+                            kind: 'replace_snippet',
+                            file,
+                            base_hash: baseHash,
+                            find: "import { Counter } from './components/Counter';",
+                            replace: `import ${icon}Icon from './assets/icons/${icon}-icon.svg';\nimport { Counter } from './components/Counter';`,
+                          },
+                          {
+                            kind: 'replace_snippet',
+                            file,
+                            base_hash: baseHash,
+                            find: '<OrderButton />',
+                            replace: sketchedCard,
+                          },
+                        ],
+                        assets: [
+                          {
+                            name: `${icon}-icon`,
+                            format: 'svg',
+                            svg: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 9h12v5a5 5 0 0 1-5 5H9a5 5 0 0 1-5-5z" fill="#3b2418"/></svg>',
+                          },
+                        ],
+                      })),
                     }
-                  : {
-                      variants: [
-                        variant(
-                          'Blue button',
-                          'Solid',
-                          'Swapped the brand fill for blue.',
-                          'bg-brand',
-                          'bg-[#2563EB]',
-                        ),
-                        /invalid/i.test(request)
-                          ? variant(
-                              'Deep blue',
-                              'Deep',
-                              'A darker blue.',
-                              'bg-nowhere',
-                              'bg-[#1D4ED8]',
-                            )
-                          : variant(
-                              'Deep blue',
-                              'Deep',
-                              'A darker blue.',
-                              'bg-brand',
-                              'bg-[#1D4ED8]',
-                            ),
-                        variant(
-                          'Outline',
-                          'Outline',
-                          'A white button with a blue border.',
-                          'bg-brand',
-                          'border-2 border-[#2563EB] bg-white',
-                        ),
-                      ],
-                    },
+                  : headerImage
+                    ? {
+                        variants: [
+                          variant(
+                            'Header image',
+                            'Icon',
+                            'Adds the header image before the label.',
+                            'Order now',
+                            `<img src="${headerImage.replace(/^public/, '')}" alt="" className="size-4" />Order now`,
+                          ),
+                        ],
+                      }
+                    : {
+                        variants: [
+                          variant(
+                            'Blue button',
+                            'Solid',
+                            'Swapped the brand fill for blue.',
+                            'bg-brand',
+                            'bg-[#2563EB]',
+                          ),
+                          /invalid/i.test(request)
+                            ? variant(
+                                'Deep blue',
+                                'Deep',
+                                'A darker blue.',
+                                'bg-nowhere',
+                                'bg-[#1D4ED8]',
+                              )
+                            : variant(
+                                'Deep blue',
+                                'Deep',
+                                'A darker blue.',
+                                'bg-brand',
+                                'bg-[#1D4ED8]',
+                              ),
+                          variant(
+                            'Outline',
+                            'Outline',
+                            'A white button with a blue border.',
+                            'bg-brand',
+                            'border-2 border-[#2563EB] bg-white',
+                          ),
+                        ],
+                      },
     ),
   });
 }

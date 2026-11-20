@@ -5,6 +5,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { expect, type Locator, type Page, test } from '@playwright/test';
 import { GJD_BINARY, requireDaemonBinary, stopDaemon } from '../e2e/support/daemon.js';
+import { drawAndRewind } from '../e2e/support/new-features.js';
 
 const PLAYGROUND =
   process.env.GUIJAM_PLAYGROUND ?? join(homedir(), 'Documents/personal/guijam-playground');
@@ -15,6 +16,7 @@ const NODE24 =
     .map((entry) => join(homedir(), '.nvm/versions/node', entry.name, 'bin'))
     .at(-1);
 const BLUE_RGB = 'rgb(29, 78, 216)';
+const SKETCH = 'Sketch what you want for this component';
 const SKIPPED_DIRS = new Set([
   'node_modules',
   '.next',
@@ -107,17 +109,54 @@ async function waitForHttp(url: string, child: ChildProcess, output: () => strin
   throw new Error(`the dev server never answered:\n${output()}`);
 }
 
-async function target(page: Page): Promise<Locator> {
-  for (const tag of TARGETS) {
-    const candidates = page.locator(`${tag}[data-gj-src]`);
-    for (let index = 0; index < Math.min(await candidates.count(), 10); index += 1) {
-      const candidate = candidates.nth(index);
-      const leaf = await candidate.evaluate((node) => !node.querySelector('[data-gj-src]'));
-      const box = await candidate.boundingBox();
-      if (leaf && box && box.width > 8 && box.height > 8 && box.y < 600) return candidate;
+async function targets(page: Page, count: number): Promise<Locator[]> {
+  const found = new Map<string, Locator>();
+  for (const leavesOnly of [true, false]) {
+    for (const tag of TARGETS) {
+      const candidates = page.locator(`${tag}[data-gj-src]`);
+      for (let index = 0; index < Math.min(await candidates.count(), 10); index += 1) {
+        const candidate = candidates.nth(index);
+        const src = await candidate.getAttribute('data-gj-src');
+        const leaf = await candidate.evaluate((node) => !node.querySelector('[data-gj-src]'));
+        const box = await candidate.boundingBox();
+        if (!src || found.has(src) || (leavesOnly && !leaf) || !box) continue;
+        if (box.width > 8 && box.height > 8 && box.y < 600) {
+          found.set(src, page.locator(`[data-gj-src="${src}"]`).first());
+        }
+        if (found.size === count) return [...found.values()];
+      }
     }
   }
-  throw new Error('no visible element maps to source');
+  return [...found.values()];
+}
+
+async function target(page: Page): Promise<Locator> {
+  const [first] = await targets(page, 1);
+  if (!first) throw new Error('no visible element maps to source');
+  return first;
+}
+
+async function reachableSpot(element: Locator): Promise<{ x: number; y: number } | null> {
+  const box = await element.boundingBox();
+  if (!box) return null;
+  const spots = [0.5, 0.1, 0.9].flatMap((across) =>
+    [0.5, 0.1, 0.9].map((down) => ({ x: box.width * across, y: box.height * down })),
+  );
+  for (const spot of spots) {
+    const reachable = await element.evaluate(
+      (node, [x, y]) =>
+        document.elementFromPoint(x ?? 0, y ?? 0)?.closest('[data-gj-src]') === node,
+      [box.x + spot.x, box.y + spot.y],
+    );
+    if (reachable) return spot;
+  }
+  return null;
+}
+
+async function shiftClick(element: Locator): Promise<void> {
+  const spot = await reachableSpot(element);
+  if (!spot) throw new Error('the element cannot be clicked');
+  await element.click({ position: spot, modifiers: ['Shift'] });
 }
 
 async function selectTool(page: Page): Promise<void> {
@@ -234,6 +273,54 @@ for (const app of APPS) {
       expect(sourceHash(dir)).not.toBe(before);
       await toast.getByRole('button', { name: 'Undo' }).click();
       await expect.poll(() => sourceHash(dir), { timeout: 20_000 }).toBe(before);
+    });
+
+    test('Shift+click gathers two components, and sketch strokes undo and redo', async ({
+      page,
+    }) => {
+      const before = sourceHash(dir);
+      await page.goto(url);
+      await expect(page.getByRole('toolbar', { name: 'GUIJam' })).toBeVisible({ timeout: 60_000 });
+      const [first, ...others] = await targets(page, 8);
+      if (!first) throw new Error('no visible element maps to source');
+      await selectTool(page);
+      const prompt = page.getByRole('dialog', { name: /^Ask AI / });
+      const panel = await openFinetune(page, first);
+      let second: Locator | undefined;
+      for (const other of others) {
+        if (await reachableSpot(other)) {
+          second = other;
+          break;
+        }
+      }
+
+      if (second) {
+        await shiftClick(second);
+
+        const chosen = prompt
+          .getByRole('region', { name: 'Selected components' })
+          .getByRole('listitem');
+        await expect(chosen).toHaveCount(2);
+        await expect(
+          page.locator('.guijam-layer div[aria-hidden="true"].border-blue-500.border-dashed'),
+        ).not.toHaveCount(0);
+        await expect(prompt.getByRole('button', { name: SKETCH })).toHaveCount(0);
+
+        await shiftClick(second);
+
+        await expect(chosen).toHaveCount(0);
+      } else {
+        test.info().annotations.push({
+          type: 'note',
+          description: 'no second element from project source can be clicked, so no Shift+click',
+        });
+        await panel.getByRole('button', { name: 'Ask AI' }).click();
+      }
+      await prompt.getByRole('button', { name: SKETCH }).click();
+      await drawAndRewind(page, prompt, first);
+      await page.keyboard.press('Escape');
+      await expect(page.getByRole('dialog')).toHaveCount(0);
+      expect(sourceHash(dir)).toBe(before);
     });
   });
 }

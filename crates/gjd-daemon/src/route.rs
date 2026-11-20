@@ -238,6 +238,15 @@ mod tests {
     use super::{EXACT_NOTICE, MULTI_FILE_NOTICE, Tier, classify};
 
     #[test]
+    fn sends_a_group_to_r2_even_when_one_element_would_be_an_exact_edit() {
+        let exact = classify("make them blue and pill-shaped", true, false, true);
+        let question = classify("which files are these in?", false, false, true);
+
+        assert_eq!((exact.tier, exact.notice), (Tier::R2, None));
+        assert_eq!((question.tier, question.question), (Tier::R2, true));
+    }
+
+    #[test]
     fn routes_each_kind_of_request() {
         let cases = [
             ("make it blue and pill-shaped", true, false, Tier::R0, false),

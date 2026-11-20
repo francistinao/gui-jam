@@ -3,7 +3,7 @@ import { App } from './App';
 import { createController, initialState, type WidgetState } from './controller';
 import { createDrawLayer } from './draw-layer';
 import type { Widget, WidgetHost } from './host';
-import { activeLayers, type Layers, sketchingOver } from './model';
+import { activeLayers, type Layers, sketchingOver, strokeShortcut } from './model';
 import { load, save } from './persist';
 import { createSelectLayer } from './select-layer';
 import { createStore } from './store';
@@ -26,6 +26,12 @@ function adoptStyles(shadowRoot: ShadowRoot): void {
   shadowRoot.adoptedStyleSheets = [...shadowRoot.adoptedStyleSheets, sheet];
 }
 
+function typing(event: Event): boolean {
+  const [target] = event.composedPath();
+  if (!(target instanceof HTMLElement)) return false;
+  return target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName);
+}
+
 export function mount(host: WidgetHost): Widget {
   adoptStyles(host.shadowRoot);
   const layer = document.createElement('div');
@@ -39,7 +45,7 @@ export function mount(host: WidgetHost): Widget {
   const selectLayer = createSelectLayer({
     hostElement: host.hostElement,
     onHover: controller.hover,
-    onPick: (element) => void controller.select(element),
+    onPick: (element, additive) => void controller.select(element, additive),
   });
 
   const drawLayer = createDrawLayer({
@@ -91,6 +97,13 @@ export function mount(host: WidgetHost): Widget {
   }
 
   document.addEventListener('keydown', (event) => {
+    const shortcut = strokeShortcut(event);
+    if (shortcut) {
+      if (typing(event)) return;
+      const done = shortcut === 'undo' ? controller.undoSketch() : controller.redoSketch();
+      if (done) event.preventDefault();
+      return;
+    }
     if (event.key !== 'Escape') return;
     const { selection, tool } = store.get();
     if (selection) {

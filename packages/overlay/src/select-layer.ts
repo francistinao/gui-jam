@@ -4,7 +4,7 @@ const SWALLOWED = ['pointerdown', 'mousedown', 'mouseup', 'click', 'dblclick'] a
 interface SelectLayerOptions {
   hostElement: HTMLElement;
   onHover(element: Element | null): void;
-  onPick(element: Element): void;
+  onPick(element: Element, additive: boolean): void;
 }
 
 export function createSelectLayer({ hostElement, onHover, onPick }: SelectLayerOptions) {
@@ -20,9 +20,9 @@ export function createSelectLayer({ hostElement, onHover, onPick }: SelectLayerO
     if (fromWidget(event)) return;
     event.preventDefault();
     event.stopImmediatePropagation();
-    if (event.type !== 'click') return;
+    if (!(event instanceof MouseEvent) || event.type !== 'click') return;
     const element = annotated(event);
-    if (element) onPick(element);
+    if (element) onPick(element, event.shiftKey);
   }
 
   let enabled = false;

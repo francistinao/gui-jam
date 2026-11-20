@@ -52,12 +52,16 @@ export function App({ store, controller }: { store: Store<WidgetState>; controll
   const tool = useStore(store, (state) => state.tool);
   const hovered = useStore(store, (state) => state.hovered);
   const anchor = useStore(store, (state) => state.anchor);
+  const group = useStore(store, (state) => state.group);
   const mode = useStore(store, (state) => state.mode);
   const gone = useStore(store, (state) => state.selectionGone);
   return (
     <>
       {tool === 'select' && hovered ? <Outline rect={hovered} /> : null}
       {anchor && !gone ? <Outline rect={anchor} dashed /> : null}
+      {group.map((rect) => (
+        <Outline key={`${rect.src}@${rect.left},${rect.top}`} rect={rect} dashed />
+      ))}
       {mode === 'prompt' ? (
         <PromptPanel store={store} controller={controller} />
       ) : (

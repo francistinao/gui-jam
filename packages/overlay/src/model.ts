@@ -303,20 +303,58 @@ export function intersects(a: Rect, b: Rect): boolean {
 
 export interface SketchState {
   strokes: Point[][];
+  undone: Point[][];
   bounds: Rect;
   element?: Rect;
 }
 
 export function sketchOver(element: Rect): SketchState {
-  return { strokes: [], bounds: element, element };
+  return { strokes: [], undone: [], bounds: element, element };
 }
 
 export function addStroke(sketch: SketchState, stroke: Point[], bounds: Rect): SketchState {
   return {
     ...sketch,
     strokes: [...sketch.strokes, stroke],
+    undone: [],
     bounds: sketch.strokes.length === 0 ? bounds : unionRect(sketch.bounds, bounds),
   };
+}
+
+function withStrokes(sketch: SketchState, strokes: Point[][], undone: Point[][]): SketchState {
+  const [first, ...rest] = strokes;
+  const bounds = first
+    ? rest.reduce((all, stroke) => unionRect(all, boundsOf(stroke)), boundsOf(first))
+    : (sketch.element ?? sketch.bounds);
+  return { ...sketch, strokes, undone, bounds };
+}
+
+export function undoStroke(sketch: SketchState): SketchState {
+  const last = sketch.strokes.at(-1);
+  if (!last) return sketch;
+  return withStrokes(sketch, sketch.strokes.slice(0, -1), [...sketch.undone, last]);
+}
+
+export function redoStroke(sketch: SketchState): SketchState {
+  const next = sketch.undone.at(-1);
+  if (!next) return sketch;
+  return withStrokes(sketch, [...sketch.strokes, next], sketch.undone.slice(0, -1));
+}
+
+export interface ShortcutKeys {
+  key: string;
+  ctrlKey: boolean;
+  metaKey: boolean;
+  shiftKey: boolean;
+  altKey: boolean;
+}
+
+export function strokeShortcut(keys: ShortcutKeys): 'undo' | 'redo' | null {
+  if (!(keys.ctrlKey || keys.metaKey) || keys.altKey) return null;
+  const key = keys.key.toLowerCase();
+  if (key === 'z') return keys.shiftKey ? 'redo' : 'undo';
+  if (key === 'y' && !keys.shiftKey) return 'redo';
+  return null;
 }
 
 export function sketchAnchor(sketch: SketchState): Rect {
@@ -389,6 +427,23 @@ export function invertChanges<
 }
 
 export const MAX_JOBS = 3;
+
+export const MAX_TARGETS = 5;
+
+export type Regrouped<T> = { targets: readonly T[] } | { full: true };
+
+export function toggleTarget<T extends { src: string }>(
+  targets: readonly T[],
+  picked: T,
+  max = MAX_TARGETS,
+): Regrouped<T> {
+  if (targets.some((target) => target.src === picked.src)) {
+    if (targets.length === 1) return { targets };
+    return { targets: targets.filter((target) => target.src !== picked.src) };
+  }
+  if (targets.length >= max) return { full: true };
+  return { targets: [...targets, picked] };
+}
 
 export function nextJobNumber(taken: readonly number[]): number {
   let number = 1;

@@ -5,12 +5,14 @@ import { fileURLToPath } from 'node:url';
 import { expect, type Locator, type Page, test } from '@playwright/test';
 import { GJD_BINARY, requireDaemonBinary, stopDaemon } from './support/daemon.js';
 import { openFixture } from './support/fixture.js';
+import { promptForTwo, sketchWithUndo } from './support/new-features.js';
 import { type NuxtServer, startNuxt } from './support/nuxt.js';
 import { searchPath } from './support/process.js';
 
 const NUXT_DIR = fileURLToPath(new URL('../../fixtures/small-nuxt-tailwind4/', import.meta.url));
 const FAKE_CLI_DIR = fileURLToPath(new URL('../fake-cli/', import.meta.url));
 const ORDER_BUTTON = join(NUXT_DIR, 'app/components/OrderButton.vue');
+const APP = join(NUXT_DIR, 'app/app.vue');
 const BLUE_RGB = 'rgb(29, 78, 216)';
 const BRAND_RGB = 'rgb(190, 18, 60)';
 const LIGHT_BLUE_RGB = 'rgb(37, 99, 235)';
@@ -20,6 +22,7 @@ test.describe.configure({ timeout: 120_000 });
 let nuxt: NuxtServer;
 let workDir: string;
 let original: string;
+let originalApp: string;
 
 async function circle(page: Page, element: Locator): Promise<void> {
   const box = await element.boundingBox();
@@ -54,6 +57,7 @@ test.beforeAll(async () => {
   await stopDaemon(NUXT_DIR);
   workDir = await mkdtemp(join(tmpdir(), 'guijam-nuxt-'));
   original = await readFile(ORDER_BUTTON, 'utf8');
+  originalApp = await readFile(APP, 'utf8');
   nuxt = await startNuxt(NUXT_DIR, {
     GUIJAM_GJD_BIN: GJD_BINARY,
     GUIJAM_FAKE_CLAUDE_LOG: join(workDir, 'runs.jsonl'),
@@ -64,6 +68,7 @@ test.beforeAll(async () => {
 test.afterEach(async ({ page }) => {
   await page.evaluate(() => sessionStorage.clear()).catch(() => undefined);
   if ((await readFile(ORDER_BUTTON, 'utf8')) !== original) await writeFile(ORDER_BUTTON, original);
+  if ((await readFile(APP, 'utf8')) !== originalApp) await writeFile(APP, originalApp);
 });
 
 test.afterAll(async () => {
@@ -132,4 +137,30 @@ test('a drawn prompt previews a variant on a nuxt page and Use writes it', async
 
   await expect(page.getByRole('status')).toContainText('Applied to OrderButton.vue.');
   expect(await readFile(ORDER_BUTTON, 'utf8')).toBe(original.replace('bg-brand', 'bg-[#2563EB]'));
+});
+
+test('Shift+click puts two components in one prompt, and Use and Undo cover both files', async ({
+  page,
+}) => {
+  await openFixture(page, nuxt.url);
+  await chooseTool(page, 'Select');
+  await promptForTwo(
+    page,
+    {
+      element: page.getByRole('button', { name: 'Order now' }),
+      file: 'app/components/OrderButton.vue',
+      path: ORDER_BUTTON,
+    },
+    { element: page.getByRole('heading', { level: 1 }), file: 'app/app.vue', path: APP },
+  );
+});
+
+test('a sketch over a component undoes and redoes strokes, then generates', async ({ page }) => {
+  await openFixture(page, nuxt.url);
+  await chooseTool(page, 'Select');
+  await sketchWithUndo(page, {
+    element: page.getByRole('button', { name: 'Order now' }),
+    file: 'app/components/OrderButton.vue',
+    path: ORDER_BUTTON,
+  });
 });

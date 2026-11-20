@@ -57,8 +57,12 @@ export function parseSaved(text: string | null): Saved | null {
   if (!isRecord(value) || value.version !== VERSION || !Array.isArray(value.jobs)) return null;
   const jobs = value.jobs.filter(isJob).map((job) => ({
     ...job,
+    sketch: isRecord(job.sketch)
+      ? { ...job.sketch, undone: Array.isArray(job.sketch.undone) ? job.sketch.undone : [] }
+      : job.sketch,
     strokes:
       isRecord(job.sketch) && Array.isArray(job.sketch.strokes) ? job.sketch.strokes : job.strokes,
+    also: Array.isArray(job.also) ? job.also : [],
     attachments: Array.isArray(job.attachments) ? job.attachments : [],
     attachError: null,
     installing: false,

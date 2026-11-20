@@ -34,16 +34,20 @@ import {
   intersects,
   invertChanges,
   MAX_JOBS,
+  MAX_TARGETS,
   nearestIndex,
   nextJobNumber,
   type Point,
   type Rect,
+  redoStroke,
   type SketchState,
   samplePoints,
   shiftedLine,
   sketchAnchor,
   sketchOver,
   type Tool,
+  toggleTarget,
+  undoStroke,
   withoutInstalled,
 } from './model';
 import { collectPageOutline } from './page-outline';
@@ -125,6 +129,7 @@ export interface Job {
   id: string;
   number: number;
   target: Selection;
+  also: Selection[];
   anchor: Rect;
   strokes: Point[][];
   sketch: SketchState | null;
@@ -144,6 +149,7 @@ export interface WidgetState {
   hovered: Rect | null;
   selection: Selection | null;
   anchor: Rect | null;
+  group: (Rect & { src: string })[];
   style: ElementStyle | null;
   current: { fill: HexColor | null; radiusPx: number | null } | null;
   draft: Draft;
@@ -161,6 +167,7 @@ export const initialState: WidgetState = {
   hovered: null,
   selection: null,
   anchor: null,
+  group: [],
   style: null,
   current: null,
   draft: {},
@@ -185,6 +192,17 @@ const SERVER_RENDERED = /\.astro$/;
 
 function elementsAt(src: string): HTMLElement[] {
   return [...document.querySelectorAll<HTMLElement>(`[${SRC_ATTRIBUTE}="${CSS.escape(src)}"]`)];
+}
+
+function groupRects(targets: readonly Selection[]): WidgetState['group'] {
+  return targets.flatMap(({ src }) =>
+    elementsAt(src).map((element) => ({ src, ...rectOf(element) })),
+  );
+}
+
+function growable(job: Job): boolean {
+  const { status, variants } = job.generation;
+  return status === 'idle' && variants.length === 0 && job.sketch === null;
 }
 
 function annotatedAround(stroke: Rect, exclude: Element): Element[] {
@@ -345,11 +363,23 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
     if (previousFocus === id) previousFocus = null;
   }
 
+  function editSketch(edit: (sketch: SketchState) => SketchState): boolean {
+    const job = focused();
+    if (!job?.sketch || job.generation.status !== 'idle') return false;
+    const sketch = edit(job.sketch);
+    if (sketch === job.sketch) return false;
+    const anchor = sketchAnchor(sketch);
+    updateJob(job.id, (entry) => ({ ...entry, sketch, strokes: sketch.strokes, anchor }));
+    store.set({ anchor });
+    return true;
+  }
+
   function clearPanel(): void {
     store.set({
       focus: null,
       selection: null,
       anchor: null,
+      group: [],
       style: null,
       current: null,
       mode: 'finetune',
@@ -371,8 +401,9 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
         ? followedSrc(selection, variant.changes)
         : { src: selection.src, touched: false };
       const element = elementsAt(src)[0] ?? elementsAt(selection.src)[0];
-      if (element) store.set({ anchor: rectOf(element), selectionGone: false });
-      else if (!touched) store.set({ selectionGone: true });
+      if (element) {
+        store.set({ anchor: rectOf(element), group: groupRects(job.also), selectionGone: false });
+      } else if (!touched) store.set({ selectionGone: true });
     };
     const schedule = () => {
       if (scheduled) return;
@@ -552,6 +583,9 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
         line: job.target.line,
         column: job.target.column,
         prompt,
+        ...(job.also.length > 0
+          ? { alsoSelected: job.also.map(({ file, line, column }) => ({ file, line, column })) }
+          : {}),
         page: collectPageOutline(document, host.hostElement),
         ...(drawn ? { sketch: drawn } : {}),
         ...(job.attachments.length > 0
@@ -712,6 +746,7 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
       mode: 'prompt',
       selection: job.target,
       anchor: job.anchor,
+      group: groupRects(job.also),
       style: null,
       current: null,
       draft: {},
@@ -730,12 +765,14 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
     anchor: Rect,
     strokes: Point[][],
     sketch: SketchState | null,
+    also: Selection[] = [],
   ): Promise<void> {
     const { jobs } = store.get();
     const job: Job = {
       id: crypto.randomUUID(),
       number: nextJobNumber(jobs.map((entry) => entry.number)),
       target,
+      also,
       anchor,
       strokes,
       sketch,
@@ -768,6 +805,7 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
       selection,
       mode: 'finetune',
       anchor: rectOf(element),
+      group: [],
       style: null,
       current: readCurrent(element),
       draft: {},
@@ -777,20 +815,59 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
     await inspect(selection);
   }
 
+  function regroup(job: Job, picked: Selection): void {
+    const result = toggleTarget([job.target, ...job.also], picked);
+    if ('full' in result) {
+      notify({ kind: 'info', message: `Up to ${MAX_TARGETS} components at a time.` });
+      return;
+    }
+    const [target, ...also] = result.targets;
+    if (!target || result.targets.length === job.also.length + 1) return;
+    const moved = target.src !== job.target.src;
+    const element = moved ? elementsAt(target.src)[0] : undefined;
+    const anchor = element ? rectOf(element) : job.anchor;
+    updateJob(job.id, (entry) => ({ ...entry, target, also, anchor }));
+    store.set({
+      group: groupRects(also),
+      ...(moved ? { selection: target, anchor, style: null } : {}),
+    });
+    if (moved) void inspect(target);
+  }
+
+  async function extend(element: Element): Promise<void> {
+    const picked = selectionOf(element);
+    if (!picked) return;
+    const job = focused();
+    if (job) {
+      if (growable(job)) regroup(job, picked);
+      else await openFinetune(element);
+      return;
+    }
+    const { selection, anchor } = store.get();
+    if (!selection || !anchor) {
+      await openFinetune(element);
+      return;
+    }
+    if (selection.src === picked.src) return;
+    await revert(hasUnsaved() ? 'Unsaved tweaks were reverted.' : undefined);
+    if (atLimit()) return;
+    await addJob(selection, anchor, [], null, [picked]);
+  }
+
   return {
-    select: (element: Element) => openFinetune(element),
+    select: (element: Element, additive = false) =>
+      additive ? extend(element) : openFinetune(element),
+
+    removeTarget(src: string): void {
+      const job = focused();
+      const target = job ? [job.target, ...job.also].find((entry) => entry.src === src) : undefined;
+      if (job && target && growable(job)) regroup(job, target);
+    },
 
     focus: (id: string) => focusJob(id),
 
     async draw(points: Point[], bounds: Rect): Promise<boolean> {
-      const job = focused();
-      if (job?.sketch && job.generation.status === 'idle') {
-        const sketch = addStroke(job.sketch, points, bounds);
-        const anchor = sketchAnchor(sketch);
-        updateJob(job.id, (entry) => ({ ...entry, sketch, strokes: sketch.strokes, anchor }));
-        store.set({ anchor });
-        return true;
-      }
+      if (editSketch((sketch) => addStroke(sketch, points, bounds))) return true;
       if (atLimit()) return false;
       const around = annotatedAround(bounds, host.hostElement);
       const gesture = classifyGesture(points, around.map(rectOf));
@@ -806,7 +883,7 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
         notify({ kind: 'info', message: 'Nothing editable on this page.' });
         return false;
       }
-      await addJob(target, bounds, [points], { strokes: [points], bounds });
+      await addJob(target, bounds, [points], { strokes: [points], undone: [], bounds });
       return true;
     },
 
@@ -820,7 +897,12 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
     async startSketch(): Promise<void> {
       const job = focused();
       if (job) {
-        if (job.sketch || job.strokes.length > 0 || job.generation.status !== 'idle') return;
+        const plain =
+          !job.sketch &&
+          job.strokes.length === 0 &&
+          job.also.length === 0 &&
+          job.generation.status === 'idle';
+        if (!plain) return;
         const element = elementsAt(job.target.src)[0];
         const anchor = element ? rectOf(element) : job.anchor;
         updateJob(job.id, (entry) => ({ ...entry, anchor, sketch: sketchOver(anchor) }));
@@ -845,6 +927,10 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
       }));
       store.set({ anchor: element });
     },
+
+    undoSketch: () => editSketch(undoStroke),
+
+    redoSketch: () => editSketch(redoStroke),
 
     setPrompt(prompt: string): void {
       const job = focused();
@@ -1043,9 +1129,12 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
       };
       removeJob(job.id);
       store.set({
-        jobs: store
-          .get()
-          .jobs.map((entry) => ({ ...entry, previewed: false, target: moveTarget(entry.target) })),
+        jobs: store.get().jobs.map((entry) => ({
+          ...entry,
+          previewed: false,
+          target: moveTarget(entry.target),
+          also: entry.also.map(moveTarget),
+        })),
       });
       const moved = moveTarget(target);
       const element = elementsAt(moved.src)[0];
@@ -1066,6 +1155,7 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
         mode: 'finetune',
         selection: moved,
         anchor: rectOf(element),
+        group: [],
         style: null,
         current: readCurrent(element),
         selectionGone: false,
@@ -1182,7 +1272,9 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
         return same ? job : { ...job, anchor };
       });
       if (moved.some((job, index) => job !== jobs[index])) store.set({ jobs: moved });
-      if (focused()?.sketch) return;
+      const job = focused();
+      if (job && job.also.length > 0) store.set({ group: groupRects(job.also) });
+      if (job?.sketch) return;
       const element = selection ? elementsAt(selection.src)[0] : undefined;
       if (element) store.set({ anchor: rectOf(element) });
     },

@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect, type Locator, type Page, test } from '@playwright/test';
 import { GJD_BINARY, requireDaemonBinary, stopDaemon } from './support/daemon.js';
+import { promptForTwo, sketchWithUndo } from './support/new-features.js';
 import { type Bundler, type NextServer, startNext } from './support/next.js';
 import { searchPath } from './support/process.js';
 
@@ -193,6 +194,34 @@ for (const bundler of BUNDLERS) {
 
       await expect(page.getByRole('status')).toContainText('Applied to OrderButton.tsx.');
       expect(await readFile(ORDER_BUTTON, 'utf8')).toBe(before.replace('bg-brand', 'bg-[#2563EB]'));
+    });
+
+    test('Shift+click puts two components in one prompt, and Use and Undo cover both files', async ({
+      page,
+    }) => {
+      await open(page, next.url);
+      await chooseTool(page, 'Select');
+      await promptForTwo(
+        page,
+        {
+          element: page.getByRole('button', { name: 'Order now' }),
+          file: 'app/components/OrderButton.tsx',
+          path: ORDER_BUTTON,
+        },
+        { element: page.getByRole('heading', { level: 1 }), file: 'app/page.tsx', path: PAGE },
+      );
+    });
+
+    test('a sketch over a component undoes and redoes strokes, then generates', async ({
+      page,
+    }) => {
+      await open(page, next.url);
+      await chooseTool(page, 'Select');
+      await sketchWithUndo(page, {
+        element: page.getByRole('button', { name: 'Order now' }),
+        file: 'app/components/OrderButton.tsx',
+        path: ORDER_BUTTON,
+      });
     });
   });
 }

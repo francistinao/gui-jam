@@ -71,6 +71,11 @@ Rules:
 in <file> blocks with a base_hash, and copy each file's own base_hash into every op that edits \
 it. The only other files you may add are new components, with create_file ops, as <new-ui> \
 describes.
+- When an \"Also selected\" list follows the element, the developer selected those elements \
+too: make the requested change to each of them as well, in the same variant, with `at` set to \
+each one's line and column and each op carrying the base_hash of the file it edits. Their \
+files are in <source> or in <file> blocks with why=\"selected too\"; \"root\" means the element \
+is its component's root element and \"inside\" means it sits inside the component.
 - For style changes, prefer one class_tokens op on the element itself, with `at` set to the \
 element's line and column: remove the tokens you replace and add the new ones.
 - `at` points at the element's opening `<`: its line number, and its column counted from 1 at \
@@ -101,8 +106,9 @@ exact spot or how the space left behind looks.
 changed and any value you had to choose.
 - <page> lists what the running page shows, with each element's source location and \
 image asset; <assets> lists the project's image and font files; <file> blocks show the other \
-files you may edit: where the selected component is rendered, files the request names, and \
-the page next to a sketch. Use them to resolve references such as \"the image in the navbar\".
+files you may edit: where the selected component is rendered, files the request names, the \
+page next to a sketch, and the files of the other selected elements. Use them to resolve \
+references such as \"the image in the navbar\".
 - Refer to files under public/ by their URL from the site root (public/cup.svg is \
 \"/cup.svg\"); import any other asset with a path relative to the file you edit.
 - When a <sketch> is attached, the images show the page with the developer's strokes in \
@@ -136,12 +142,13 @@ pub struct Extras {
     pub sketch: bool,
     pub inspiration: usize,
     pub links: usize,
+    pub group: usize,
 }
 
 impl Extras {
     #[must_use]
     pub fn any(self) -> bool {
-        self.sketch || self.inspiration > 0 || self.links > 0
+        self.sketch || self.inspiration > 0 || self.links > 0 || self.group > 0
     }
 }
 
@@ -245,10 +252,12 @@ impl Progress {
         timeout: Duration,
     ) -> Self {
         let file_name = style.file.rsplit('/').next().unwrap_or(&style.file);
-        let mut steps = vec![(
-            Step::Read,
-            format!("Reading <{}> at {file_name}:{}", style.tag, style.line),
-        )];
+        let read = if extras.group > 0 {
+            format!("Reading {} components", extras.group + 1)
+        } else {
+            format!("Reading <{}> at {file_name}:{}", style.tag, style.line)
+        };
+        let mut steps = vec![(Step::Read, read)];
         if extras.sketch {
             steps.push((Step::Sketch, "Reading your sketch".to_owned()));
         }
@@ -342,6 +351,46 @@ impl Progress {
     }
 }
 
+fn class_note(style: &ElementStyle) -> String {
+    let note = match style.class_source {
+        ElementStyleClassSource::Static => "a string literal",
+        ElementStyleClassSource::Call => "a cn()/clsx() call; only its first literal is fixed",
+        ElementStyleClassSource::None => "absent; class_tokens adds one",
+        ElementStyleClassSource::Dynamic => "computed at runtime; use replace_snippet",
+    };
+    let attribute = if gjd_core::template::is_template(&style.file) {
+        "class"
+    } else {
+        "className"
+    };
+    format!("{attribute}: {note}")
+}
+
+#[must_use]
+pub fn also_selected(group: &[(&ElementStyle, Option<&Component>)]) -> String {
+    if group.is_empty() {
+        return String::new();
+    }
+    let mut out = String::from("\nAlso selected (apply the request to each of these too):\n");
+    for (style, component) in group {
+        let _ = write!(
+            out,
+            "- <{tag}> at {file}:{line}:{column}, base_hash: {hash}",
+            tag = style.tag,
+            file = style.file,
+            line = style.line,
+            column = style.column,
+            hash = style.base_hash.as_str(),
+        );
+        if let Some(component) = component {
+            let place = if component.root { "root" } else { "inside" };
+            let _ = write!(out, ", component {} ({place})", component.name);
+        }
+        let _ = writeln!(out, ", {}", class_note(style));
+    }
+    out
+}
+
 #[must_use]
 pub fn user_prompt(
     style: &ElementStyle,
@@ -374,18 +423,7 @@ pub fn user_prompt(
         };
         let _ = writeln!(prompt, "Component: {} ({place})", component.name);
     }
-    let class_note = match style.class_source {
-        ElementStyleClassSource::Static => "a string literal",
-        ElementStyleClassSource::Call => "a cn()/clsx() call; only its first literal is fixed",
-        ElementStyleClassSource::None => "absent; class_tokens adds one",
-        ElementStyleClassSource::Dynamic => "computed at runtime; use replace_snippet",
-    };
-    let attribute = if gjd_core::template::is_template(&style.file) {
-        "class"
-    } else {
-        "className"
-    };
-    let _ = writeln!(prompt, "{attribute}: {class_note}");
+    let _ = writeln!(prompt, "{}", class_note(style));
     if style.adapter == ElementStyleAdapter::Inline {
         let _ = writeln!(
             prompt,
@@ -469,8 +507,8 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        Extras, Progress, R1, R2, SYSTEM_PROMPT, Step, ask_label, budget, event_detail,
-        runs_detail, user_prompt,
+        Extras, Progress, R1, R2, SYSTEM_PROMPT, Step, also_selected, ask_label, budget,
+        event_detail, runs_detail, user_prompt,
     };
 
     #[test]
@@ -521,6 +559,58 @@ mod tests {
             with_inner.contains("\nComponent: OrderButton (the selected element is inside it)\n")
         );
         assert!(!without.contains("Component:"));
+    }
+
+    #[test]
+    fn lists_the_other_selected_elements_with_their_hash_component_and_class_source() {
+        let button = inspect("src/OrderButton.tsx", BUTTON, 3, 5, &Theme::default());
+        let card = "export function Card() {\n  return <h2>Latte</h2>;\n}\n";
+        let heading = inspect("src/Card.tsx", card, 2, 10, &Theme::default());
+        let root = Component {
+            name: "OrderButton".to_owned(),
+            root: true,
+        };
+
+        let text = also_selected(&[(&button, Some(&root)), (&heading, None)]);
+
+        assert_eq!(
+            text,
+            format!(
+                "\nAlso selected (apply the request to each of these too):\n\
+                 - <button> at src/OrderButton.tsx:3:5, base_hash: {}, component OrderButton (root), className: a string literal\n\
+                 - <h2> at src/Card.tsx:2:10, base_hash: {}, className: absent; class_tokens adds one\n",
+                button.base_hash.as_str(),
+                heading.base_hash.as_str(),
+            )
+        );
+        assert_eq!(also_selected(&[]), "");
+        assert!(
+            SYSTEM_PROMPT
+                .contains("make the requested change to each of them as well, in the same variant")
+        );
+    }
+
+    #[test]
+    fn reads_a_group_as_its_count_of_components() {
+        let style = inspect("src/A.tsx", BUTTON, 3, 5, &Theme::default());
+        let read = |group| {
+            let extras = Extras {
+                group,
+                ..Extras::default()
+            };
+            let mut progress = Progress::new("r1", &style, &[], extras, Duration::from_secs(60));
+            states(&mut progress).remove(0).0
+        };
+
+        assert_eq!(read(0), "Reading <button> at A.tsx:3");
+        assert_eq!(read(2), "Reading 3 components");
+        assert!(
+            Extras {
+                group: 1,
+                ..Extras::default()
+            }
+            .any()
+        );
     }
 
     fn states(progress: &mut Progress) -> Vec<(String, State)> {
@@ -595,6 +685,7 @@ mod tests {
                 sketch: true,
                 inspiration: 0,
                 links: 0,
+                group: 0,
             },
             Duration::from_secs(180),
         );
@@ -653,6 +744,7 @@ mod tests {
                 sketch: true,
                 inspiration: 2,
                 links: 3,
+                group: 0,
             })[1..4],
             [
                 "Reading your sketch",
@@ -672,6 +764,7 @@ mod tests {
                 sketch: false,
                 inspiration: 1,
                 links: 0,
+                group: 0,
             })[1],
             "Looking at your image"
         );
@@ -849,6 +942,7 @@ mod tests {
                 sketch: false,
                 inspiration: 0,
                 links: 0,
+                group: 0,
             },
             Duration::from_secs(60),
         );

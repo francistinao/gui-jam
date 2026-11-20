@@ -106,6 +106,14 @@ function sketchNote(dialog: Locator): Locator {
   return dialog.getByRole('note').filter({ hasText: NOTE });
 }
 
+function undoButton(dialog: Locator): Locator {
+  return dialog.getByRole('button', { name: 'Undo stroke' });
+}
+
+function redoButton(dialog: Locator): Locator {
+  return dialog.getByRole('button', { name: 'Redo stroke' });
+}
+
 async function startSelecting(page: Page): Promise<void> {
   await openFixture(page, fixture.url);
   await selectTool(page).click();
@@ -401,6 +409,233 @@ test('Clear sketch keeps the prompt, and a request with no strokes carries no sk
   for (const run of runs) {
     expect(run.sketch).toBeNull();
     expect(run.images).toEqual([]);
+  }
+  await discard(prompt);
+  await expect(badges(page)).toHaveCount(0);
+});
+
+test('Undo and Redo take strokes off and put them back one at a time, and Generate sends what is left', async ({
+  page,
+}) => {
+  await startSelecting(page);
+  const button = page.getByRole('button', { name: 'Order now' });
+  const prompt = await sketchOver(page, button, ORDER_BUTTON_FILE);
+  await expect(undoButton(prompt)).toHaveCount(0);
+  await expect(redoButton(prompt)).toHaveCount(0);
+
+  const drawn = await scribbleOver(page, button);
+  await expect.poll(() => inked(page)).toBeGreaterThan(0);
+  const scribbled = await inked(page);
+  const middle = drawn[1] + drawn[3] / 2;
+  await stroke(page, [
+    [drawn[0] + 20, drawn[1] - 50],
+    [drawn[0] + 120, drawn[1] - 30],
+  ]);
+  await expect.poll(() => inked(page)).toBeGreaterThan(scribbled);
+  const all = await inked(page);
+  await expect(undoButton(prompt)).toBeEnabled();
+  await expect(redoButton(prompt)).toBeDisabled();
+
+  await undoButton(prompt).click();
+  await expect.poll(() => inked(page)).toBe(scribbled);
+  await expect(redoButton(prompt)).toBeEnabled();
+
+  await redoButton(prompt).click();
+  await expect.poll(() => inked(page)).toBe(all);
+  await expect(redoButton(prompt)).toBeDisabled();
+
+  for (const _ of [1, 2, 3]) await undoButton(prompt).click();
+  await expect.poll(() => inked(page)).toBe(0);
+  await expect(undoButton(prompt)).toBeDisabled();
+  await expect(prompt.getByRole('button', { name: 'Clear sketch' })).toHaveCount(0);
+  await expect(sketchNote(prompt)).toBeVisible();
+
+  for (const _ of [1, 2]) await redoButton(prompt).click();
+  await expect.poll(() => inked(page)).toBe(scribbled);
+  await expect(redoButton(prompt)).toBeEnabled();
+
+  await stroke(page, [
+    [drawn[0] + 30, middle],
+    [drawn[0] + 50, middle + 4],
+  ]);
+  await expect.poll(() => inked(page)).toBeGreaterThan(scribbled);
+  await expect(redoButton(prompt)).toBeDisabled();
+
+  const start = (await cliRuns()).length;
+  await generate(prompt, 'make it look like my sketch');
+  await expect(undoButton(prompt)).toHaveCount(0);
+  await expect(tiles(prompt)).toHaveCount(3, { timeout: READY_MS });
+  const runs = (await cliRuns()).slice(start);
+  expect(runs).toHaveLength(3);
+  for (const run of runs) {
+    const box = run.sketch?.box ?? [];
+    for (const [index, value] of drawn.entries()) expectNear(box[index], value, 2);
+  }
+  await discard(prompt);
+  await expect(badges(page)).toHaveCount(0);
+});
+
+test('Ctrl+Z and Ctrl+Y undo and redo strokes, and the prompt box keeps its own undo', async ({
+  page,
+}) => {
+  await startSelecting(page);
+  const button = page.getByRole('button', { name: 'Order now' });
+  const prompt = await sketchOver(page, button, ORDER_BUTTON_FILE);
+  await scribbleOver(page, button);
+  await expect.poll(() => inked(page)).toBeGreaterThan(0);
+  const both = await inked(page);
+
+  await page.keyboard.press('Control+z');
+  await expect(redoButton(prompt)).toBeEnabled();
+  await expect.poll(() => inked(page)).toBeLessThan(both);
+  const one = await inked(page);
+  expect(one).toBeGreaterThan(0);
+
+  await page.keyboard.press('Control+z');
+  await expect.poll(() => inked(page)).toBe(0);
+  await page.keyboard.press('Control+y');
+  await expect.poll(() => inked(page)).toBe(one);
+  await page.keyboard.press('Control+Shift+z');
+  await expect.poll(() => inked(page)).toBe(both);
+  await page.keyboard.press('Meta+z');
+  await expect.poll(() => inked(page)).toBe(one);
+  await page.keyboard.press('Meta+Shift+z');
+  await expect.poll(() => inked(page)).toBe(both);
+  await expect(redoButton(prompt)).toBeDisabled();
+
+  await textbox(prompt).click();
+  await textbox(prompt).pressSequentially('rounder');
+  await page.keyboard.press('ControlOrMeta+z');
+
+  await expect(textbox(prompt)).not.toHaveValue('rounder');
+  expect(await inked(page)).toBe(both);
+  await expect(redoButton(prompt)).toBeDisabled();
+  await page.keyboard.press('Escape');
+  await expect(badges(page)).toHaveCount(0);
+});
+
+test('stroke shortcuts leave the app its own Ctrl+Z when there is nothing to undo, and Redo survives a reload', async ({
+  page,
+}) => {
+  await startSelecting(page);
+  await page.evaluate(() => {
+    const seen: boolean[] = [];
+    Object.assign(window, { strokeKeys: seen });
+    window.addEventListener('keydown', (event) => {
+      if (event.ctrlKey && /^[yz]$/i.test(event.key)) seen.push(event.defaultPrevented);
+    });
+  });
+  const prevented = () =>
+    page.evaluate(() => (window as unknown as { strokeKeys: boolean[] }).strokeKeys);
+  await page.keyboard.press('Control+z');
+  await expect.poll(prevented).toEqual([false]);
+
+  const button = page.getByRole('button', { name: 'Order now' });
+  await sketchOver(page, button, ORDER_BUTTON_FILE);
+  await scribbleOver(page, button);
+  await expect.poll(() => inked(page)).toBeGreaterThan(0);
+  const both = await inked(page);
+  await page.keyboard.press('Control+z');
+  await expect.poll(() => inked(page)).toBeLessThan(both);
+  const one = await inked(page);
+  await page.keyboard.press('Control+z');
+  await expect.poll(() => inked(page)).toBe(0);
+  await page.keyboard.press('Control+z');
+  await page.keyboard.press('Control+y');
+
+  await expect.poll(prevented).toEqual([false, true, true, false, true]);
+  await expect.poll(() => inked(page)).toBe(one);
+  await expect
+    .poll(() => page.evaluate(() => sessionStorage.getItem('guijam:jobs')?.includes('"undone":[[')))
+    .toBe(true);
+
+  const connected = page.waitForEvent('console', (msg) => msg.text().includes('[vite] connected'));
+  await page.reload();
+  await connected;
+
+  const restored = page.getByRole('dialog', { name: `Ask AI ${ORDER_BUTTON_FILE}` });
+  await expect(redoButton(restored)).toBeEnabled();
+  await expect.poll(() => inked(page)).toBeGreaterThan(0);
+  const kept = await inked(page);
+  await page.keyboard.press('Control+y');
+  await expect.poll(() => inked(page)).toBeGreaterThan(kept);
+  await expect(redoButton(restored)).toBeDisabled();
+  await page.keyboard.press('Escape');
+  await expect(badges(page)).toHaveCount(0);
+});
+
+test('Undo and Redo hide while generating and come back with Edit prompt, history and all', async ({
+  page,
+}) => {
+  await startSelecting(page);
+  const button = page.getByRole('button', { name: 'Order now' });
+  const prompt = await sketchOver(page, button, ORDER_BUTTON_FILE);
+  await scribbleOver(page, button);
+  await expect.poll(() => inked(page)).toBeGreaterThan(0);
+  const both = await inked(page);
+  await undoButton(prompt).click();
+  await expect.poll(() => inked(page)).toBeLessThan(both);
+  const one = await inked(page);
+
+  await generate(prompt, 'make it look like my sketch, pause');
+
+  await expect(prompt.getByRole('button', { name: 'Cancel' })).toBeVisible();
+  await expect(undoButton(prompt)).toHaveCount(0);
+  await expect(redoButton(prompt)).toHaveCount(0);
+  await expect(tiles(prompt)).toHaveCount(3, { timeout: READY_MS });
+
+  await prompt.getByRole('button', { name: 'Edit prompt' }).click();
+
+  await expect(redoButton(prompt)).toBeEnabled();
+  await expect.poll(() => inked(page)).toBe(one);
+  await redoButton(prompt).click();
+  await expect.poll(() => inked(page)).toBe(both);
+  await page.keyboard.press('Escape');
+  await expect(badges(page)).toHaveCount(0);
+});
+
+test('undoing the only stroke of a Draw-tool sketch keeps the drawing, and Redo brings it back', async ({
+  page,
+}) => {
+  await openFixture(page, fixture.url);
+  await drawTool(page).click();
+  const anchor = await boxOf(page.getByRole('button', { name: 'Order now' }));
+  const left = anchor.x + 440;
+  const top = anchor.y - 12;
+  await stroke(page, [
+    [left, top],
+    [left + 120, top + 40],
+    [left + 240, top],
+  ]);
+  const prompt = page.getByRole('dialog', { name: 'Ask AI src/App.tsx' });
+  await expect(prompt.getByText('Sketch', { exact: true })).toBeVisible();
+  await expect.poll(() => inked(page)).toBeGreaterThan(0);
+  const ink = await inked(page);
+  await textbox(prompt).fill('a card like this');
+
+  await undoButton(prompt).click();
+
+  await expect.poll(() => inked(page)).toBe(0);
+  await expect(textbox(prompt)).toHaveValue('a card like this');
+  await expect(badges(page)).toHaveCount(1);
+  await expect(undoButton(prompt)).toBeDisabled();
+
+  await page.keyboard.press('Control+y');
+
+  await expect.poll(() => inked(page)).toBe(ink);
+  const start = (await cliRuns()).length;
+  await prompt.getByRole('button', { name: 'Generate' }).click();
+  await expect(
+    prompt.getByRole('region', { name: 'Variants' }).getByRole('button', { name: 'Use V1' }),
+  ).toBeVisible({ timeout: READY_MS });
+  const runs = (await cliRuns()).slice(start);
+  expect(runs.length).toBeGreaterThan(0);
+  for (const run of runs) {
+    expect(run.sketch?.on).toBeNull();
+    expect(run.sketch?.elementBox).toBeNull();
+    for (const [index, value] of [left, top, 240, 40].entries()) {
+      expectNear(run.sketch?.box[index], value, 2);
+    }
   }
   await discard(prompt);
   await expect(badges(page)).toHaveCount(0);

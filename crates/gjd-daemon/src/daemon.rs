@@ -57,6 +57,8 @@ const MAX_NEEDS: usize = 4;
 const READ_CONCURRENCY: usize = 32;
 const PAGE_WHY: &str = "holds the routed page next to the sketch";
 const NAMED_WHY: &str = "named in the request";
+const SELECTED_WHY: &str = "selected too";
+const MAX_ALSO_SELECTED: usize = 4;
 
 type VersionCache = HashMap<(String, Option<u64>), (String, Instant)>;
 
@@ -576,7 +578,35 @@ fn full_prompt(job: &Job<'_>, tier: &TierConfig, references: &str, linked: &str)
         tier,
         job.related.component.as_ref(),
     );
-    format!("{element}{references}{linked}")
+    let group: Vec<(&ElementStyle, Option<&Component>)> = job
+        .group
+        .iter()
+        .map(|picked| (&picked.style, picked.component.as_ref()))
+        .collect();
+    let also = generate::also_selected(&group);
+    format!("{element}{also}{references}{linked}")
+}
+
+fn group_files(request: &GenerateRequest, group: &[Picked]) -> Vec<RelatedFile> {
+    let window = u64::try_from(generate::R2.context_lines).unwrap_or(u64::MAX);
+    let mut found = Vec::new();
+    for picked in group {
+        let line = picked.style.line.get();
+        if picked.style.file == request.file && line.abs_diff(request.line.get()) <= window {
+            continue;
+        }
+        related::add(
+            &mut found,
+            RelatedFile {
+                path: picked.style.file.clone(),
+                content: picked.source.clone(),
+                anchors: vec![line],
+                why: SELECTED_WHY.to_owned(),
+                selected: true,
+            },
+        );
+    }
+    found
 }
 
 fn rendered_by(site: RenderSite, name: &str) -> RelatedFile {
@@ -585,6 +615,7 @@ fn rendered_by(site: RenderSite, name: &str) -> RelatedFile {
         content: site.content,
         anchors: site.lines,
         why: format!("renders {name}"),
+        selected: false,
     }
 }
 
@@ -610,11 +641,12 @@ fn inspiration_count(request: &GenerateRequest) -> usize {
         .map_or(0, |attachments| attachments.images.len())
 }
 
-fn extras(request: &GenerateRequest, links: &Found) -> generate::Extras {
+fn extras(request: &GenerateRequest, links: &Found, group: usize) -> generate::Extras {
     generate::Extras {
         sketch: request.sketch.is_some(),
         inspiration: inspiration_count(request),
         links: links.links.len(),
+        group,
     }
 }
 
@@ -739,6 +771,12 @@ impl Related {
     }
 }
 
+struct Picked {
+    style: ElementStyle,
+    source: String,
+    component: Option<Component>,
+}
+
 struct Job<'a> {
     request: &'a GenerateRequest,
     prompt: &'a str,
@@ -746,6 +784,7 @@ struct Job<'a> {
     project: &'a Project,
     source: &'a str,
     style: &'a ElementStyle,
+    group: &'a [Picked],
     related: &'a Related,
     editable: &'a Contents,
     started: Instant,
@@ -797,6 +836,7 @@ impl RunLabels {
             all_ms = job.elapsed_ms(),
             variants,
             dropped = dropped.len(),
+            targets = job.group.len() + 1,
             "variants ready"
         );
         for item in dropped {
@@ -1171,6 +1211,48 @@ impl Daemon {
         Theme::from_css(stylesheets.iter().map(String::as_str))
     }
 
+    async fn picked(
+        &self,
+        request: &GenerateRequest,
+        theme: &Theme,
+        project: &Project,
+    ) -> Result<Vec<Picked>, Failure> {
+        if request.also_selected.len() > MAX_ALSO_SELECTED {
+            return Err(Failure::invalid_request(format!(
+                "Up to {} components at a time.",
+                MAX_ALSO_SELECTED + 1
+            )));
+        }
+        let mut seen = BTreeSet::from([(request.file.clone(), request.line, request.column)]);
+        let mut group = Vec::new();
+        for target in &request.also_selected {
+            if !seen.insert((target.file.clone(), target.line, target.column)) {
+                continue;
+            }
+            let source = self.read_project_file(&target.file).await?;
+            let style = inspect_with(
+                &target.file,
+                &source,
+                target.line,
+                target.column,
+                theme,
+                self.styling(project),
+            )?;
+            let component = jsx::enclosing_component(
+                &target.file,
+                &source,
+                target.line.get(),
+                target.column.get(),
+            );
+            group.push(Picked {
+                style,
+                source,
+                component,
+            });
+        }
+        Ok(group)
+    }
+
     async fn read_project_file(&self, file: &str) -> Result<String, Failure> {
         let path = self.project.resolve(file)?;
         Ok(tokio::fs::read_to_string(path).await?)
@@ -1496,7 +1578,9 @@ impl Daemon {
             &theme,
             self.styling(&project),
         )?;
+        let group = self.picked(&request, &theme, &project).await?;
         let exact = r0::parse_property_edits(&prompt, &style)
+            .filter(|_| group.is_empty())
             .and_then(|props| finetune_ops(&style, &props, &theme).ok())
             .filter(|ops| !ops.is_empty());
         let force_ai = request.force_ai.unwrap_or(false);
@@ -1505,13 +1589,20 @@ impl Daemon {
             &prompt,
             exact.is_some(),
             force_ai,
-            extras(&request, &found).any(),
+            extras(&request, &found, group.len()).any(),
         );
         let related = if decision.tier == Tier::R0 && exact.is_some() {
             Related::default()
         } else {
-            self.related(&request, &prompt, &source, &files, decision.needs_usages)
-                .await
+            self.related(
+                &request,
+                &prompt,
+                &source,
+                &files,
+                &group,
+                decision.needs_usages,
+            )
+            .await
         };
         let mut editable = Contents::from([(request.file.clone(), source.clone())]);
         for file in &related.files {
@@ -1526,6 +1617,7 @@ impl Daemon {
             project: &project,
             source: &source,
             style: &style,
+            group: &group,
             related: &related,
             editable: &editable,
             started,
@@ -2177,12 +2269,14 @@ impl Daemon {
         prompt: &str,
         source: &str,
         files: &[String],
+        group: &[Picked],
         needs_usages: bool,
     ) -> Related {
         let started = Instant::now();
         let selected = request.file.as_str();
         let component =
             jsx::enclosing_component(selected, source, request.line.get(), request.column.get());
+        let mut found = group_files(request, group);
         let on_page = references::page_files(request.page.as_ref());
         let mentioned: Vec<String> =
             references::mentioned_sources(files, prompt, selected, &on_page)
@@ -2193,6 +2287,12 @@ impl Daemon {
         if needs_usages {
             names.extend(component.iter().map(|component| component.name.clone()));
             names.extend(
+                group
+                    .iter()
+                    .filter_map(|picked| picked.component.as_ref())
+                    .map(|component| component.name.clone()),
+            );
+            names.extend(
                 mentioned
                     .iter()
                     .filter_map(|path| related::component_name(path))
@@ -2202,16 +2302,28 @@ impl Daemon {
             names.dedup();
         }
         let mut sites = self.render_sites(files, &names).await;
-        let mut found: Vec<RelatedFile> = Vec::new();
-        if let Some(component) = component.as_ref().filter(|_| needs_usages) {
+        let mut rendered = |name: &str, skip: &[&str], limit: usize| {
             let candidates: Vec<RenderSite> = sites
-                .remove(&component.name)
+                .remove(name)
                 .unwrap_or_default()
                 .into_iter()
-                .filter(|site| site.path != selected)
+                .filter(|site| !skip.contains(&site.path.as_str()))
                 .collect();
-            for site in related::ranked(candidates, &on_page, related::MAX_RENDER_SITES) {
-                related::add(&mut found, rendered_by(site, &component.name));
+            related::ranked(candidates, &on_page, limit)
+                .into_iter()
+                .map(|site| rendered_by(site, name))
+                .collect::<Vec<_>>()
+        };
+        if let Some(component) = component.as_ref().filter(|_| needs_usages) {
+            for file in rendered(&component.name, &[selected], related::MAX_RENDER_SITES) {
+                related::add(&mut found, file);
+            }
+        }
+        for picked in group.iter().filter(|_| needs_usages) {
+            if let Some(component) = picked.component.as_ref() {
+                for file in rendered(&component.name, &[&picked.style.file], 1) {
+                    related::add(&mut found, file);
+                }
             }
         }
         let page_near = self.page_near(request, source).await;
@@ -2227,22 +2339,16 @@ impl Daemon {
                         content,
                         anchors: Vec::new(),
                         why: NAMED_WHY.to_owned(),
+                        selected: false,
                     },
                 );
             }
         }
         for path in &mentioned {
-            let Some(name) = related::component_name(path) else {
-                continue;
-            };
-            let candidates: Vec<RenderSite> = sites
-                .remove(name)
-                .unwrap_or_default()
-                .into_iter()
-                .filter(|site| site.path != selected && site.path != *path)
-                .collect();
-            for site in related::ranked(candidates, &on_page, 1) {
-                related::add(&mut found, rendered_by(site, name));
+            if let Some(name) = related::component_name(path) {
+                for file in rendered(name, &[selected, path], 1) {
+                    related::add(&mut found, file);
+                }
             }
         }
         tracing::info!(
@@ -2323,6 +2429,7 @@ impl Daemon {
             content,
             anchors: vec![line],
             why: PAGE_WHY.to_owned(),
+            selected: false,
         };
         Some((near, page))
     }
@@ -2332,7 +2439,7 @@ impl Daemon {
             &job.request.run_id,
             job.style,
             &self.stylesheet_names(),
-            extras(job.request, job.links),
+            extras(job.request, job.links, job.group.len()),
             generate::budget(
                 tier,
                 request_images(job.request).len(),
@@ -2945,10 +3052,66 @@ mod tests {
     use std::path::Path;
 
     use super::{
-        Checks, Contents, Version, apply_variant, edits_of, materialize, provider_failure,
-        validate_variants, without_account_ids,
+        Checks, Contents, Picked, Version, apply_variant, edits_of, group_files, materialize,
+        provider_failure, validate_variants, without_account_ids,
     };
     use crate::project::{PackageManager, Project, Ui};
+
+    #[test]
+    fn shows_each_other_selected_file_once_unless_the_source_window_already_has_it() {
+        use std::num::NonZeroU64;
+
+        use gjd_core::contracts::GenerateRequest;
+        use gjd_core::theme::Theme;
+
+        let lines = |count: usize| format!("<>\n{}</>\n", "<p />\n".repeat(count));
+        let picked = |file: &str, source: &str, line: u64| {
+            let at = |value| NonZeroU64::new(value).expect("1-based");
+            Picked {
+                style: gjd_core::style::inspect(file, source, at(line), at(1), &Theme::default())
+                    .expect("element"),
+                source: source.to_owned(),
+                component: None,
+            }
+        };
+        let app = lines(400);
+        let card = lines(20);
+        let request: GenerateRequest = serde_json::from_value(json!({
+            "runId": "r1",
+            "file": "src/App.tsx",
+            "line": 10,
+            "column": 1,
+            "prompt": "make these bigger",
+        }))
+        .expect("request");
+        let group = [
+            picked("src/App.tsx", &app, 130),
+            picked("src/App.tsx", &app, 131),
+            picked("src/Card.tsx", &card, 4),
+            picked("src/Card.tsx", &card, 12),
+        ];
+
+        let found = group_files(&request, &group);
+
+        let shown: Vec<(&str, &[u64], &str, bool)> = found
+            .iter()
+            .map(|file| {
+                (
+                    file.path.as_str(),
+                    file.anchors.as_slice(),
+                    file.why.as_str(),
+                    file.selected,
+                )
+            })
+            .collect();
+        assert_eq!(
+            shown,
+            [
+                ("src/App.tsx", &[131][..], "selected too", true),
+                ("src/Card.tsx", &[4, 12][..], "selected too", true),
+            ]
+        );
+    }
 
     #[test]
     fn provider_failures_repeat_what_the_ai_tool_said() {
@@ -3650,6 +3813,7 @@ mod tests {
                     content: read(path),
                     anchors: Vec::new(),
                     why: (*why).to_owned(),
+                    selected: false,
                 })
                 .collect();
             let mut editable = Contents::from([(button.to_owned(), source.clone())]);
