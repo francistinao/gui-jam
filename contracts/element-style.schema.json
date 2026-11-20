@@ -52,9 +52,54 @@
     },
     "styleSource": {
       "enum": ["none", "object", "dynamic"]
+    },
+    "content": {
+      "description": "What the element holds between its tags, in order: plain text runs that fine-tune can edit, code such as {name} that only Ask AI can change, and child elements. An element with nothing between its tags has one empty text run. Absent for self-closing and void elements.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/ContentPart"
+      }
     }
   },
   "$defs": {
+    "ContentPart": {
+      "oneOf": [
+        {
+          "title": "TextPart",
+          "type": "object",
+          "description": "A plain text run as the page shows it: entities decoded and whitespace collapsed. run counts text runs only, from 0.",
+          "required": ["kind", "run", "value"],
+          "additionalProperties": false,
+          "properties": {
+            "kind": { "type": "string", "const": "text" },
+            "run": { "type": "integer", "minimum": 0 },
+            "value": { "type": "string" }
+          }
+        },
+        {
+          "title": "CodePart",
+          "type": "object",
+          "description": "Text the element gets from code, as written in the source, cut to 80 characters.",
+          "required": ["kind", "source"],
+          "additionalProperties": false,
+          "properties": {
+            "kind": { "type": "string", "const": "code" },
+            "source": { "type": "string" }
+          }
+        },
+        {
+          "title": "ElementPart",
+          "type": "object",
+          "description": "A child element; tag is empty for a fragment.",
+          "required": ["kind", "tag"],
+          "additionalProperties": false,
+          "properties": {
+            "kind": { "type": "string", "const": "element" },
+            "tag": { "type": "string" }
+          }
+        }
+      ]
+    },
     "StyleGroup": {
       "enum": ["fill", "radius", "stroke", "text", "effects", "opacity"]
     },

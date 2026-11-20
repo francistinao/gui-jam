@@ -28,6 +28,7 @@ import {
   containerIndex,
   cssColor,
   editedFiles,
+  finetuneProps,
   followedSrc,
   type HexColor,
   hexOfComputedColor,
@@ -72,6 +73,7 @@ export interface Selection {
 export interface Draft {
   fill?: FillValue;
   radius?: RadiusValue;
+  content?: Record<number, string>;
 }
 
 export interface Notice {
@@ -472,6 +474,20 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
     styled.clear();
   }
 
+  function setDraft(next: Draft): void {
+    const { selection } = store.get();
+    if (!selection) return;
+    editSequence += 1;
+    const sequence = editSequence;
+    store.set({ draft: next });
+    applyOptimistic(next, selection);
+    clearTimeout(previewTimer);
+    previewTimer = setTimeout(() => {
+      previewTimer = undefined;
+      previewing = preview(sequence);
+    }, PREVIEW_DEBOUNCE_MS);
+  }
+
   async function inspect(selection: Selection, quiet = false): Promise<void> {
     const reply = await host.request({
       type: 'element.inspect',
@@ -514,7 +530,7 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
         file: selection.file,
         line: selection.line,
         column: selection.column,
-        props: draft,
+        props: finetuneProps(draft),
       },
     });
     if (sequence !== editSequence) return;
@@ -939,7 +955,9 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
 
     generate: async () => {
       const job = focused();
-      if (job) await run(job.id, false);
+      if (!job) return;
+      if (hasUnsaved()) await revert('Unsaved tweaks were reverted.');
+      await run(job.id, false);
     },
 
     async askForVariations(): Promise<void> {
@@ -1169,18 +1187,22 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
     },
 
     edit(change: Draft): void {
-      const { selection, draft } = store.get();
-      if (!selection) return;
-      const next = { ...draft, ...change };
-      editSequence += 1;
-      const sequence = editSequence;
-      store.set({ draft: next });
-      applyOptimistic(next, selection);
-      clearTimeout(previewTimer);
-      previewTimer = setTimeout(() => {
-        previewTimer = undefined;
-        previewing = preview(sequence);
-      }, PREVIEW_DEBOUNCE_MS);
+      setDraft({ ...store.get().draft, ...change });
+    },
+
+    editText(run: number, value: string): void {
+      const { draft, style } = store.get();
+      const original = style?.content?.find((part) => part.kind === 'text' && part.run === run);
+      const { content: drafted, ...rest } = draft;
+      const content = { ...drafted };
+      if (original?.kind === 'text' && original.value === value) delete content[run];
+      else content[run] = value;
+      const next: Draft = Object.keys(content).length > 0 ? { ...rest, content } : rest;
+      if (Object.keys(next).length === 0) {
+        void revert();
+        return;
+      }
+      setDraft(next);
     },
 
     async apply(): Promise<void> {
@@ -1215,6 +1237,12 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
         },
         UNDO_WINDOW_MS,
       );
+      const job = focused();
+      if (job) {
+        removeJob(job.id);
+        clearPanel();
+        return;
+      }
       await inspect(selection, true);
     },
 
@@ -1248,6 +1276,7 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
         clearPanel();
         return;
       }
+      if (hasUnsaved()) await revert('Unsaved tweaks were reverted.');
       const draft = job.generation.status === 'idle' && job.generation.variants.length === 0;
       if (!draft) {
         clearPanel();

@@ -105,6 +105,10 @@ export function mount(host: WidgetHost): Widget {
       return;
     }
     if (event.key !== 'Escape') return;
+    const inPicker = event
+      .composedPath()
+      .some((node) => node instanceof HTMLElement && node.hasAttribute('data-color-picker'));
+    if (inPicker) return;
     const { selection, tool } = store.get();
     if (selection) {
       void controller.close();

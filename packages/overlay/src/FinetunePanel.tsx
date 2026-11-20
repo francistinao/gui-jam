@@ -1,9 +1,10 @@
 import type { ElementStyle, StyleGroup, StyleToken } from '@guijam/contracts-ts';
 import { Minus, Pencil } from 'lucide-react';
 import { useEffect, useState } from 'react';
+import { ColorPicker } from './ColorPicker';
+import { ContentEditor, hasTextContent } from './ContentEditor';
 import type { Controller, Draft, WidgetState } from './controller';
 import { Button } from './figui/button';
-import { ColorChit } from './figui/color-chit';
 import { InputGroup, InputGroupAddon } from './figui/input-group';
 import { NumericInput, NumericInputRoot, NumericScrubArea } from './figui/numeric-input';
 import { Tab, Tabs, TabsList, TabsPanel } from './figui/tabs';
@@ -174,7 +175,16 @@ function FillEditor({
       <div className="flex items-center gap-2">
         <InputGroup className={removed ? 'opacity-50' : undefined}>
           <InputGroupAddon>
-            <ColorChit color={hex} opacity={opacity} />
+            <ColorPicker
+              hex={hex}
+              opacity={opacity}
+              colors={style.theme.colors}
+              token={tokenLabel}
+              onColor={(next, alpha) =>
+                controller.edit({ fill: { kind: 'hex', hex: next, opacity: alpha } })
+              }
+              onToken={(name) => controller.edit({ fill: { kind: 'token', name } })}
+            />
           </InputGroupAddon>
           <HexField
             value={hex}
@@ -336,6 +346,9 @@ export function FinetunePanel({ store, controller }: PanelProps) {
           <Tab value="code">Code</Tab>
         </TabsList>
         <TabsPanel value="design" className="divide-y divide-grey-100">
+          {style?.content && hasTextContent(style.content) ? (
+            <ContentEditor parts={style.content} draft={draft} controller={controller} />
+          ) : null}
           {!style ? (
             <p className="typography-body-medium py-3 text-grey-500">Reading the element…</p>
           ) : sections.length === 0 ? (

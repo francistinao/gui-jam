@@ -1,9 +1,11 @@
 import type { DomPatch } from '@guijam/contracts-ts';
 import { describe, expect, it } from 'vitest';
 import { DomPreview, type PatchableElement } from './dom-preview';
+import { type TextLike, textRuns } from './text-runs';
 
 class FakeElement implements PatchableElement {
   readonly attributes = new Map<string, string>();
+  childNodes: TextLike[] = [];
 
   constructor(className: string | null, style: string | null) {
     if (className !== null) this.attributes.set('class', className);
@@ -128,5 +130,55 @@ describe('DomPreview', () => {
     expect(element.getAttribute('style')).toBe(
       'background-color: #fde68a; border-radius: 9999px !important',
     );
+  });
+});
+
+const text = (data: string): TextLike => ({ nodeType: 3, data });
+const child = (): TextLike => ({ nodeType: 1, data: '' });
+
+describe('text runs', () => {
+  it('are the direct text nodes with more than whitespace, in order', () => {
+    const nodes = [text('\n  '), text('Hello '), child(), text('!'), text('   ')];
+    expect(textRuns(nodes).map((node) => node.data)).toEqual(['Hello ', '!']);
+  });
+
+  it('are counted by their original text, so emptying one keeps the others in place', () => {
+    const first = text('');
+    const second = text('tail');
+    const originals = new Map([[first, 'Hello']]);
+    expect(textRuns([first, child(), second], (node) => originals.get(node) ?? node.data)).toEqual([
+      first,
+      second,
+    ]);
+  });
+});
+
+describe('DomPreview text', () => {
+  it('sets text runs on every element and puts them back on revert', () => {
+    const elements = [new FakeElement('p', null), new FakeElement('p', null)];
+    for (const element of elements) element.childNodes = [text('Gift '), child(), text(' today')];
+    const preview = new DomPreview<FakeElement>();
+
+    preview.apply(patch({ text: [{ run: 1, value: '& more' }] }), elements);
+    expect(elements.map((element) => element.childNodes.map((node) => node.data))).toEqual([
+      ['Gift ', '', '& more'],
+      ['Gift ', '', '& more'],
+    ]);
+
+    preview.apply(patch({ text: [{ run: 0, value: 'Cards' }] }), elements);
+    expect(elements[0]?.childNodes.map((node) => node.data)).toEqual(['Cards', '', ' today']);
+
+    preview.revert();
+    expect(elements[0]?.childNodes.map((node) => node.data)).toEqual(['Gift ', '', ' today']);
+  });
+
+  it('keeps the new text once applied', () => {
+    const element = new FakeElement('p', null);
+    element.childNodes = [text('Old')];
+    const preview = new DomPreview<FakeElement>();
+    preview.apply(patch({ text: [{ run: 0, value: 'New' }] }), [element]);
+    preview.keep();
+    preview.revert();
+    expect(element.childNodes[0]?.data).toBe('New');
   });
 });

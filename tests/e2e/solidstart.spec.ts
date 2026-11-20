@@ -11,7 +11,7 @@ import {
   widgetRequests,
 } from './support/daemon.js';
 import { type FixtureServer, openFixture, startFixtureServer } from './support/fixture.js';
-import { promptForTwo, sketchWithUndo } from './support/new-features.js';
+import { editText, pickThemeColor, promptForTwo, sketchWithUndo } from './support/new-features.js';
 import { searchPath } from './support/process.js';
 
 const START_DIR = fileURLToPath(
@@ -257,6 +257,24 @@ test('Shift+click puts two components in one prompt, and Use and Undo cover both
 test('a sketch over a component undoes and redoes strokes, then generates', async ({ page }) => {
   await select(page);
   await sketchWithUndo(page, {
+    element: page.getByRole('button', { name: 'Order now' }),
+    file: 'src/components/OrderButton.tsx',
+    path: ORDER_BUTTON,
+  });
+});
+
+test('the h1 text is edited without AI, previewed, applied and undone', async ({ page }) => {
+  await select(page);
+  await editText(page, {
+    element: page.getByRole('heading', { level: 1 }),
+    file: 'src/routes/index.tsx',
+    path: HOME,
+  });
+});
+
+test('the Fill picker applies a theme color and Undo restores it', async ({ page }) => {
+  await select(page);
+  await pickThemeColor(page, {
     element: page.getByRole('button', { name: 'Order now' }),
     file: 'src/components/OrderButton.tsx',
     path: ORDER_BUTTON,

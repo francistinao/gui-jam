@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { expect, type Locator, type Page, test } from '@playwright/test';
 import { GJD_BINARY, requireDaemonBinary, stopDaemon } from './support/daemon.js';
 import { openFixture } from './support/fixture.js';
-import { promptForTwo, sketchWithUndo } from './support/new-features.js';
+import { editText, pickThemeColor, promptForTwo, sketchWithUndo } from './support/new-features.js';
 import { type NuxtServer, startNuxt } from './support/nuxt.js';
 import { searchPath } from './support/process.js';
 
@@ -159,6 +159,26 @@ test('a sketch over a component undoes and redoes strokes, then generates', asyn
   await openFixture(page, nuxt.url);
   await chooseTool(page, 'Select');
   await sketchWithUndo(page, {
+    element: page.getByRole('button', { name: 'Order now' }),
+    file: 'app/components/OrderButton.vue',
+    path: ORDER_BUTTON,
+  });
+});
+
+test('the h1 text is edited without AI, previewed, applied and undone', async ({ page }) => {
+  await openFixture(page, nuxt.url);
+  await chooseTool(page, 'Select');
+  await editText(page, {
+    element: page.getByRole('heading', { level: 1 }),
+    file: 'app/app.vue',
+    path: APP,
+  });
+});
+
+test('the Fill picker applies a theme color and Undo restores it', async ({ page }) => {
+  await openFixture(page, nuxt.url);
+  await chooseTool(page, 'Select');
+  await pickThemeColor(page, {
     element: page.getByRole('button', { name: 'Order now' }),
     file: 'app/components/OrderButton.vue',
     path: ORDER_BUTTON,

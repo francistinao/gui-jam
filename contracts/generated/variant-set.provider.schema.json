@@ -190,6 +190,42 @@
           }
         },
         {
+          "title": "TextContentOp",
+          "type": "object",
+          "description": "Replaces one plain text run between the element's tags. run counts text runs only, from 0. value is plain text; GUIJam escapes it for the file.",
+          "required": [
+            "kind",
+            "file",
+            "base_hash",
+            "at",
+            "run",
+            "value"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "text_content"
+            },
+            "file": {
+              "$ref": "#/$defs/ProjectPath"
+            },
+            "base_hash": {
+              "$ref": "#/$defs/ContentHash"
+            },
+            "at": {
+              "$ref": "#/$defs/SrcLoc"
+            },
+            "run": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "value": {
+              "type": "string"
+            }
+          }
+        },
+        {
           "title": "CreateFileOp",
           "type": "object",
           "description": "Always requires approval.",

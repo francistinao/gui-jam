@@ -1,6 +1,7 @@
 use std::ops::Range;
 
-use crate::contracts::{DomPatch, DomPatchSetStylesItem};
+use crate::content::{self, Dialect};
+use crate::contracts::{DomPatch, DomPatchSetStylesItem, DomPatchTextItem};
 use crate::jsx::{ClassLiteral, ClassSource, JsxElement, JsxError, StyleSource};
 use crate::srcloc::LineIndex;
 
@@ -252,7 +253,12 @@ pub fn attribute(
     }
 }
 
-pub fn find_element(source: &str, line: u64, column: u64) -> Result<JsxElement, JsxError> {
+pub fn find_element(
+    path: &str,
+    source: &str,
+    line: u64,
+    column: u64,
+) -> Result<JsxElement, JsxError> {
     let (name_start, name_end, found) = start_tag(source, line, column)?;
     let position = |name: &str| found.iter().rposition(|attribute| attribute.name == name);
     let last_spread = found.iter().rposition(spreads);
@@ -275,11 +281,26 @@ pub fn find_element(source: &str, line: u64, column: u64) -> Result<JsxElement, 
         None => StyleSource::None,
         Some(attribute) => read(source, attribute).map_or(StyleSource::Dynamic, StyleSource::Css),
     };
+    let tag = &source[name_start..name_end];
+    let dialect = Dialect::of(path);
+    let content = match found
+        .iter()
+        .find(|attribute| content::is_code_attribute(&attribute.name))
+    {
+        Some(attribute) => Some(vec![content::code(&source[attribute.range.clone()])]),
+        None => match content::start_tag_end(source, name_end, dialect) {
+            Some((inner, closed)) if !closed && !content::is_void(tag) => {
+                content::template_children(source, inner, tag, dialect)
+            }
+            _ => None,
+        },
+    };
     Ok(JsxElement {
-        tag: source[name_start..name_end].to_owned(),
+        tag: tag.to_owned(),
         insert_at: name_end,
         class,
         style,
+        content,
     })
 }
 
@@ -432,7 +453,56 @@ pub fn dom_patch(path: &str, base: &str, next: &str, line: u64, column: u64) -> 
         remove_classes: missing_from(&from_tokens, &to_tokens),
         set_styles,
         remove_styles,
+        text: changed_text(path, base, next, line, column)?,
     })
+}
+
+fn content_shape(
+    path: &str,
+    source: &str,
+    line: u64,
+    column: u64,
+) -> Option<(Vec<String>, Vec<String>)> {
+    let element = find_element(path, source, line, column).ok()?;
+    let parts = element.content.unwrap_or_default();
+    let shape = parts
+        .iter()
+        .map(|part| match part {
+            content::ContentPart::Text { .. } => "text".to_owned(),
+            content::ContentPart::Code { source } => format!("code {source}"),
+            content::ContentPart::Element { tag } => format!("element {tag}"),
+        })
+        .collect();
+    let runs = content::runs(&parts)
+        .map(|(value, _)| value.to_owned())
+        .collect();
+    Some((runs, shape))
+}
+
+fn changed_text(
+    path: &str,
+    base: &str,
+    next: &str,
+    line: u64,
+    column: u64,
+) -> Option<Vec<DomPatchTextItem>> {
+    let (before, before_shape) = content_shape(path, base, line, column)?;
+    let (after, after_shape) = content_shape(path, next, line, column)?;
+    if before_shape != after_shape {
+        return None;
+    }
+    Some(
+        before
+            .iter()
+            .zip(&after)
+            .enumerate()
+            .filter(|(_, (from, to))| from != to)
+            .map(|(run, (_, to))| DomPatchTextItem {
+                run: u64::try_from(run).unwrap_or(u64::MAX),
+                value: to.clone(),
+            })
+            .collect(),
+    )
 }
 
 #[cfg(test)]
@@ -459,7 +529,7 @@ mod tests {
 
     fn element(source: &str, needle: &str) -> crate::jsx::JsxElement {
         let (line, column) = at(source, needle);
-        find_element(source, line, column).expect("element")
+        find_element("src/A.vue", source, line, column).expect("element")
     }
 
     #[test]
@@ -532,11 +602,11 @@ mod tests {
     #[test]
     fn refuses_positions_that_are_not_a_start_tag() {
         let source = "<template>\n  <p>Hi</p>\n</template>\n";
-        assert!(find_element(source, 2, 4).is_err());
-        assert!(find_element(source, 9, 1).is_err());
-        assert!(find_element("<p class=\"a\"", 1, 1).is_err());
-        assert!(find_element("</p>", 1, 1).is_err());
-        assert!(find_element("< p>", 1, 1).is_err());
+        assert!(find_element("src/A.vue", source, 2, 4).is_err());
+        assert!(find_element("src/A.vue", source, 9, 1).is_err());
+        assert!(find_element("src/A.vue", "<p class=\"a\"", 1, 1).is_err());
+        assert!(find_element("src/A.vue", "</p>", 1, 1).is_err());
+        assert!(find_element("src/A.vue", "< p>", 1, 1).is_err());
     }
 
     #[test]
@@ -643,6 +713,50 @@ mod tests {
             .collect();
         assert_eq!(set, [("background-color", "#1D4ED8")]);
         assert_eq!(patch.remove_styles, ["color"]);
+    }
+
+    #[test]
+    fn a_dom_patch_carries_changed_text_runs_and_reloads_when_the_runs_change_shape() {
+        let base = "<div>\n  <p class=\"mt-6\">Gift <b>cards</b> today</p>\n</div>\n";
+        let next = "<div>\n  <p class=\"mt-6\">Gift <b>cards</b> &amp; more</p>\n</div>\n";
+        let patch = dom_patch("src/pages/index.astro", base, next, 2, 3).expect("same shape");
+        let text: Vec<(u64, &str)> = patch
+            .text
+            .iter()
+            .map(|item| (item.run, item.value.as_str()))
+            .collect();
+        assert_eq!(text, [(1, "& more")]);
+
+        let reshaped = "<div>\n  <p class=\"mt-6\">Gift <b>cards</b> {count} today</p>\n</div>\n";
+        assert!(dom_patch("src/pages/index.astro", base, reshaped, 2, 3).is_none());
+    }
+
+    #[test]
+    fn text_set_by_an_attribute_or_a_raw_html_block_is_code() {
+        let vue = "<p v-text=\"label\">old</p>";
+        let astro = "<div set:html={html}>x</div>";
+        let svelte = "<div>{@html body} after</div>";
+        let read = |path: &str, source: &str| {
+            find_element(path, source, 1, 1)
+                .expect("element")
+                .content
+                .expect("content")
+        };
+        assert!(matches!(
+            read("src/A.vue", vue).as_slice(),
+            [crate::content::ContentPart::Code { source }] if source == "v-text=\"label\""
+        ));
+        assert!(matches!(
+            read("src/A.astro", astro).as_slice(),
+            [crate::content::ContentPart::Code { source }] if source == "set:html={html}"
+        ));
+        assert!(matches!(
+            read("src/A.svelte", svelte).as_slice(),
+            [
+                crate::content::ContentPart::Code { source },
+                crate::content::ContentPart::Text { value, .. }
+            ] if source == "{@html body}" && value == "after"
+        ));
     }
 
     #[test]

@@ -3,13 +3,15 @@ use std::ops::Range;
 use oxc_allocator::Allocator;
 use oxc_ast::AstKind;
 use oxc_ast::ast::{
-    BindingPattern, Expression, JSXAttributeItem, JSXAttributeName, JSXAttributeValue,
-    JSXElementName, JSXOpeningElement, ObjectPropertyKind, PropertyKey, StringLiteral,
+    BindingPattern, Expression, JSXAttributeItem, JSXAttributeName, JSXAttributeValue, JSXChild,
+    JSXElement, JSXElementName, JSXExpression, JSXOpeningElement, ObjectPropertyKind, PropertyKey,
+    StringLiteral,
 };
 use oxc_ast_visit::{Visit, walk};
 use oxc_parser::Parser;
 use oxc_span::{GetSpan, SourceType, Span};
 
+use crate::content::{self, ContentPart, Dialect};
 use crate::srcloc::LineIndex;
 use crate::template::{self, AttributeSlot};
 
@@ -79,6 +81,7 @@ pub struct JsxElement {
     pub insert_at: usize,
     pub class: ClassSource,
     pub style: StyleSource,
+    pub content: Option<Vec<ContentPart>>,
 }
 
 fn source_type(path: &str) -> Result<SourceType, JsxError> {
@@ -130,7 +133,7 @@ pub fn find_element(
     column: u64,
 ) -> Result<JsxElement, JsxError> {
     if template::is_template(path) {
-        return template::find_element(source, line, column);
+        return template::find_element(path, source, line, column);
     }
     let not_found = JsxError::ElementNotFound { line, column };
     let offset = LineIndex::new(source)
@@ -451,12 +454,44 @@ struct ElementFinder<'s> {
 }
 
 impl<'a> Visit<'a> for ElementFinder<'_> {
-    fn visit_jsx_opening_element(&mut self, it: &JSXOpeningElement<'a>) {
-        if self.found.is_none() && span_range(it.span).start == self.offset {
-            self.found = Some(describe(self.source, it));
+    fn visit_jsx_element(&mut self, it: &JSXElement<'a>) {
+        if self.found.is_none() && span_range(it.opening_element.span).start == self.offset {
+            let mut element = describe(self.source, &it.opening_element);
+            element.content = jsx_content(self.source, it);
+            self.found = Some(element);
         }
-        walk::walk_jsx_opening_element(self, it);
+        walk::walk_jsx_element(self, it);
     }
+}
+
+fn jsx_content(source: &str, element: &JSXElement<'_>) -> Option<Vec<ContentPart>> {
+    element.closing_element.as_ref()?;
+    let mut parts = Vec::new();
+    for child in &element.children {
+        match child {
+            JSXChild::Text(text) => {
+                parts.extend(content::text_part(
+                    source,
+                    span_range(text.span),
+                    Dialect::Jsx,
+                ));
+            }
+            JSXChild::Element(child) => parts.push(ContentPart::Element {
+                tag: child.opening_element.name.to_string(),
+            }),
+            JSXChild::Fragment(_) => parts.push(ContentPart::Element { tag: String::new() }),
+            JSXChild::ExpressionContainer(container) => {
+                if !matches!(container.expression, JSXExpression::EmptyExpression(_)) {
+                    parts.push(content::code(&source[span_range(container.span)]));
+                }
+            }
+            JSXChild::Spread(spread) => parts.push(content::code(&source[span_range(spread.span)])),
+        }
+    }
+    Some(content::finish(
+        parts,
+        span_range(element.opening_element.span).end,
+    ))
 }
 
 fn span_range(span: Span) -> Range<usize> {
@@ -504,6 +539,7 @@ fn describe(source: &str, element: &JSXOpeningElement<'_>) -> JsxElement {
         } else {
             style
         },
+        content: None,
     }
 }
 
@@ -669,7 +705,94 @@ mod tests {
         ClassLiteral, ClassSource, Component, JsxError, check_syntax, enclosing_component,
         find_element, imports, renders_children, usages,
     };
+    use crate::content::ContentPart;
     use crate::srcloc::LineIndex;
+
+    fn content_at(source: &str, needle: &str) -> Option<Vec<String>> {
+        let (line, column) = at(source, needle);
+        let element = find_element(FILE, source, line, column).expect("element");
+        element.content.map(|parts| {
+            parts
+                .iter()
+                .map(|part| match part {
+                    ContentPart::Text { value, range } => {
+                        format!("text {value} @{}", &source[range.clone()])
+                    }
+                    ContentPart::Code { source } => format!("code {source}"),
+                    ContentPart::Element { tag } => format!("element {tag}"),
+                })
+                .collect()
+        })
+    }
+
+    #[test]
+    fn reads_the_plain_text_runs_code_and_children_between_a_jsx_elements_tags() {
+        let source = r#"export const A = ({ name, t, children }) => (
+  <main>
+    <h1 className="text-5xl">Slow-roasted, made for mornings</h1>
+    <p>
+      Order ahead and pick up
+      at your nearest branch.
+    </p>
+    <span>Brew &amp; Co.</span>
+    <b>Hello <strong>world</strong>!</b>
+    <i>오늘의 추천 <span>Ube Latte</span></i>
+    <em>Hi {name}, {t('greeting')} {/* note */}</em>
+    <section>{children}</section>
+    <u></u>
+    <img alt="cup" />
+    <s><>x</></s>
+  </main>
+);
+"#;
+        assert_eq!(
+            content_at(source, "<h1"),
+            Some(vec![
+                "text Slow-roasted, made for mornings @Slow-roasted, made for mornings".to_owned()
+            ])
+        );
+        assert_eq!(
+            content_at(source, "<p>"),
+            Some(vec![
+                "text Order ahead and pick up at your nearest branch. @Order ahead and pick up\n      at your nearest branch.".to_owned()
+            ])
+        );
+        assert_eq!(
+            content_at(source, "<span>Brew"),
+            Some(vec!["text Brew & Co. @Brew &amp; Co.".to_owned()])
+        );
+        assert_eq!(
+            content_at(source, "<b>"),
+            Some(vec![
+                "text Hello @Hello".to_owned(),
+                "element strong".to_owned(),
+                "text ! @!".to_owned()
+            ])
+        );
+        assert_eq!(
+            content_at(source, "<i>"),
+            Some(vec![
+                "text 오늘의 추천 @오늘의 추천".to_owned(),
+                "element span".to_owned()
+            ])
+        );
+        assert_eq!(
+            content_at(source, "<em>"),
+            Some(vec![
+                "text Hi @Hi".to_owned(),
+                "code {name}".to_owned(),
+                "text , @,".to_owned(),
+                "code {t('greeting')}".to_owned()
+            ])
+        );
+        assert_eq!(
+            content_at(source, "<section>"),
+            Some(vec!["code {children}".to_owned()])
+        );
+        assert_eq!(content_at(source, "<u>"), Some(vec!["text  @".to_owned()]));
+        assert_eq!(content_at(source, "<img"), None);
+        assert_eq!(content_at(source, "<s>"), Some(vec!["element ".to_owned()]));
+    }
 
     const FILE: &str = "src/A.tsx";
 

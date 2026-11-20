@@ -7,9 +7,24 @@
   "additionalProperties": false,
   "properties": {
     "fill": { "$ref": "#/$defs/FillValue" },
-    "radius": { "$ref": "#/$defs/RadiusValue" }
+    "radius": { "$ref": "#/$defs/RadiusValue" },
+    "content": {
+      "description": "New values for the element's plain text runs.",
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/TextEdit" }
+    }
   },
   "$defs": {
+    "TextEdit": {
+      "type": "object",
+      "required": ["run", "value"],
+      "additionalProperties": false,
+      "properties": {
+        "run": { "type": "integer", "minimum": 0 },
+        "value": { "type": "string" }
+      }
+    },
     "FillValue": {
       "oneOf": [
         {

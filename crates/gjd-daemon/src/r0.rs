@@ -150,7 +150,11 @@ pub fn parse_property_edits(prompt: &str, style: &ElementStyle) -> Option<Finetu
         }
         index += 1;
     }
-    (fill.is_some() || radius.is_some()).then_some(FinetuneProps { fill, radius })
+    (fill.is_some() || radius.is_some()).then_some(FinetuneProps {
+        fill,
+        radius,
+        content: Vec::new(),
+    })
 }
 
 #[cfg(test)]

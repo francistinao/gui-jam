@@ -1,9 +1,10 @@
 use std::num::NonZeroU64;
 
+use crate::content;
 use crate::content_hash;
 use crate::contracts::{
-    ElementStyle, ElementStyleAdapter, ElementStyleClassSource, ElementStyleStyleSource,
-    StyleGroup, StyleToken,
+    ContentPart, ElementStyle, ElementStyleAdapter, ElementStyleClassSource,
+    ElementStyleStyleSource, StyleGroup, StyleToken,
 };
 use crate::jsx::{ClassSource, JsxError, StyleObject, StyleSource, find_element};
 use crate::tailwind::{classify, parse_token};
@@ -197,7 +198,31 @@ pub fn inspect_with(
         style_source,
         tokens,
         theme: theme.tokens(),
+        content: element
+            .content
+            .as_deref()
+            .map_or_else(Vec::new, content_parts),
     })
+}
+
+fn content_parts(parts: &[content::ContentPart]) -> Vec<ContentPart> {
+    let mut run = 0u64;
+    parts
+        .iter()
+        .map(|part| match part {
+            content::ContentPart::Text { value, .. } => {
+                run += 1;
+                ContentPart::Text {
+                    run: run - 1,
+                    value: value.clone(),
+                }
+            }
+            content::ContentPart::Code { source } => ContentPart::Code {
+                source: source.clone(),
+            },
+            content::ContentPart::Element { tag } => ContentPart::Element { tag: tag.clone() },
+        })
+        .collect()
 }
 
 fn style_tokens(classes: &str, in_editable_literal: bool, theme: &Theme) -> Vec<StyleToken> {

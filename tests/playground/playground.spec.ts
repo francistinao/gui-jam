@@ -275,6 +275,84 @@ for (const app of APPS) {
       await expect.poll(() => sourceHash(dir), { timeout: 20_000 }).toBe(before);
     });
 
+    test('a text edit and an exact color from the Fill picker apply, and Undo leaves the files as they were', async ({
+      page,
+    }) => {
+      const before = sourceHash(dir);
+      await page.goto(url);
+      await expect(page.getByRole('toolbar', { name: 'GUIJam' })).toBeVisible({ timeout: 60_000 });
+      const candidates = await targets(page, 8);
+      await selectTool(page);
+
+      let edited = false;
+      for (const candidate of candidates) {
+        const panel = await openFinetune(page, candidate);
+        const field = panel.getByRole('textbox', { name: /^Text content/ }).first();
+        if ((await field.count()) === 0) {
+          await page.keyboard.press('Escape');
+          continue;
+        }
+        await field.fill(`${await field.inputValue()} plus`);
+        await expect(candidate).toContainText('plus', { timeout: 30_000 });
+        expect(sourceHash(dir)).toBe(before);
+        await panel.getByRole('button', { name: 'Apply' }).click();
+        const toast = page.getByRole('status').filter({ hasText: 'Applied to' });
+        await expect(toast).toBeVisible();
+        expect(sourceHash(dir)).not.toBe(before);
+        await toast.getByRole('button', { name: 'Undo' }).click();
+        await expect.poll(() => sourceHash(dir), { timeout: 20_000 }).toBe(before);
+        await expect(candidate).not.toContainText('plus', { timeout: 30_000 });
+        await page.keyboard.press('Escape');
+        edited = true;
+        break;
+      }
+      if (!edited) {
+        test.info().annotations.push({
+          type: 'note',
+          description: 'no element on the starter page has plain text from project source',
+        });
+      }
+
+      await page.waitForLoadState('load');
+      await expect(page.getByRole('toolbar', { name: 'GUIJam' })).toBeVisible({ timeout: 60_000 });
+      const element = await target(page);
+      const src = await element.getAttribute('data-gj-src');
+      const located = page.locator(`[data-gj-src="${src}"]`).first();
+      const tool = page
+        .getByRole('toolbar', { name: 'GUIJam' })
+        .getByRole('button', { name: 'Select' });
+      if ((await tool.getAttribute('aria-pressed')) !== 'true') await selectTool(page);
+      const panel = await openFinetune(page, located);
+      const fill = panel.getByRole('region', { name: 'Fill' });
+      const add = fill.getByRole('button', { name: 'Add fill' });
+      if (await add.isVisible()) await add.click();
+      await fill.getByRole('button', { name: 'Fill color' }).click();
+      const colors = page.getByRole('dialog', { name: 'Fill color picker' });
+      await colors.getByRole('combobox', { name: 'Color mode' }).selectOption('rgb');
+      for (const [name, value] of [
+        ['Red', '29'],
+        ['Green', '78'],
+        ['Blue', '216'],
+      ] as const) {
+        const input = colors.getByRole('textbox', { name, exact: true });
+        await input.fill(value);
+        await input.press('Tab');
+      }
+      await expect(page.locator(`[data-gj-src="${src}"]`).first()).toHaveCSS(
+        'background-color',
+        BLUE_RGB,
+      );
+      await colors.getByRole('textbox', { name: 'Red', exact: true }).press('Escape');
+      await expect(colors).toHaveCount(0);
+      expect(sourceHash(dir)).toBe(before);
+      await panel.getByRole('button', { name: 'Apply' }).click();
+      const toast = page.getByRole('status').filter({ hasText: 'Applied to' });
+      await expect(toast).toBeVisible();
+      expect(sourceHash(dir)).not.toBe(before);
+      await toast.getByRole('button', { name: 'Undo' }).click();
+      await expect.poll(() => sourceHash(dir), { timeout: 20_000 }).toBe(before);
+    });
+
     test('Shift+click gathers two components, and sketch strokes undo and redo', async ({
       page,
     }) => {

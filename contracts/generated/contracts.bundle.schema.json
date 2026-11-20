@@ -169,6 +169,42 @@
           }
         },
         {
+          "title": "TextContentOp",
+          "type": "object",
+          "description": "Replaces one plain text run between the element's tags. run counts text runs only, from 0. value is plain text; GUIJam escapes it for the file.",
+          "required": [
+            "kind",
+            "file",
+            "base_hash",
+            "at",
+            "run",
+            "value"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "text_content"
+            },
+            "file": {
+              "$ref": "#/$defs/ProjectPath"
+            },
+            "base_hash": {
+              "$ref": "#/$defs/ContentHash"
+            },
+            "at": {
+              "$ref": "#/$defs/SrcLoc"
+            },
+            "run": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "value": {
+              "type": "string"
+            }
+          }
+        },
+        {
           "title": "CreateFileOp",
           "type": "object",
           "description": "Always requires approval.",
@@ -512,8 +548,81 @@
             "object",
             "dynamic"
           ]
+        },
+        "content": {
+          "description": "What the element holds between its tags, in order: plain text runs that fine-tune can edit, code such as {name} that only Ask AI can change, and child elements. An element with nothing between its tags has one empty text run. Absent for self-closing and void elements.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ContentPart"
+          }
         }
       }
+    },
+    "ContentPart": {
+      "oneOf": [
+        {
+          "title": "TextPart",
+          "type": "object",
+          "description": "A plain text run as the page shows it: entities decoded and whitespace collapsed. run counts text runs only, from 0.",
+          "required": [
+            "kind",
+            "run",
+            "value"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "text"
+            },
+            "run": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "value": {
+              "type": "string"
+            }
+          }
+        },
+        {
+          "title": "CodePart",
+          "type": "object",
+          "description": "Text the element gets from code, as written in the source, cut to 80 characters.",
+          "required": [
+            "kind",
+            "source"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "code"
+            },
+            "source": {
+              "type": "string"
+            }
+          }
+        },
+        {
+          "title": "ElementPart",
+          "type": "object",
+          "description": "A child element; tag is empty for a fragment.",
+          "required": [
+            "kind",
+            "tag"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "element"
+            },
+            "tag": {
+              "type": "string"
+            }
+          }
+        }
+      ]
     },
     "StyleGroup": {
       "enum": [
@@ -629,6 +738,31 @@
         },
         "radius": {
           "$ref": "#/$defs/RadiusValue"
+        },
+        "content": {
+          "description": "New values for the element's plain text runs.",
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/TextEdit"
+          }
+        }
+      }
+    },
+    "TextEdit": {
+      "type": "object",
+      "required": [
+        "run",
+        "value"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "run": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "value": {
+          "type": "string"
         }
       }
     },
@@ -2353,7 +2487,7 @@
       }
     },
     "DomPatch": {
-      "description": "Shows a fine-tune preview of a server-rendered template in the page without reloading it: the widget changes the class and style attributes of every element with this source location.",
+      "description": "Shows a fine-tune preview of a server-rendered template in the page without reloading it: the widget changes the class and style attributes, and the plain text runs, of every element with this source location.",
       "type": "object",
       "required": [
         "src",
@@ -2405,6 +2539,27 @@
           "type": "array",
           "items": {
             "type": "string"
+          }
+        },
+        "text": {
+          "description": "New values for plain text runs, counted like ContentPart runs.",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "run",
+              "value"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "run": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "value": {
+                "type": "string"
+              }
+            }
           }
         }
       }

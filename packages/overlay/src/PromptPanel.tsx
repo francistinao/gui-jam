@@ -12,6 +12,7 @@ import {
 import { useEffect, useRef, useState } from 'react';
 import { AnswerPanel } from './AnswerPanel';
 import { ACCEPTED_TYPES, type Attachment, imageFiles, MAX_ATTACHMENTS } from './attachments';
+import { ContentEditor, hasTextContent } from './ContentEditor';
 import type { Controller, ProgressStep, Selection, WidgetState } from './controller';
 import { Button } from './figui/button';
 import { cn } from './figui/cn';
@@ -202,6 +203,8 @@ export function PromptPanel({ store, controller }: PanelProps) {
   const job = useStore(store, (state) => state.jobs.find((entry) => entry.id === state.focus));
   const busy = useStore(store, (state) => state.busy);
   const gone = useStore(store, (state) => state.selectionGone);
+  const draft = useStore(store, (state) => state.draft);
+  const finetuned = useStore(store, (state) => state.preview);
   const now = useNow(job?.generation.status === 'running');
   const picker = useRef<HTMLInputElement>(null);
   const [dragging, setDragging] = useState(false);
@@ -289,6 +292,35 @@ export function PromptPanel({ store, controller }: PanelProps) {
             void controller.attach([...event.dataTransfer.files]);
           }}
         >
+          {!sketched &&
+          !grouped &&
+          status === 'idle' &&
+          style?.content &&
+          hasTextContent(style.content) ? (
+            <div className="flex flex-col gap-1 rounded-md px-2 pb-2 ring-1 ring-grey-100">
+              <ContentEditor parts={style.content} draft={draft} controller={controller} />
+              {draft.content ? (
+                <div className="flex items-center justify-end gap-2">
+                  <span className="typography-body-small mr-auto text-orange-600">Unsaved</span>
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    disabled={busy}
+                    onClick={() => void controller.revert()}
+                  >
+                    Revert
+                  </Button>
+                  <Button
+                    type="button"
+                    disabled={finetuned === null || busy}
+                    onClick={() => void controller.apply()}
+                  >
+                    Apply text
+                  </Button>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
           {over && status === 'idle' ? (
             <p
               role="note"

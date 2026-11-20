@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect, type Locator, type Page, test } from '@playwright/test';
 import { GJD_BINARY, requireDaemonBinary, stopDaemon } from './support/daemon.js';
-import { promptForTwo, sketchWithUndo } from './support/new-features.js';
+import { editText, pickThemeColor, promptForTwo, sketchWithUndo } from './support/new-features.js';
 import { type Bundler, type NextServer, startNext } from './support/next.js';
 import { searchPath } from './support/process.js';
 
@@ -218,6 +218,26 @@ for (const bundler of BUNDLERS) {
       await open(page, next.url);
       await chooseTool(page, 'Select');
       await sketchWithUndo(page, {
+        element: page.getByRole('button', { name: 'Order now' }),
+        file: 'app/components/OrderButton.tsx',
+        path: ORDER_BUTTON,
+      });
+    });
+
+    test('the h1 text is edited without AI, previewed, applied and undone', async ({ page }) => {
+      await open(page, next.url);
+      await chooseTool(page, 'Select');
+      await editText(page, {
+        element: page.getByRole('heading', { level: 1 }),
+        file: 'app/page.tsx',
+        path: PAGE,
+      });
+    });
+
+    test('the Fill picker applies a theme color and Undo restores it', async ({ page }) => {
+      await open(page, next.url);
+      await chooseTool(page, 'Select');
+      await pickThemeColor(page, {
         element: page.getByRole('button', { name: 'Order now' }),
         file: 'app/components/OrderButton.tsx',
         path: ORDER_BUTTON,

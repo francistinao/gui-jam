@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 use std::ops::Range;
 
+use crate::content;
 use crate::content_hash;
 use crate::contracts::{
     ContentHash, EditOp, EditOpAddItem, EditOpRemoveItem, EditOpValue, JsxValue, ProjectPath,
@@ -26,6 +27,8 @@ pub enum PatchError {
     StyleNotEditable { op: usize },
     #[error("op {op}: {name} is bound at runtime and can't be edited directly")]
     AttributeNotEditable { op: usize, name: String },
+    #[error("op {op}: the element has no plain text run {run}")]
+    TextNotEditable { op: usize, run: u64 },
     #[error("op {op}: the snippet occurs {count} times in {file}; it must occur exactly once")]
     SnippetNotUnique {
         op: usize,
@@ -194,32 +197,7 @@ fn resolve<'s>(
             replace,
         } => {
             let (path, source) = current(op, file, base_hash, sources)?;
-            let crlf = uses_crlf(source);
-            let find = if crlf && !source.contains(find.as_str()) {
-                to_crlf(find.as_str())
-            } else {
-                find.as_str().to_owned()
-            };
-            let mut matches = source.match_indices(find.as_str());
-            let (Some((start, _)), None) = (matches.next(), matches.next()) else {
-                return Err(PatchError::SnippetNotUnique {
-                    op,
-                    file: path.to_owned(),
-                    count: source.matches(find.as_str()).count(),
-                });
-            };
-            Ok((
-                path,
-                TextEdit {
-                    op,
-                    range: start..start + find.len(),
-                    text: if crlf {
-                        to_crlf(replace)
-                    } else {
-                        replace.clone()
-                    },
-                },
-            ))
+            resolve_snippet(op, path, source, find, replace).map(|edit| (path, edit))
         }
         EditOp::JsxAttr {
             file,
@@ -232,6 +210,16 @@ fn resolve<'s>(
             resolve_attribute(op, path, source, at, name.as_str(), value.as_ref())
                 .map(|edit| (path, edit))
         }
+        EditOp::TextContent {
+            file,
+            base_hash,
+            at,
+            run,
+            value,
+        } => {
+            let (path, source) = current(op, file, base_hash, sources)?;
+            resolve_text(op, path, source, at, *run, value).map(|edit| (path, edit))
+        }
         EditOp::StyleProp { .. } => unreachable!("style_prop ops are grouped by element"),
         EditOp::CreateFile { .. } => Err(PatchError::Unsupported {
             op,
@@ -242,6 +230,59 @@ fn resolve<'s>(
             kind: "rewrite_file",
         }),
     }
+}
+
+fn resolve_snippet(
+    op: usize,
+    path: &str,
+    source: &str,
+    find: &str,
+    replace: &str,
+) -> Result<TextEdit, PatchError> {
+    let crlf = uses_crlf(source);
+    let find = if crlf && !source.contains(find) {
+        to_crlf(find)
+    } else {
+        find.to_owned()
+    };
+    let mut matches = source.match_indices(find.as_str());
+    let (Some((start, _)), None) = (matches.next(), matches.next()) else {
+        return Err(PatchError::SnippetNotUnique {
+            op,
+            file: path.to_owned(),
+            count: source.matches(find.as_str()).count(),
+        });
+    };
+    Ok(TextEdit {
+        op,
+        range: start..start + find.len(),
+        text: if crlf {
+            to_crlf(replace)
+        } else {
+            replace.to_owned()
+        },
+    })
+}
+
+fn resolve_text(
+    op: usize,
+    path: &str,
+    source: &str,
+    at: &SrcLoc,
+    run: u64,
+    value: &str,
+) -> Result<TextEdit, PatchError> {
+    let element = find_element(path, source, at.line.get(), at.column.get())
+        .map_err(|source| PatchError::Element { op, source })?;
+    let range = usize::try_from(run)
+        .ok()
+        .and_then(|index| content::run_range(element.content.as_deref()?, index))
+        .ok_or(PatchError::TextNotEditable { op, run })?;
+    Ok(TextEdit {
+        op,
+        range,
+        text: content::encode(value),
+    })
 }
 
 fn uses_crlf(source: &str) -> bool {
@@ -556,6 +597,71 @@ mod tests {
     }
 
     const CARD: &str = "export const B = () => (\n  <div>\n    <b />\n  </div>\n);\n";
+
+    fn text_op(file: &str, content: &str, needle: &str, run: u64, value: &str) -> EditOp {
+        let (line, column) = crate::srcloc::LineIndex::new(content)
+            .position(content.find(needle).expect("needle present"));
+        op(json!({
+            "kind": "text_content", "file": file, "base_hash": content_hash(content.as_bytes()).as_str(),
+            "at": { "line": line, "column": column }, "run": run, "value": value,
+        }))
+    }
+
+    #[test]
+    fn rewrites_one_text_run_escaped_and_keeps_the_whitespace_and_children_around_it() {
+        let content = "export const B = () => (\n  <p className=\"x\">\n    Hello <strong>world</strong>!\n  </p>\n);\n";
+        let next = apply(
+            &sources(content),
+            &[text_op(FILE, content, "<p", 0, "Brew & Co. <Café> {x}")],
+        )
+        .expect("applies")
+        .remove(FILE)
+        .expect("file");
+        assert_eq!(
+            next,
+            "export const B = () => (\n  <p className=\"x\">\n    Brew &amp; Co. &lt;Café&gt; &#123;x&#125; <strong>world</strong>!\n  </p>\n);\n"
+        );
+        let second = apply(&sources(content), &[text_op(FILE, content, "<p", 1, "?")])
+            .expect("applies")
+            .remove(FILE)
+            .expect("file");
+        assert!(second.contains("<strong>world</strong>?\n"));
+    }
+
+    #[test]
+    fn writes_text_into_an_empty_element_and_a_template() {
+        let content = "export const B = () => <p className=\"x\"></p>;\n";
+        let next = apply(&sources(content), &[text_op(FILE, content, "<p", 0, "New")])
+            .expect("applies")
+            .remove(FILE)
+            .expect("file");
+        assert_eq!(next, "export const B = () => <p className=\"x\">New</p>;\n");
+
+        let vue = "<template>\n  <h1 class=\"a\">{{ greeting }} Old title</h1>\n</template>\n";
+        let files = BTreeMap::from([("src/A.vue".to_owned(), vue.to_owned())]);
+        let next = apply(
+            &files,
+            &[text_op("src/A.vue", vue, "<h1", 0, "{{ x }} & new")],
+        )
+        .expect("applies")
+        .remove("src/A.vue")
+        .expect("file");
+        assert_eq!(
+            next,
+            "<template>\n  <h1 class=\"a\">{{ greeting }} &#123;&#123; x &#125;&#125; &amp; new</h1>\n</template>\n"
+        );
+    }
+
+    #[test]
+    fn refuses_a_text_run_the_element_does_not_have() {
+        let content = "export const B = ({ name }) => <p>{name}</p>;\n";
+        let error = apply(&sources(content), &[text_op(FILE, content, "<p", 0, "x")])
+            .expect_err("no plain run");
+        assert!(matches!(
+            error,
+            PatchError::TextNotEditable { op: 0, run: 0 }
+        ));
+    }
 
     fn style(
         content: &str,

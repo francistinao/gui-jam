@@ -6,7 +6,7 @@ import { expect, type Locator, type Page, test } from '@playwright/test';
 import { type AstroServer, startAstro } from './support/astro.js';
 import { GJD_BINARY, requireDaemonBinary, stopDaemon } from './support/daemon.js';
 import { openFixture } from './support/fixture.js';
-import { promptForTwo, sketchWithUndo } from './support/new-features.js';
+import { editText, pickThemeColor, promptForTwo, sketchWithUndo } from './support/new-features.js';
 import { searchPath } from './support/process.js';
 
 const ASTRO_DIR = fileURLToPath(new URL('../../fixtures/small-astro-tailwind4/', import.meta.url));
@@ -264,6 +264,26 @@ test('a sketch over a component undoes and redoes strokes, then generates', asyn
   await openFixture(page, astro.url);
   await chooseTool(page, 'Select');
   await sketchWithUndo(page, {
+    element: page.getByRole('button', { name: 'Order now' }),
+    file: 'src/components/OrderButton.astro',
+    path: ORDER_BUTTON,
+  });
+});
+
+test('the h1 text is edited without AI, previewed, applied and undone', async ({ page }) => {
+  await openFixture(page, astro.url);
+  await chooseTool(page, 'Select');
+  await editText(page, {
+    element: page.getByRole('heading', { level: 1 }),
+    file: 'src/pages/index.astro',
+    path: INDEX,
+  });
+});
+
+test('the Fill picker applies a theme color and Undo restores it', async ({ page }) => {
+  await openFixture(page, astro.url);
+  await chooseTool(page, 'Select');
+  await pickThemeColor(page, {
     element: page.getByRole('button', { name: 'Order now' }),
     file: 'src/components/OrderButton.astro',
     path: ORDER_BUTTON,

@@ -1375,7 +1375,7 @@
       }
     },
     "DomPatch": {
-      "description": "Shows a fine-tune preview of a server-rendered template in the page without reloading it: the widget changes the class and style attributes of every element with this source location.",
+      "description": "Shows a fine-tune preview of a server-rendered template in the page without reloading it: the widget changes the class and style attributes, and the plain text runs, of every element with this source location.",
       "type": "object",
       "required": ["src", "addClasses", "removeClasses", "setStyles", "removeStyles"],
       "additionalProperties": false,
@@ -1418,6 +1418,24 @@
           "type": "array",
           "items": {
             "type": "string"
+          }
+        },
+        "text": {
+          "description": "New values for plain text runs, counted like ContentPart runs.",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["run", "value"],
+            "additionalProperties": false,
+            "properties": {
+              "run": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "value": {
+                "type": "string"
+              }
+            }
           }
         }
       }

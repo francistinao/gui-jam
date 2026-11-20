@@ -1,9 +1,16 @@
 export type EditOp =
-  ReplaceSnippetOp | ClassTokensOp | JsxAttrOp | StylePropOp | CreateFileOp | RewriteFileOp;
+  | ReplaceSnippetOp
+  | ClassTokensOp
+  | JsxAttrOp
+  | StylePropOp
+  | TextContentOp
+  | CreateFileOp
+  | RewriteFileOp;
 export type ProjectPath = string;
 export type ContentHash = string;
 export type JsxValue = JsxStringValue | JsxExpressionValue;
 export type StyleGroup = 'fill' | 'radius' | 'stroke' | 'text' | 'effects' | 'opacity';
+export type ContentPart = TextPart | CodePart | ElementPart;
 export type FillValue = FillToken | FillHex | FillNone;
 export type RadiusValue = RadiusToken | RadiusPx | RadiusFull;
 export type GuijamMessage =
@@ -140,6 +147,14 @@ export interface StylePropOp {
   prop: string;
   value: string | number | null;
 }
+export interface TextContentOp {
+  kind: 'text_content';
+  file: ProjectPath;
+  base_hash: ContentHash;
+  at: SrcLoc;
+  run: number;
+  value: string;
+}
 export interface CreateFileOp {
   kind: 'create_file';
   file: ProjectPath;
@@ -257,6 +272,7 @@ export interface ElementStyle {
   theme: ThemeTokens;
   adapter: 'tailwind' | 'inline' | 'vuetify';
   styleSource: 'none' | 'object' | 'dynamic';
+  content?: ContentPart[];
 }
 export interface StyleToken {
   token: string;
@@ -279,9 +295,23 @@ export interface ThemeRadius {
   name: string;
   px: number;
 }
+export interface TextPart {
+  kind: 'text';
+  run: number;
+  value: string;
+}
+export interface CodePart {
+  kind: 'code';
+  source: string;
+}
+export interface ElementPart {
+  kind: 'element';
+  tag: string;
+}
 export interface FinetuneProps {
   fill?: FillValue;
   radius?: RadiusValue;
+  content?: [TextEdit, ...TextEdit[]];
 }
 export interface FillToken {
   kind: 'token';
@@ -305,6 +335,10 @@ export interface RadiusPx {
 }
 export interface RadiusFull {
   kind: 'full';
+}
+export interface TextEdit {
+  run: number;
+  value: string;
 }
 export interface PluginHelloMessage {
   type: 'plugin.hello';
@@ -409,6 +443,10 @@ export interface DomPatch {
     value: string;
   }[];
   removeStyles: string[];
+  text?: {
+    run: number;
+    value: string;
+  }[];
 }
 export interface ChangesetCommitMessage {
   type: 'changeset.commit';

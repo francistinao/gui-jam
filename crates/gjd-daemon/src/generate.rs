@@ -486,6 +486,7 @@ pub fn op_file(op: &EditOp) -> &str {
         | EditOp::ClassTokens { file, .. }
         | EditOp::JsxAttr { file, .. }
         | EditOp::StyleProp { file, .. }
+        | EditOp::TextContent { file, .. }
         | EditOp::CreateFile { file, .. }
         | EditOp::RewriteFile { file, .. } => file.as_str(),
     }

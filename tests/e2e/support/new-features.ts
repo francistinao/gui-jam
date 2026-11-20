@@ -119,3 +119,63 @@ export async function sketchWithUndo(page: Page, component: Component): Promise<
   await variants(prompt).getByRole('button', { name: 'Discard' }).click();
   await expect(component.element).not.toHaveAttribute('data-sketched', 'V1');
 }
+
+const ESPRESSO_RGB = 'rgb(59, 36, 24)';
+
+function finetunePanel(page: Page, component: Component): Locator {
+  return page.getByRole('dialog', { name: `Fine-tune ${component.file}` });
+}
+
+function applied(page: Page, component: Component): Locator {
+  return page.getByRole('status').filter({ hasText: `Applied to ${name(component)}.` });
+}
+
+export async function editText(page: Page, component: Component): Promise<void> {
+  const before = await readFile(component.path, 'utf8');
+  await component.element.click();
+  const panel = finetunePanel(page, component);
+  const field = panel.getByRole('textbox', { name: 'Text content', exact: true });
+  const original = await field.inputValue();
+  expect(original).not.toBe('');
+
+  await field.fill('Freshly roasted & ready');
+
+  await expect(component.element).toHaveText('Freshly roasted & ready', { timeout: READY_MS });
+  expect(await readFile(component.path, 'utf8')).toBe(before);
+  await panel.getByRole('button', { name: 'Apply' }).click();
+
+  const toast = applied(page, component);
+  await expect(toast).toBeVisible();
+  const written = await readFile(component.path, 'utf8');
+  expect(written).toContain('Freshly roasted &amp; ready');
+  expect(
+    written.split('\n').filter((line, index) => line !== before.split('\n')[index]),
+  ).toHaveLength(1);
+  await toast.getByRole('button', { name: 'Undo' }).click();
+  await expect.poll(() => readFile(component.path, 'utf8')).toBe(before);
+  await expect(component.element).toHaveText(original, { timeout: READY_MS });
+}
+
+export async function pickThemeColor(page: Page, component: Component): Promise<void> {
+  const before = await readFile(component.path, 'utf8');
+  await component.element.click();
+  const panel = finetunePanel(page, component);
+  await panel.getByRole('button', { name: 'Fill color' }).click();
+  const colors = page.getByRole('dialog', { name: 'Fill color picker' });
+
+  await colors.getByRole('button', { name: 'Theme color espresso' }).click();
+
+  await expect(component.element).toHaveCSS('background-color', ESPRESSO_RGB, {
+    timeout: READY_MS,
+  });
+  expect(await readFile(component.path, 'utf8')).toBe(before);
+  await colors.getByRole('button', { name: 'Theme color espresso' }).press('Escape');
+  await expect(colors).toHaveCount(0);
+  await panel.getByRole('button', { name: 'Apply' }).click();
+
+  const toast = applied(page, component);
+  await expect(toast).toBeVisible();
+  expect(await readFile(component.path, 'utf8')).toContain('bg-espresso');
+  await toast.getByRole('button', { name: 'Undo' }).click();
+  await expect.poll(() => readFile(component.path, 'utf8')).toBe(before);
+}

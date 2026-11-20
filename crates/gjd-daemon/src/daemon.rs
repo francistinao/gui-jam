@@ -59,6 +59,7 @@ const PAGE_WHY: &str = "holds the routed page next to the sketch";
 const NAMED_WHY: &str = "named in the request";
 const SELECTED_WHY: &str = "selected too";
 const MAX_ALSO_SELECTED: usize = 4;
+const SUMMARY_TEXT_CHARS: usize = 40;
 
 type VersionCache = HashMap<(String, Option<u64>), (String, Instant)>;
 
@@ -433,6 +434,7 @@ fn edits_of(ops: &[EditOp], editable: &Contents) -> Vec<EditOp> {
                 | EditOp::ClassTokens { base_hash, .. }
                 | EditOp::JsxAttr { base_hash, .. }
                 | EditOp::StyleProp { base_hash, .. }
+                | EditOp::TextContent { base_hash, .. }
                 | EditOp::RewriteFile { base_hash, .. } => *base_hash = hash,
                 EditOp::CreateFile { .. } => {}
             }
@@ -3018,6 +3020,15 @@ fn style_change(ops: &[EditOp]) -> Option<String> {
                 }
                 None => format!("- {}", name.as_str()),
             }),
+            EditOp::TextContent { value, .. } => {
+                let shown: String = value.chars().take(SUMMARY_TEXT_CHARS).collect();
+                let cut = if value.chars().count() > SUMMARY_TEXT_CHARS {
+                    "\u{2026}"
+                } else {
+                    ""
+                };
+                Some(format!("text \"{shown}{cut}\""))
+            }
             _ => None,
         })
         .collect();
@@ -3053,8 +3064,28 @@ mod tests {
 
     use super::{
         Checks, Contents, Picked, Version, apply_variant, edits_of, group_files, materialize,
-        provider_failure, validate_variants, without_account_ids,
+        provider_failure, summarize, validate_variants, without_account_ids,
     };
+
+    #[test]
+    fn a_text_edit_reads_as_its_new_text_cut_to_forty_characters() {
+        let text = |value: &str| -> EditOp {
+            serde_json::from_value(json!({
+                "kind": "text_content", "file": "src/App.tsx", "base_hash": "0".repeat(64),
+                "at": { "line": 31, "column": 11 }, "run": 0, "value": value,
+            }))
+            .expect("op")
+        };
+        let line = std::num::NonZeroU64::new(31).expect("line");
+        assert_eq!(
+            summarize("src/App.tsx", line, &[text("Freshly roasted")]),
+            "src/App.tsx:31 · text \"Freshly roasted\""
+        );
+        assert_eq!(
+            summarize("src/App.tsx", line, &[text(&"a".repeat(45))]),
+            format!("src/App.tsx:31 · text \"{}\u{2026}\"", "a".repeat(40))
+        );
+    }
     use crate::project::{PackageManager, Project, Ui};
 
     #[test]

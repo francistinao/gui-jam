@@ -1,4 +1,12 @@
-import type { ElementStyle, GenerateDone, StyleGroup, StyleToken } from '@guijam/contracts-ts';
+import type {
+  ElementStyle,
+  FillValue,
+  FinetuneProps,
+  GenerateDone,
+  RadiusValue,
+  StyleGroup,
+  StyleToken,
+} from '@guijam/contracts-ts';
 import type { Tool } from './host';
 
 export type { Tool } from './host';
@@ -675,4 +683,33 @@ export function followedSrc(
   );
   const line = shiftedLine(selection.line, own);
   return { src: `${selection.file}:${line}:${selection.column}`, touched };
+}
+
+export interface DraftValues {
+  fill?: FillValue;
+  radius?: RadiusValue;
+  content?: Record<number, string>;
+}
+
+export function finetuneProps({ fill, radius, content }: DraftValues): FinetuneProps {
+  const [first, ...rest] = Object.entries(content ?? {})
+    .map(([run, value]) => ({ run: Number(run), value }))
+    .sort((a, b) => a.run - b.run);
+  return {
+    ...(fill ? { fill } : {}),
+    ...(radius ? { radius } : {}),
+    ...(first ? { content: [first, ...rest] } : {}),
+  };
+}
+
+export function keyedParts<T>(parts: readonly T[]): { key: string; part: T }[] {
+  const seen = new Map<string, number>();
+  const keyed: { key: string; part: T }[] = [];
+  for (const part of parts) {
+    const base = JSON.stringify(part);
+    const count = seen.get(base) ?? 0;
+    seen.set(base, count + 1);
+    keyed.push({ key: `${base}#${count}`, part });
+  }
+  return keyed;
 }

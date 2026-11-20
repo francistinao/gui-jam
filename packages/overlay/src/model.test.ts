@@ -15,10 +15,12 @@ import {
   droppedNote,
   editedFiles,
   fillOfToken,
+  finetuneProps,
   followedSrc,
   formatElapsed,
   hexOfComputedColor,
   invertChanges,
+  keyedParts,
   linksIn,
   MAX_LINKS,
   MAX_TARGETS,
@@ -837,5 +839,37 @@ describe('toggleTarget', () => {
     expect(toggleTarget(five, at('src/F2.tsx:1:1'))).toEqual({
       targets: five.filter((target) => target.src !== 'src/F2.tsx:1:1'),
     });
+  });
+});
+
+describe('finetuneProps', () => {
+  it('sends only what the draft sets, with text edits as runs in order', () => {
+    expect(finetuneProps({})).toEqual({});
+    expect(
+      finetuneProps({
+        fill: { kind: 'token', name: 'brand' },
+        content: { 2: 'tail', 0: 'Hello' },
+      }),
+    ).toEqual({
+      fill: { kind: 'token', name: 'brand' },
+      content: [
+        { run: 0, value: 'Hello' },
+        { run: 2, value: 'tail' },
+      ],
+    });
+    expect(finetuneProps({ content: {} })).toEqual({});
+  });
+});
+
+describe('keyedParts', () => {
+  it('gives equal parts different keys that stay the same between renders', () => {
+    const parts = [
+      { kind: 'code', source: '{x}' },
+      { kind: 'element', tag: 'b' },
+      { kind: 'code', source: '{x}' },
+    ];
+    const keys = keyedParts(parts).map(({ key }) => key);
+    expect(new Set(keys).size).toBe(3);
+    expect(keyedParts(parts).map(({ key }) => key)).toEqual(keys);
   });
 });
