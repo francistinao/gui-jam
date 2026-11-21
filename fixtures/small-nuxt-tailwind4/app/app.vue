@@ -14,5 +14,6 @@
         </div>
       </section>
     </main>
+    <Extras />
   </div>
 </template>

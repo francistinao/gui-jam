@@ -133,7 +133,7 @@
           "description": "Set on requests; a reply repeats its request's id."
         },
         "payload": {
-          "$ref": "#/$defs/SourceRef"
+          "$ref": "#/$defs/ElementInspect"
         }
       }
     },
@@ -660,6 +660,29 @@
         "pageReload": {
           "type": "boolean",
           "description": "Server-rendered templates (.astro) can't be hot-reloaded. When true or absent, the plugin reloads the page to show the change; false leaves the page alone because the widget patches it in place."
+        }
+      }
+    },
+    "ElementInspect": {
+      "description": "The element to read. text is what the clicked instance shows; with it, text the element renders from code is traced to the string that produced it.",
+      "type": "object",
+      "required": ["file", "line", "column"],
+      "additionalProperties": false,
+      "properties": {
+        "file": {
+          "type": "string"
+        },
+        "line": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "column": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "text": {
+          "type": "string",
+          "maxLength": 500
         }
       }
     },

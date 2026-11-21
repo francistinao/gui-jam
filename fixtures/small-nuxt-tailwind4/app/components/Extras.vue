@@ -1,0 +1,14 @@
+<template>
+  <section id="extras" class="flex flex-col items-start gap-3 px-12 pb-40">
+    <h4 class="text-xl font-semibold">{{ activeTab?.title }}</h4>
+  </section>
+</template>
+
+<script setup lang="ts">
+const TABS = [
+  { id: 'overview', title: 'CBPLD Overview' },
+  { id: 'reports', title: 'Monthly Reports' },
+];
+
+const activeTab = TABS.find((tab) => tab.id === 'overview');
+</script>

@@ -4,13 +4,14 @@ export type EditOp =
   | JsxAttrOp
   | StylePropOp
   | TextContentOp
+  | TextAtOp
   | CreateFileOp
   | RewriteFileOp;
 export type ProjectPath = string;
 export type ContentHash = string;
 export type JsxValue = JsxStringValue | JsxExpressionValue;
 export type StyleGroup = 'fill' | 'radius' | 'stroke' | 'text' | 'effects' | 'opacity';
-export type ContentPart = TextPart | CodePart | ElementPart;
+export type ContentPart = TextPart | CodePart | FoundPart | ElementPart;
 export type FillValue = FillToken | FillHex | FillNone;
 export type RadiusValue = RadiusToken | RadiusPx | RadiusFull;
 export type GuijamMessage =
@@ -153,6 +154,13 @@ export interface TextContentOp {
   base_hash: ContentHash;
   at: SrcLoc;
   run: number;
+  value: string;
+}
+export interface TextAtOp {
+  kind: 'text_at';
+  file: ProjectPath;
+  base_hash: ContentHash;
+  at: SrcLoc;
   value: string;
 }
 export interface CreateFileOp {
@@ -304,6 +312,18 @@ export interface CodePart {
   kind: 'code';
   source: string;
 }
+export interface FoundPart {
+  kind: 'found';
+  value: string;
+  code: string;
+  places: [TextPlace, ...TextPlace[]];
+}
+export interface TextPlace {
+  file: string;
+  line: number;
+  column: number;
+  label: string;
+}
 export interface ElementPart {
   kind: 'element';
   tag: string;
@@ -311,6 +331,12 @@ export interface ElementPart {
 export interface FinetuneProps {
   fill?: FillValue;
   radius?: RadiusValue;
+  source?: {
+    file: string;
+    line: number;
+    column: number;
+    value: string;
+  };
   content?: [TextEdit, ...TextEdit[]];
 }
 export interface FillToken {
@@ -394,12 +420,13 @@ export interface UpdateResultMessage {
 export interface ElementInspectMessage {
   type: 'element.inspect';
   id?: string;
-  payload: SourceRef;
+  payload: ElementInspect;
 }
-export interface SourceRef {
+export interface ElementInspect {
   file: string;
   line: number;
   column: number;
+  text?: string;
 }
 export interface ElementStyleMessage {
   type: 'element.style';
@@ -548,6 +575,11 @@ export interface Attachments {
 export interface InspirationImage {
   mediaType: 'image/png' | 'image/jpeg' | 'image/webp';
   base64: string;
+}
+export interface SourceRef {
+  file: string;
+  line: number;
+  column: number;
 }
 export interface GenerateDoneMessage {
   type: 'generate.done';

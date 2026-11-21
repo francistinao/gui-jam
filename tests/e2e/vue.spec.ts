@@ -11,11 +11,18 @@ import {
   widgetRequests,
 } from './support/daemon.js';
 import { type FixtureServer, openFixture, startFixtureServer } from './support/fixture.js';
-import { editText, pickThemeColor, promptForTwo, sketchWithUndo } from './support/new-features.js';
+import {
+  editFoundText,
+  editText,
+  pickThemeColor,
+  promptForTwo,
+  sketchWithUndo,
+} from './support/new-features.js';
 import { searchPath } from './support/process.js';
 
 const VUE_DIR = fileURLToPath(new URL('../../fixtures/small-vue-tailwind4/', import.meta.url));
 const FAKE_CLI_DIR = fileURLToPath(new URL('../fake-cli/', import.meta.url));
+const EXTRAS = join(VUE_DIR, 'src/components/Extras.vue');
 const ORDER_BUTTON = join(VUE_DIR, 'src/components/OrderButton.vue');
 const APP = join(VUE_DIR, 'src/App.vue');
 const BLUE_RGB = 'rgb(29, 78, 216)';
@@ -222,6 +229,18 @@ test('the h1 text is edited without AI, previewed, applied and undone', async ({
     element: page.getByRole('heading', { level: 1 }),
     file: 'src/App.vue',
     path: APP,
+  });
+});
+
+test('a heading rendered from a data array is edited where the array is written', async ({
+  page,
+}) => {
+  await select(page);
+  await editFoundText(page, {
+    element: page.locator('#extras h4'),
+    file: 'src/components/Extras.vue',
+    path: EXTRAS,
+    caption: 'From TABS · Extras.vue:9',
   });
 });
 

@@ -86,12 +86,30 @@ pub fn is_code_attribute(name: &str) -> bool {
 
 #[must_use]
 pub fn code(source: &str) -> ContentPart {
-    let trimmed = source.trim();
-    let mut cut: String = trimmed.chars().take(CODE_CHARS).collect();
-    if trimmed.chars().count() > CODE_CHARS {
+    ContentPart::Code {
+        source: source.trim().to_owned(),
+    }
+}
+
+#[must_use]
+pub fn shortened(source: &str) -> String {
+    let mut cut: String = source.chars().take(CODE_CHARS).collect();
+    if source.chars().count() > CODE_CHARS {
         cut.push('\u{2026}');
     }
-    ContentPart::Code { source: cut }
+    cut
+}
+
+fn is_spacer(source: &str) -> bool {
+    let inner = source
+        .trim()
+        .trim_start_matches('{')
+        .trim_end_matches('}')
+        .trim();
+    let quoted = ['"', '\'', '`']
+        .iter()
+        .any(|quote| inner.len() >= 2 && inner.starts_with(*quote) && inner.ends_with(*quote));
+    quoted && inner[1..inner.len() - 1].trim().is_empty()
 }
 
 pub fn runs(parts: &[ContentPart]) -> impl Iterator<Item = (&str, &Range<usize>)> {
@@ -365,7 +383,9 @@ pub fn template_children(
             text_start = at;
         } else if let Some(end) = skip_code(source, at, dialect) {
             parts.extend(text_part(source, text_start..at, dialect));
-            parts.push(code(&source[at..end]));
+            if !is_spacer(&source[at..end]) {
+                parts.push(code(&source[at..end]));
+            }
             at = end;
             text_start = at;
         } else if source[at..].starts_with("</") {

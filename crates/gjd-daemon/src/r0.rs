@@ -154,6 +154,7 @@ pub fn parse_property_edits(prompt: &str, style: &ElementStyle) -> Option<Finetu
         fill,
         radius,
         content: Vec::new(),
+        source: None,
     })
 }
 

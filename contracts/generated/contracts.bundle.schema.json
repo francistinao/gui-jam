@@ -205,6 +205,37 @@
           }
         },
         {
+          "title": "TextAtOp",
+          "type": "object",
+          "description": "Replaces the string that starts at at: a JS string or template literal, a JSX or template attribute value, JSX or template text, or a JSON string. value is plain text; GUIJam escapes it for that kind of string.",
+          "required": [
+            "kind",
+            "file",
+            "base_hash",
+            "at",
+            "value"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "text_at"
+            },
+            "file": {
+              "$ref": "#/$defs/ProjectPath"
+            },
+            "base_hash": {
+              "$ref": "#/$defs/ContentHash"
+            },
+            "at": {
+              "$ref": "#/$defs/SrcLoc"
+            },
+            "value": {
+              "type": "string"
+            }
+          }
+        },
+        {
           "title": "CreateFileOp",
           "type": "object",
           "description": "Always requires approval.",
@@ -558,6 +589,33 @@
         }
       }
     },
+    "TextPlace": {
+      "description": "Where a string that produced the element's text is written. line and column point at the string's first character (its quote, or the first letter of JSX text). label names it: a variable, <Component prop>, <Component> or a translation key.",
+      "type": "object",
+      "required": [
+        "file",
+        "line",
+        "column",
+        "label"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "file": {
+          "type": "string"
+        },
+        "line": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "column": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "label": {
+          "type": "string"
+        }
+      }
+    },
     "ContentPart": {
       "oneOf": [
         {
@@ -600,6 +658,37 @@
             },
             "source": {
               "type": "string"
+            }
+          }
+        },
+        {
+          "title": "FoundPart",
+          "type": "object",
+          "description": "Text the element renders from code, traced to the strings that produced it: a data structure, a prop or child where the component is used, or a translation file. value is what the page shows; code is the expression. One place can be edited directly; with several, the developer picks one.",
+          "required": [
+            "kind",
+            "value",
+            "code",
+            "places"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "found"
+            },
+            "value": {
+              "type": "string"
+            },
+            "code": {
+              "type": "string"
+            },
+            "places": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "$ref": "#/$defs/TextPlace"
+              }
             }
           }
         },
@@ -738,6 +827,33 @@
         },
         "radius": {
           "$ref": "#/$defs/RadiusValue"
+        },
+        "source": {
+          "description": "A new value for the string that produced the element's text, at one of its found places.",
+          "type": "object",
+          "required": [
+            "file",
+            "line",
+            "column",
+            "value"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "file": {
+              "type": "string"
+            },
+            "line": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "column": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "value": {
+              "type": "string"
+            }
+          }
         },
         "content": {
           "description": "New values for the element's plain text runs.",
@@ -1039,7 +1155,7 @@
               "description": "Set on requests; a reply repeats its request's id."
             },
             "payload": {
-              "$ref": "#/$defs/SourceRef"
+              "$ref": "#/$defs/ElementInspect"
             }
           }
         },
@@ -1652,6 +1768,33 @@
         "pageReload": {
           "type": "boolean",
           "description": "Server-rendered templates (.astro) can't be hot-reloaded. When true or absent, the plugin reloads the page to show the change; false leaves the page alone because the widget patches it in place."
+        }
+      }
+    },
+    "ElementInspect": {
+      "description": "The element to read. text is what the clicked instance shows; with it, text the element renders from code is traced to the string that produced it.",
+      "type": "object",
+      "required": [
+        "file",
+        "line",
+        "column"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "file": {
+          "type": "string"
+        },
+        "line": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "column": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "text": {
+          "type": "string",
+          "maxLength": 500
         }
       }
     },

@@ -87,6 +87,9 @@ fn op_target(op: &EditOp) -> (&str, Option<&str>) {
         | EditOp::TextContent {
             file, base_hash, ..
         }
+        | EditOp::TextAt {
+            file, base_hash, ..
+        }
         | EditOp::RewriteFile {
             file, base_hash, ..
         } => (file.as_str(), Some(base_hash.as_str())),

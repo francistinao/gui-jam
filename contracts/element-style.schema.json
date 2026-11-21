@@ -62,6 +62,18 @@
     }
   },
   "$defs": {
+    "TextPlace": {
+      "description": "Where a string that produced the element's text is written. line and column point at the string's first character (its quote, or the first letter of JSX text). label names it: a variable, <Component prop>, <Component> or a translation key.",
+      "type": "object",
+      "required": ["file", "line", "column", "label"],
+      "additionalProperties": false,
+      "properties": {
+        "file": { "type": "string" },
+        "line": { "type": "integer", "minimum": 1 },
+        "column": { "type": "integer", "minimum": 1 },
+        "label": { "type": "string" }
+      }
+    },
     "ContentPart": {
       "oneOf": [
         {
@@ -85,6 +97,23 @@
           "properties": {
             "kind": { "type": "string", "const": "code" },
             "source": { "type": "string" }
+          }
+        },
+        {
+          "title": "FoundPart",
+          "type": "object",
+          "description": "Text the element renders from code, traced to the strings that produced it: a data structure, a prop or child where the component is used, or a translation file. value is what the page shows; code is the expression. One place can be edited directly; with several, the developer picks one.",
+          "required": ["kind", "value", "code", "places"],
+          "additionalProperties": false,
+          "properties": {
+            "kind": { "type": "string", "const": "found" },
+            "value": { "type": "string" },
+            "code": { "type": "string" },
+            "places": {
+              "type": "array",
+              "minItems": 1,
+              "items": { "$ref": "#/$defs/TextPlace" }
+            }
           }
         },
         {

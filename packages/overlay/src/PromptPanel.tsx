@@ -299,7 +299,7 @@ export function PromptPanel({ store, controller }: PanelProps) {
           hasTextContent(style.content) ? (
             <div className="flex flex-col gap-1 rounded-md px-2 pb-2 ring-1 ring-grey-100">
               <ContentEditor parts={style.content} draft={draft} controller={controller} />
-              {draft.content ? (
+              {draft.content || draft.source ? (
                 <div className="flex items-center justify-end gap-2">
                   <span className="typography-body-small mr-auto text-orange-600">Unsaved</span>
                   <Button

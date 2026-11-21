@@ -6,11 +6,18 @@ import { expect, type Locator, type Page, test } from '@playwright/test';
 import { type AstroServer, startAstro } from './support/astro.js';
 import { GJD_BINARY, requireDaemonBinary, stopDaemon } from './support/daemon.js';
 import { openFixture } from './support/fixture.js';
-import { editText, pickThemeColor, promptForTwo, sketchWithUndo } from './support/new-features.js';
+import {
+  editFoundText,
+  editText,
+  pickThemeColor,
+  promptForTwo,
+  sketchWithUndo,
+} from './support/new-features.js';
 import { searchPath } from './support/process.js';
 
 const ASTRO_DIR = fileURLToPath(new URL('../../fixtures/small-astro-tailwind4/', import.meta.url));
 const FAKE_CLI_DIR = fileURLToPath(new URL('../fake-cli/', import.meta.url));
+const EXTRAS = join(ASTRO_DIR, 'src/components/Extras.astro');
 const ORDER_BUTTON = join(ASTRO_DIR, 'src/components/OrderButton.astro');
 const INDEX = join(ASTRO_DIR, 'src/pages/index.astro');
 const TALLY = join(ASTRO_DIR, 'src/components/Tally.tsx');
@@ -277,6 +284,19 @@ test('the h1 text is edited without AI, previewed, applied and undone', async ({
     element: page.getByRole('heading', { level: 1 }),
     file: 'src/pages/index.astro',
     path: INDEX,
+  });
+});
+
+test('a heading rendered from a data array is edited where the array is written', async ({
+  page,
+}) => {
+  await openFixture(page, astro.url);
+  await chooseTool(page, 'Select');
+  await editFoundText(page, {
+    element: page.locator('#extras h4'),
+    file: 'src/components/Extras.astro',
+    path: EXTRAS,
+    caption: 'From TABS · Extras.astro:3',
   });
 });
 

@@ -6,6 +6,7 @@ import type {
   RadiusValue,
   StyleGroup,
   StyleToken,
+  TextPlace,
 } from '@guijam/contracts-ts';
 import type { Tool } from './host';
 
@@ -689,9 +690,17 @@ export interface DraftValues {
   fill?: FillValue;
   radius?: RadiusValue;
   content?: Record<number, string>;
+  source?: { place: TextPlace; value: string };
 }
 
-export function finetuneProps({ fill, radius, content }: DraftValues): FinetuneProps {
+const MAX_SHOWN_TEXT = 500;
+
+export function shownText(text: string | null): string | undefined {
+  const collapsed = (text ?? '').split(/\s+/).filter(Boolean).join(' ');
+  return collapsed ? [...collapsed].slice(0, MAX_SHOWN_TEXT).join('') : undefined;
+}
+
+export function finetuneProps({ fill, radius, content, source }: DraftValues): FinetuneProps {
   const [first, ...rest] = Object.entries(content ?? {})
     .map(([run, value]) => ({ run: Number(run), value }))
     .sort((a, b) => a.run - b.run);
@@ -699,6 +708,16 @@ export function finetuneProps({ fill, radius, content }: DraftValues): FinetuneP
     ...(fill ? { fill } : {}),
     ...(radius ? { radius } : {}),
     ...(first ? { content: [first, ...rest] } : {}),
+    ...(source
+      ? {
+          source: {
+            file: source.place.file,
+            line: source.place.line,
+            column: source.place.column,
+            value: source.value,
+          },
+        }
+      : {}),
   };
 }
 

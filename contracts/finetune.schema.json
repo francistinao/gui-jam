@@ -8,6 +8,18 @@
   "properties": {
     "fill": { "$ref": "#/$defs/FillValue" },
     "radius": { "$ref": "#/$defs/RadiusValue" },
+    "source": {
+      "description": "A new value for the string that produced the element's text, at one of its found places.",
+      "type": "object",
+      "required": ["file", "line", "column", "value"],
+      "additionalProperties": false,
+      "properties": {
+        "file": { "type": "string" },
+        "line": { "type": "integer", "minimum": 1 },
+        "column": { "type": "integer", "minimum": 1 },
+        "value": { "type": "string" }
+      }
+    },
     "content": {
       "description": "New values for the element's plain text runs.",
       "type": "array",

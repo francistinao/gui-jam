@@ -226,6 +226,37 @@
           }
         },
         {
+          "title": "TextAtOp",
+          "type": "object",
+          "description": "Replaces the string that starts at at: a JS string or template literal, a JSX or template attribute value, JSX or template text, or a JSON string. value is plain text; GUIJam escapes it for that kind of string.",
+          "required": [
+            "kind",
+            "file",
+            "base_hash",
+            "at",
+            "value"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "text_at"
+            },
+            "file": {
+              "$ref": "#/$defs/ProjectPath"
+            },
+            "base_hash": {
+              "$ref": "#/$defs/ContentHash"
+            },
+            "at": {
+              "$ref": "#/$defs/SrcLoc"
+            },
+            "value": {
+              "type": "string"
+            }
+          }
+        },
+        {
           "title": "CreateFileOp",
           "type": "object",
           "description": "Always requires approval.",

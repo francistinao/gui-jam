@@ -1,4 +1,4 @@
-import { readFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
 import { expect, type Locator, type Page } from '@playwright/test';
 
 export interface Component {
@@ -178,4 +178,41 @@ export async function pickThemeColor(page: Page, component: Component): Promise<
   expect(await readFile(component.path, 'utf8')).toContain('bg-espresso');
   await toast.getByRole('button', { name: 'Undo' }).click();
   await expect.poll(() => readFile(component.path, 'utf8')).toBe(before);
+}
+
+export interface FoundText extends Component {
+  caption: string;
+}
+
+const FOUND_ORIGINAL = 'CBPLD Overview';
+const FOUND_NEXT = `Bob's "Overview" & more`;
+const FOUND_LINE = `  { id: 'overview', title: 'Bob\\'s "Overview" & more' },`;
+
+export async function editFoundText(page: Page, found: FoundText): Promise<void> {
+  const before = await readFile(found.path, 'utf8');
+  try {
+    await found.element.evaluate((element) => element.scrollIntoView({ block: 'center' }));
+    await found.element.click();
+    const panel = finetunePanel(page, found);
+    const field = panel.getByRole('textbox', { name: 'Text content', exact: true });
+    await expect(field).toHaveValue(FOUND_ORIGINAL, { timeout: READY_MS });
+    await expect(panel.getByText(found.caption, { exact: true })).toBeVisible();
+
+    await field.fill(FOUND_NEXT);
+
+    await expect(found.element).toHaveText(FOUND_NEXT, { timeout: READY_MS });
+    expect(await readFile(found.path, 'utf8')).toBe(before);
+    await panel.getByRole('button', { name: 'Apply' }).click();
+
+    const toast = applied(page, found);
+    await expect(toast).toBeVisible();
+    const old = before.split('\n');
+    const written = await readFile(found.path, 'utf8');
+    expect(written.split('\n').filter((line, index) => line !== old[index])).toEqual([FOUND_LINE]);
+    await toast.getByRole('button', { name: 'Undo' }).click();
+    await expect.poll(() => readFile(found.path, 'utf8')).toBe(before);
+    await expect(found.element).toHaveText(FOUND_ORIGINAL, { timeout: READY_MS });
+  } finally {
+    if ((await readFile(found.path, 'utf8')) !== before) await writeFile(found.path, before);
+  }
 }

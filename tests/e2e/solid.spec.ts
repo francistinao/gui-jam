@@ -11,11 +11,18 @@ import {
   widgetRequests,
 } from './support/daemon.js';
 import { type FixtureServer, openFixture, startFixtureServer } from './support/fixture.js';
-import { editText, pickThemeColor, promptForTwo, sketchWithUndo } from './support/new-features.js';
+import {
+  editFoundText,
+  editText,
+  pickThemeColor,
+  promptForTwo,
+  sketchWithUndo,
+} from './support/new-features.js';
 import { searchPath } from './support/process.js';
 
 const SOLID_DIR = fileURLToPath(new URL('../../fixtures/small-solid-tailwind4/', import.meta.url));
 const FAKE_CLI_DIR = fileURLToPath(new URL('../fake-cli/', import.meta.url));
+const EXTRAS = join(SOLID_DIR, 'src/components/Extras.tsx');
 const ORDER_BUTTON = join(SOLID_DIR, 'src/components/OrderButton.tsx');
 const APP = join(SOLID_DIR, 'src/App.tsx');
 const BLUE_RGB = 'rgb(29, 78, 216)';
@@ -215,6 +222,18 @@ test('the h1 text is edited without AI, previewed, applied and undone', async ({
     element: page.getByRole('heading', { level: 1 }),
     file: 'src/App.tsx',
     path: APP,
+  });
+});
+
+test('a heading rendered from a data array is edited where the array is written', async ({
+  page,
+}) => {
+  await select(page);
+  await editFoundText(page, {
+    element: page.locator('#extras h4'),
+    file: 'src/components/Extras.tsx',
+    path: EXTRAS,
+    caption: 'From TABS · Extras.tsx:2',
   });
 });
 

@@ -37,7 +37,11 @@ export class DomPreview<Element extends PatchableElement> {
     });
   }
 
-  apply(patch: DomPatch, elements: readonly Element[]): void {
+  apply(
+    patch: DomPatch,
+    elements: readonly Element[],
+    texted: readonly Element[] = elements,
+  ): void {
     this.restore();
     for (const element of elements) {
       this.remember(element);
@@ -48,6 +52,8 @@ export class DomPreview<Element extends PatchableElement> {
         const priority = IMPORTANT.test(value) ? 'important' : '';
         element.style.setProperty(property, value.replace(IMPORTANT, ''), priority);
       }
+    }
+    for (const element of texted) {
       const nodes = textRuns(element.childNodes, (node) => this.texts.get(node) ?? node.data);
       for (const { run, value } of patch.text ?? []) {
         const node = nodes[run];

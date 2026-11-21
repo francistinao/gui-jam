@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
 import { Links, Meta, Outlet, Scripts, ScrollRestoration } from 'react-router';
+import { Extras } from './components/Extras';
 import './app.css';
 
 export function Layout({ children }: { children: ReactNode }) {
@@ -22,5 +23,10 @@ export function Layout({ children }: { children: ReactNode }) {
 }
 
 export default function Root() {
-  return <Outlet />;
+  return (
+    <>
+      <Outlet />
+      <Extras />
+    </>
+  );
 }

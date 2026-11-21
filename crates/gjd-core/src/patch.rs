@@ -11,7 +11,9 @@ use crate::jsx::{
     ClassSource, JsxError, StyleObject, StyleSource, check_syntax, class_attribute, find_element,
     is_solid,
 };
+use crate::srcloc::LineIndex;
 use crate::template::{self, AttributeSlot};
+use crate::text_source;
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum PatchError {
@@ -29,6 +31,13 @@ pub enum PatchError {
     AttributeNotEditable { op: usize, name: String },
     #[error("op {op}: the element has no plain text run {run}")]
     TextNotEditable { op: usize, run: u64 },
+    #[error("op {op}: no string or text starts at {line}:{column} in {file}")]
+    NoTextAt {
+        op: usize,
+        file: String,
+        line: u64,
+        column: u64,
+    },
     #[error("op {op}: the snippet occurs {count} times in {file}; it must occur exactly once")]
     SnippetNotUnique {
         op: usize,
@@ -219,6 +228,26 @@ fn resolve<'s>(
         } => {
             let (path, source) = current(op, file, base_hash, sources)?;
             resolve_text(op, path, source, at, *run, value).map(|edit| (path, edit))
+        }
+        EditOp::TextAt {
+            file,
+            base_hash,
+            at,
+            value,
+        } => {
+            let (path, source) = current(op, file, base_hash, sources)?;
+            let missing = || PatchError::NoTextAt {
+                op,
+                file: path.to_owned(),
+                line: at.line.get(),
+                column: at.column.get(),
+            };
+            let offset = LineIndex::new(source)
+                .offset(at.line.get(), at.column.get())
+                .ok_or_else(missing)?;
+            let (range, text) =
+                text_source::rewrite_at(path, source, offset, value).ok_or_else(missing)?;
+            Ok((path, TextEdit { op, range, text }))
         }
         EditOp::StyleProp { .. } => unreachable!("style_prop ops are grouped by element"),
         EditOp::CreateFile { .. } => Err(PatchError::Unsupported {
@@ -626,6 +655,48 @@ mod tests {
             .remove(FILE)
             .expect("file");
         assert!(second.contains("<strong>world</strong>?\n"));
+    }
+
+    fn text_at(file: &str, content: &str, needle: &str, value: &str) -> EditOp {
+        let (line, column) = crate::srcloc::LineIndex::new(content)
+            .position(content.find(needle).expect("needle present"));
+        op(json!({
+            "kind": "text_at", "file": file, "base_hash": content_hash(content.as_bytes()).as_str(),
+            "at": { "line": line, "column": column }, "value": value,
+        }))
+    }
+
+    #[test]
+    fn text_at_rewrites_the_string_in_data_and_a_json_file_together() {
+        let data = "const TABS = [\n  { id: 'a', title: \"CBPLD Overview\" },\n];\n";
+        let json = "{\n  \"footer\": { \"hours\": \"Open\" }\n}\n";
+        let files = BTreeMap::from([
+            ("src/Dash.tsx".to_owned(), data.to_owned()),
+            ("src/i18n/en.json".to_owned(), json.to_owned()),
+        ]);
+        let next = apply(
+            &files,
+            &[
+                text_at("src/Dash.tsx", data, "\"CBPLD", "Say \"오늘\""),
+                text_at("src/i18n/en.json", json, "\"Open", "7 \\ 7"),
+            ],
+        )
+        .expect("applies");
+        assert_eq!(
+            next["src/Dash.tsx"],
+            "const TABS = [\n  { id: 'a', title: \"Say \\\"오늘\\\"\" },\n];\n"
+        );
+        assert_eq!(
+            next["src/i18n/en.json"],
+            "{\n  \"footer\": { \"hours\": \"7 \\\\ 7\" }\n}\n"
+        );
+    }
+
+    #[test]
+    fn text_at_fails_when_no_string_starts_there() {
+        let data = "const TABS = [{ title: 'Home' }];\n";
+        let error = apply(&sources(data), &[text_at(FILE, data, "title", "x")]).expect_err("fails");
+        assert!(matches!(error, PatchError::NoTextAt { op: 0, line: 1, .. }));
     }
 
     #[test]

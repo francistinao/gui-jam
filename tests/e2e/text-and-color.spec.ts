@@ -235,12 +235,12 @@ test('the Korean text next to a span is edited and the span stays', async ({ pag
   await expect.poll(() => readFile(APP, 'utf8')).toBe(before.content);
 });
 
-test('text that comes from code shows its source and no field', async ({ page }) => {
+test('text from code that cannot be traced shows its source and no field', async ({ page }) => {
   await startSelecting(page);
-  await page.getByRole('heading', { name: 'Spanish Latte' }).click();
-  const panel = finetune(page, MENU_CARD_FILE);
+  await page.locator('#extras').getByText('₱250').click();
+  const panel = finetune(page, 'src/components/Extras.tsx');
   const content = panel.getByRole('region', { name: 'Content' });
-  await expect(content.getByText('{name}', { exact: true })).toBeVisible();
+  await expect(content.getByText('{peso(250)}', { exact: true })).toBeVisible();
   await expect(content.getByText('Use Ask AI to change it.', { exact: false })).toBeVisible();
   await expect(content.getByRole('textbox')).toHaveCount(0);
 });

@@ -337,7 +337,9 @@ export function FinetunePanel({ store, controller }: PanelProps) {
           role="note"
           className="typography-body-small mb-2 rounded-md bg-blue-100 p-2 text-blue-800"
         >
-          {`Used ${selection.instances}× on this page. Changes apply to every instance.`}
+          {style?.content?.some((part) => part.kind === 'found')
+            ? `Used ${selection.instances}× on this page. Style changes apply to every instance.`
+            : `Used ${selection.instances}× on this page. Changes apply to every instance.`}
         </p>
       ) : null}
       <Tabs defaultValue="design">

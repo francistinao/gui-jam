@@ -487,6 +487,7 @@ pub fn op_file(op: &EditOp) -> &str {
         | EditOp::JsxAttr { file, .. }
         | EditOp::StyleProp { file, .. }
         | EditOp::TextContent { file, .. }
+        | EditOp::TextAt { file, .. }
         | EditOp::CreateFile { file, .. }
         | EditOp::RewriteFile { file, .. } => file.as_str(),
     }

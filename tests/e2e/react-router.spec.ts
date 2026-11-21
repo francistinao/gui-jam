@@ -11,13 +11,20 @@ import {
   widgetRequests,
 } from './support/daemon.js';
 import { type FixtureServer, openFixture, startFixtureServer } from './support/fixture.js';
-import { editText, pickThemeColor, promptForTwo, sketchWithUndo } from './support/new-features.js';
+import {
+  editFoundText,
+  editText,
+  pickThemeColor,
+  promptForTwo,
+  sketchWithUndo,
+} from './support/new-features.js';
 import { searchPath } from './support/process.js';
 
 const ROUTER_DIR = fileURLToPath(
   new URL('../../fixtures/small-react-router-tailwind4/', import.meta.url),
 );
 const FAKE_CLI_DIR = fileURLToPath(new URL('../fake-cli/', import.meta.url));
+const EXTRAS = join(ROUTER_DIR, 'app/components/Extras.tsx');
 const ORDER_BUTTON = join(ROUTER_DIR, 'app/components/OrderButton.tsx');
 const HOME = join(ROUTER_DIR, 'app/routes/home.tsx');
 const MENU = join(ROUTER_DIR, 'app/routes/menu.tsx');
@@ -336,6 +343,18 @@ test('the h1 text is edited without AI, previewed, applied and undone', async ({
     element: page.getByRole('heading', { level: 1 }),
     file: 'app/routes/home.tsx',
     path: HOME,
+  });
+});
+
+test('a heading rendered from a data array is edited where the array is written', async ({
+  page,
+}) => {
+  await select(page);
+  await editFoundText(page, {
+    element: page.locator('#extras h4'),
+    file: 'app/components/Extras.tsx',
+    path: EXTRAS,
+    caption: 'From TABS · Extras.tsx:2',
   });
 });
 

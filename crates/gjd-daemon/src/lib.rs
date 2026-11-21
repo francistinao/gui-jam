@@ -2,6 +2,7 @@ pub mod assets;
 pub mod config;
 pub mod daemon;
 pub mod diff;
+pub mod found_text;
 pub mod gateway;
 pub mod generate;
 pub mod html_text;

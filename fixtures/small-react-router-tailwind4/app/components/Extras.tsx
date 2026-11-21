@@ -1,0 +1,13 @@
+const TABS = [
+  { id: 'overview', title: 'CBPLD Overview' },
+  { id: 'reports', title: 'Monthly Reports' },
+];
+
+export function Extras() {
+  const activeTab = TABS.find((tab) => tab.id === 'overview');
+  return (
+    <section id="extras" className="flex flex-col items-start gap-3 px-12 pb-40">
+      <h4 className="text-xl font-semibold">{activeTab?.title}</h4>
+    </section>
+  );
+}

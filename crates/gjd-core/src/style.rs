@@ -218,7 +218,7 @@ fn content_parts(parts: &[content::ContentPart]) -> Vec<ContentPart> {
                 }
             }
             content::ContentPart::Code { source } => ContentPart::Code {
-                source: source.clone(),
+                source: content::shortened(source),
             },
             content::ContentPart::Element { tag } => ContentPart::Element { tag: tag.clone() },
         })

@@ -8,6 +8,7 @@ pub mod srcloc;
 pub mod style;
 pub mod tailwind;
 pub mod template;
+pub mod text_source;
 pub mod theme;
 
 pub mod contracts {

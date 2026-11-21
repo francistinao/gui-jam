@@ -38,6 +38,7 @@ import {
   type SketchOwner,
   type SketchState,
   shiftedLine,
+  shownText,
   sketchAnchor,
   sketchingOver,
   sketchOver,
@@ -858,6 +859,29 @@ describe('finetuneProps', () => {
       ],
     });
     expect(finetuneProps({ content: {} })).toEqual({});
+  });
+
+  it('sends the chosen place of found text with its new value', () => {
+    expect(
+      finetuneProps({
+        source: {
+          place: { file: 'src/i18n/en.json', line: 3, column: 14, label: 'footer.hours' },
+          value: 'Open 7 to 7',
+        },
+      }),
+    ).toEqual({
+      source: { file: 'src/i18n/en.json', line: 3, column: 14, value: 'Open 7 to 7' },
+    });
+  });
+});
+
+describe('shownText', () => {
+  it('collapses whitespace and caps the text an instance shows at 500 characters', () => {
+    expect(shownText('  CBPLD\n    Overview  ')).toBe('CBPLD Overview');
+    expect(shownText(' \n\t ')).toBeUndefined();
+    expect(shownText(null)).toBeUndefined();
+    expect(shownText('오늘의 추천')).toBe('오늘의 추천');
+    expect(shownText('a'.repeat(600))).toHaveLength(500);
   });
 });
 

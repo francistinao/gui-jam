@@ -172,6 +172,31 @@ describe('DomPreview text', () => {
     expect(elements[0]?.childNodes.map((node) => node.data)).toEqual(['Gift ', '', ' today']);
   });
 
+  it('writes text only to the chosen instance while styles reach every copy', () => {
+    const elements = [new FakeElement('p', null), new FakeElement('p', null)];
+    elements[0]?.childNodes.push(text('Spanish Latte'));
+    elements[1]?.childNodes.push(text('Ensaymada'));
+    const preview = new DomPreview<FakeElement>();
+    const clicked = elements.slice(1);
+
+    preview.apply(
+      patch({ addClasses: ['font-bold'], text: [{ run: 0, value: 'Ube Ensaymada' }] }),
+      elements,
+      clicked,
+    );
+    expect(elements.map((element) => element.childNodes[0]?.data)).toEqual([
+      'Spanish Latte',
+      'Ube Ensaymada',
+    ]);
+    expect(elements.map((element) => element.getAttribute('class'))).toEqual([
+      'p font-bold',
+      'p font-bold',
+    ]);
+
+    preview.revert();
+    expect(elements[1]?.childNodes[0]?.data).toBe('Ensaymada');
+  });
+
   it('keeps the new text once applied', () => {
     const element = new FakeElement('p', null);
     element.childNodes = [text('Old')];

@@ -11,13 +11,20 @@ import {
   widgetRequests,
 } from './support/daemon.js';
 import { type FixtureServer, openFixture, startFixtureServer } from './support/fixture.js';
-import { editText, pickThemeColor, promptForTwo, sketchWithUndo } from './support/new-features.js';
+import {
+  editFoundText,
+  editText,
+  pickThemeColor,
+  promptForTwo,
+  sketchWithUndo,
+} from './support/new-features.js';
 import { searchPath } from './support/process.js';
 
 const KIT_DIR = fileURLToPath(
   new URL('../../fixtures/small-sveltekit-tailwind4/', import.meta.url),
 );
 const FAKE_CLI_DIR = fileURLToPath(new URL('../fake-cli/', import.meta.url));
+const EXTRAS = join(KIT_DIR, 'src/lib/Extras.svelte');
 const ORDER_BUTTON = join(KIT_DIR, 'src/lib/OrderButton.svelte');
 const APP = join(KIT_DIR, 'src/routes/+page.svelte');
 const BLUE_RGB = 'rgb(29, 78, 216)';
@@ -231,6 +238,18 @@ test('the h1 text is edited without AI, previewed, applied and undone', async ({
     element: page.getByRole('heading', { level: 1 }),
     file: 'src/routes/+page.svelte',
     path: APP,
+  });
+});
+
+test('a heading rendered from a data array is edited where the array is written', async ({
+  page,
+}) => {
+  await select(page);
+  await editFoundText(page, {
+    element: page.locator('#extras h4'),
+    file: 'src/lib/Extras.svelte',
+    path: EXTRAS,
+    caption: 'From TABS · Extras.svelte:3',
   });
 });
 

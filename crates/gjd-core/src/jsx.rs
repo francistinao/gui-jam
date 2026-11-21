@@ -92,6 +92,11 @@ pub fn check_syntax(path: &str, source: &str) -> Result<(), JsxError> {
     if template::is_template(path) {
         return Ok(());
     }
+    if crate::text_source::is_json(path) {
+        return serde_json::from_str::<serde_json::Value>(source)
+            .map(drop)
+            .map_err(|error| JsxError::Syntax(error.to_string()));
+    }
     let allocator = Allocator::default();
     let parsed = Parser::new(&allocator, source, source_type(path)?).parse();
     first_error(&parsed.diagnostics, parsed.fatal_error)
@@ -233,7 +238,7 @@ fn is_component_name(name: &str) -> bool {
         && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
-fn names_element(name: &JSXElementName<'_>, wanted: &str) -> bool {
+pub(crate) fn names_element(name: &JSXElementName<'_>, wanted: &str) -> bool {
     match name {
         JSXElementName::IdentifierReference(identifier) => identifier.name == wanted,
         JSXElementName::Identifier(identifier) => identifier.name == wanted,
@@ -437,7 +442,10 @@ fn attribute_slot(source: &str, element: &JSXOpeningElement<'_>, name: &str) -> 
     }
 }
 
-fn first_error(diagnostics: &oxc_diagnostics::Diagnostics, fatal: bool) -> Result<(), JsxError> {
+pub(crate) fn first_error(
+    diagnostics: &oxc_diagnostics::Diagnostics,
+    fatal: bool,
+) -> Result<(), JsxError> {
     if let Some(error) = diagnostics.errors().next() {
         return Err(JsxError::Syntax(error.to_string()));
     }
@@ -481,7 +489,21 @@ fn jsx_content(source: &str, element: &JSXElement<'_>) -> Option<Vec<ContentPart
             }),
             JSXChild::Fragment(_) => parts.push(ContentPart::Element { tag: String::new() }),
             JSXChild::ExpressionContainer(container) => {
-                if !matches!(container.expression, JSXExpression::EmptyExpression(_)) {
+                let spacer = match container.expression.as_expression() {
+                    Some(Expression::StringLiteral(literal)) => literal
+                        .value
+                        .as_str()
+                        .is_some_and(|value| value.trim().is_empty()),
+                    Some(Expression::TemplateLiteral(literal)) => {
+                        literal.expressions.is_empty()
+                            && literal
+                                .quasis
+                                .iter()
+                                .all(|quasi| quasi.value.raw.trim().is_empty())
+                    }
+                    _ => false,
+                };
+                if !spacer && !matches!(container.expression, JSXExpression::EmptyExpression(_)) {
                     parts.push(content::code(&source[span_range(container.span)]));
                 }
             }
@@ -494,7 +516,7 @@ fn jsx_content(source: &str, element: &JSXElement<'_>) -> Option<Vec<ContentPart
     ))
 }
 
-fn span_range(span: Span) -> Range<usize> {
+pub(crate) fn span_range(span: Span) -> Range<usize> {
     span.start as usize..span.end as usize
 }
 
@@ -723,6 +745,25 @@ mod tests {
                 })
                 .collect()
         })
+    }
+
+    #[test]
+    fn whitespace_spacers_are_not_code_and_code_keeps_its_whole_expression() {
+        let source = "export const A = ({ tab }) => (\n  <p>\n    Hi{' '}\n    <b>there</b>{` `}{\"\"}\n    <i>{tab.descriptions.longest.title.that.goes.on.and.on.and.on.past.eighty.chars.easily}</i>\n  </p>\n);\n";
+        assert_eq!(
+            content_at(source, "<p>"),
+            Some(vec![
+                "text Hi @Hi".to_owned(),
+                "element b".to_owned(),
+                "element i".to_owned()
+            ])
+        );
+        assert_eq!(
+            content_at(source, "<i>"),
+            Some(vec![
+                "code {tab.descriptions.longest.title.that.goes.on.and.on.and.on.past.eighty.chars.easily}".to_owned()
+            ])
+        );
     }
 
     #[test]

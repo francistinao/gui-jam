@@ -8,14 +8,16 @@ use std::time::{Duration, Instant};
 use futures_util::StreamExt;
 use futures_util::stream::FuturesUnordered;
 use gjd_core::codemod::{CodemodError, finetune_ops};
+use gjd_core::content;
 use gjd_core::content_hash;
 use gjd_core::contracts::{
-    CodeChange, CommitDone, ContentHash, DependenciesInstall, DependenciesInstalled,
-    DependencyNeeds, EditOp, EditOpValue, ElementStyle, ErrorCode, ErrorPayload, FinetunePreview,
-    FinetunePreviewed, GenerateDone, GenerateDoneDroppedItem, GenerateDoneNotesItem,
-    GenerateRequest, GuijamMessage, HelloOk, JsxValue, OverlayClear, OverlaySet, Package, Route,
-    RouteTier, RunRef, SourceRef, UndoDone, UpdateResult, UpdateResultStatus, UpdateResultUpdateId,
-    Variant, VariantAssetsItemFormat, VariantPreview, VariantSelect, VariantSelected, VariantSet,
+    CodeChange, CommitDone, ContentHash, ContentPart, DependenciesInstall, DependenciesInstalled,
+    DependencyNeeds, DomPatchTextItem, EditOp, EditOpValue, ElementInspect, ElementStyle,
+    ErrorCode, ErrorPayload, FinetunePreview, FinetunePreviewed, FinetunePropsSource, GenerateDone,
+    GenerateDoneDroppedItem, GenerateDoneNotesItem, GenerateRequest, GuijamMessage, HelloOk,
+    JsxValue, OverlayClear, OverlaySet, Package, Route, RouteTier, RunRef, SrcLoc, TextPlace,
+    UndoDone, UpdateResult, UpdateResultStatus, UpdateResultUpdateId, Variant,
+    VariantAssetsItemFormat, VariantPreview, VariantSelect, VariantSelected, VariantSet,
 };
 use gjd_core::journal::{CommitError, FileChange, Journal};
 use gjd_core::jsx::{self, Component, JsxError, check_syntax, imports};
@@ -23,6 +25,7 @@ use gjd_core::patch::{self, PatchError};
 use gjd_core::policy::{PolicyError, ProjectRoot};
 use gjd_core::style::{Styling, inspect_with};
 use gjd_core::template;
+use gjd_core::text_source::Key;
 use gjd_core::theme::Theme;
 use gjd_providers::{
     AuthStatus, Discovery, Effort, GenerationRequest, ImageInput, ProviderAdapter, ProviderError,
@@ -34,6 +37,7 @@ use tokio_util::sync::CancellationToken;
 use crate::assets::{self, AssetFile, Format};
 use crate::config;
 use crate::diff::code_changes;
+use crate::found_text;
 use crate::generate::{self, Progress, Step, TierConfig};
 use crate::index::ProjectIndex;
 use crate::install;
@@ -435,6 +439,7 @@ fn edits_of(ops: &[EditOp], editable: &Contents) -> Vec<EditOp> {
                 | EditOp::JsxAttr { base_hash, .. }
                 | EditOp::StyleProp { base_hash, .. }
                 | EditOp::TextContent { base_hash, .. }
+                | EditOp::TextAt { base_hash, .. }
                 | EditOp::RewriteFile { base_hash, .. } => *base_hash = hash,
                 EditOp::CreateFile { .. } => {}
             }
@@ -541,6 +546,28 @@ fn validate_variants(
         });
     }
     Ok((valid, dropped))
+}
+
+fn changed_content(version: &Version) -> Option<String> {
+    (version.content != version.base).then(|| version.content.clone())
+}
+
+fn other_overlays(
+    file: &str,
+    versions: &BTreeMap<String, Version>,
+    previous: Vec<String>,
+) -> Vec<(String, Option<String>)> {
+    versions
+        .iter()
+        .filter(|(path, _)| path.as_str() != file)
+        .map(|(path, version)| (path.clone(), changed_content(version)))
+        .chain(
+            previous
+                .into_iter()
+                .filter(|path| path != file && !versions.contains_key(path))
+                .map(|path| (path, None)),
+        )
+        .collect()
 }
 
 fn preview_outcome(
@@ -1260,21 +1287,191 @@ impl Daemon {
         Ok(tokio::fs::read_to_string(path).await?)
     }
 
-    async fn inspect(
-        &self,
-        source_ref: &SourceRef,
-    ) -> Result<gjd_core::contracts::ElementStyle, Failure> {
-        let source = self.read_project_file(&source_ref.file).await?;
+    async fn inspect(&self, request: &ElementInspect) -> Result<ElementStyle, Failure> {
+        let source = self.read_project_file(&request.file).await?;
         let theme = self.theme().await;
         let project = project::detect(self.project.path(), &self.index.files().await);
-        Ok(inspect_with(
-            &source_ref.file,
+        let mut style = inspect_with(
+            &request.file,
             &source,
-            source_ref.line,
-            source_ref.column,
+            request.line,
+            request.column,
             &theme,
             self.styling(&project),
-        )?)
+        )?;
+        if let Some(text) = request
+            .text
+            .as_ref()
+            .and_then(|text| found_text::shown_text(text))
+            && let Some(lookup) = found_text::lookup(
+                &request.file,
+                &source,
+                request.line.get(),
+                request.column.get(),
+            )
+        {
+            let places = self.find_text(&request.file, &source, &lookup, &text).await;
+            if !places.is_empty() {
+                style.content = vec![ContentPart::Found {
+                    code: content::shortened(&lookup.code),
+                    places,
+                    value: text,
+                }];
+            }
+        }
+        Ok(style)
+    }
+
+    async fn render_site_files(
+        &self,
+        files: &[String],
+        skip: &str,
+        component: &str,
+        text: &str,
+    ) -> Vec<(String, String)> {
+        let paths: Vec<String> = files
+            .iter()
+            .filter(|path| path.as_str() != skip && found_text::renders_components(path))
+            .cloned()
+            .collect();
+        let mut reads = futures_util::stream::iter(paths)
+            .map(|path| async move {
+                let content = self.read_project_file(&path).await;
+                (path, content)
+            })
+            .buffer_unordered(READ_CONCURRENCY);
+        let mut sites = Vec::new();
+        while let Some((path, content)) = reads.next().await {
+            if let Ok(content) = content
+                && found_text::renders(&path, &content, component)
+            {
+                sites.push((path, content));
+            }
+        }
+        found_text::ranked_sites(sites, text)
+    }
+
+    async fn find_text(
+        &self,
+        file: &str,
+        source: &str,
+        lookup: &found_text::Lookup,
+        text: &str,
+    ) -> Vec<TextPlace> {
+        let started = Instant::now();
+        let files = self.index.files().await;
+        let known: BTreeSet<&str> = files.iter().map(String::as_str).collect();
+        let add_imports = |path: &str, content: &str, order: &mut Vec<String>| {
+            for specifier in found_text::imports(path, content) {
+                if let Some(resolved) = found_text::resolve(path, &specifier, &known)
+                    && !order.contains(&resolved)
+                {
+                    order.push(resolved);
+                }
+            }
+        };
+        let mut order = vec![file.to_owned()];
+        let mut contents = HashMap::from([(file.to_owned(), source.to_owned())]);
+        add_imports(file, source, &mut order);
+        if let Some(component) = &lookup.component {
+            for (path, content) in self.render_site_files(&files, file, component, text).await {
+                if !order.contains(&path) {
+                    order.push(path.clone());
+                }
+                add_imports(&path, &content, &mut order);
+                contents.insert(path, content);
+            }
+        }
+        order.truncate(found_text::MAX_FILES);
+        if matches!(lookup.key, Key::Translation(_)) {
+            let locales: Vec<String> = files
+                .iter()
+                .filter(|path| found_text::is_locale(path) && !order.contains(path))
+                .take(found_text::MAX_LOCALES)
+                .cloned()
+                .collect();
+            order.extend(locales);
+        }
+        let mut places = Vec::new();
+        for path in &order {
+            let content = match contents.remove(path) {
+                Some(content) => content,
+                None => match self.read_project_file(path).await {
+                    Ok(content) => content,
+                    Err(_) => continue,
+                },
+            };
+            if !found_text::could_contain(&content, text) {
+                continue;
+            }
+            let found = found_text::places_in(
+                path,
+                &content,
+                &lookup.key,
+                text,
+                lookup.component.as_deref(),
+            );
+            places.extend(found_text::text_places(path, &content, found));
+        }
+        tracing::info!(
+            searched = order.len(),
+            found = places.len(),
+            ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+            "traced the element's text to its source"
+        );
+        places
+    }
+
+    async fn with_source_text(
+        &self,
+        file: &str,
+        source: &str,
+        chosen: Option<&FinetunePropsSource>,
+        ops: &mut Vec<EditOp>,
+    ) -> Result<BTreeMap<String, String>, Failure> {
+        let mut sources = BTreeMap::from([(file.to_owned(), source.to_owned())]);
+        let Some(chosen) = chosen else {
+            return Ok(sources);
+        };
+        let target = chosen.file.clone();
+        let base = if target == file {
+            source.to_owned()
+        } else {
+            self.read_project_file(&target).await?
+        };
+        ops.push(EditOp::TextAt {
+            at: SrcLoc {
+                line: chosen.line,
+                column: chosen.column,
+            },
+            base_hash: content_hash(base.as_bytes()),
+            file: target
+                .clone()
+                .try_into()
+                .map_err(|_| Failure::invalid_request(format!("{target} is not a project path")))?,
+            value: chosen.value.clone(),
+        });
+        sources.insert(target, base);
+        Ok(sources)
+    }
+
+    async fn show_finetune(
+        &self,
+        file: &str,
+        content: Option<&str>,
+        others: Vec<(String, Option<String>)>,
+        page_reload: Option<bool>,
+    ) -> Result<UpdateResult, Failure> {
+        let mut updates = Vec::new();
+        for (path, other) in others {
+            let overlaid = locked(&self.overlays).contains_key(&path);
+            if other.is_some() || overlaid {
+                updates.push(self.show_with(&path, other.as_deref(), page_reload).await?);
+            }
+        }
+        let shown = self.show_with(file, content, page_reload).await?;
+        let selected = (content.is_some() || updates.is_empty()).then(|| shown.clone());
+        Ok(preview_outcome(selected, updates).unwrap_or(shown))
     }
 
     async fn preview_finetune(
@@ -1293,43 +1490,66 @@ impl Daemon {
             &theme,
             self.styling(&project),
         )?;
-        let ops = finetune_ops(&style, &request.props, &theme)?;
+        let mut ops = finetune_ops(&style, &request.props, &theme)?;
+        let chosen = request.props.source.as_ref();
+        let sources = self
+            .with_source_text(&file, &source, chosen, &mut ops)
+            .await?;
         let summary = summarize(&file, request.line, &ops);
-        let sources = BTreeMap::from([(file.clone(), source.clone())]);
-        let content = patch::apply_with(&sources, &ops, dialect(&project))?
-            .remove(&file)
-            .unwrap_or_else(|| source.clone());
-
-        let changes: Vec<CodeChange> = code_changes(&file, &source, &content);
-        let element = (file.clone(), request.line, request.column);
-        let changeset_id = self.store_changeset(
-            Some(element),
-            BTreeMap::from([(
-                file.clone(),
-                Version {
-                    base: source.clone(),
-                    content: content.clone(),
-                    ops: Vec::new(),
-                },
-            )]),
-            summary,
-            "finetune",
-            Vec::new(),
-        );
-        let shown = (content != source).then_some(content.as_str());
+        let mut patched = patch::apply_with(&sources, &ops, dialect(&project))?;
+        let versions: BTreeMap<String, Version> = sources
+            .into_iter()
+            .map(|(path, base)| {
+                let content = patched.remove(&path).unwrap_or_else(|| base.clone());
+                (
+                    path,
+                    Version {
+                        base,
+                        content,
+                        ops: Vec::new(),
+                    },
+                )
+            })
+            .collect();
+        let changes: Vec<CodeChange> = versions
+            .iter()
+            .flat_map(|(path, version)| code_changes(path, &version.base, &version.content))
+            .collect();
         let dom = template::is_server_rendered(&file)
             .then(|| {
                 template::dom_patch(
                     &file,
-                    &source,
-                    &content,
+                    &versions[&file].base,
+                    &versions[&file].content,
                     request.line.get(),
                     request.column.get(),
                 )
             })
-            .flatten();
+            .flatten()
+            .map(|mut dom| {
+                if let Some(chosen) = chosen {
+                    dom.text = vec![DomPatchTextItem {
+                        run: 0,
+                        value: chosen.value.clone(),
+                    }];
+                }
+                dom
+            });
         let page_reload = dom.is_some().then_some(false);
-        let update = self.show_with(&file, shown, page_reload).await?;
+        let element = (file.clone(), request.line, request.column);
+        let previous: Vec<String> = locked(&self.changesets)
+            .values()
+            .find(|changeset| changeset.element.as_ref() == Some(&element))
+            .map_or_else(Vec::new, |changeset| {
+                changeset.files.keys().cloned().collect()
+            });
+        let content = changed_content(&versions[&file]);
+        let others = other_overlays(&file, &versions, previous);
+        let changeset_id =
+            self.store_changeset(Some(element), versions, summary, "finetune", Vec::new());
+        let update = self
+            .show_finetune(&file, content.as_deref(), others, page_reload)
+            .await?;
         Ok(FinetunePreviewed {
             changeset_id,
             update,
@@ -2727,6 +2947,13 @@ impl Daemon {
             .cloned()
             .chain(changeset.created.iter().map(|asset| asset.path.clone()))
             .collect();
+        let edited: Vec<String> = changeset
+            .files
+            .iter()
+            .filter(|(_, version)| !version.ops.is_empty() || version.base != version.content)
+            .map(|(path, _)| path.clone())
+            .chain(changeset.created.iter().map(|asset| asset.path.clone()))
+            .collect();
         let written = self.write_changeset(&changeset).await;
         let shown = match settled {
             Some((run_id, shown)) if slot.as_deref() == Some(run_id.as_str()) => {
@@ -2744,7 +2971,7 @@ impl Daemon {
         }
         Ok(CommitDone {
             journal_id: written?,
-            files,
+            files: edited,
             summary: changeset.summary,
         })
     }
@@ -3020,7 +3247,7 @@ fn style_change(ops: &[EditOp]) -> Option<String> {
                 }
                 None => format!("- {}", name.as_str()),
             }),
-            EditOp::TextContent { value, .. } => {
+            EditOp::TextContent { value, .. } | EditOp::TextAt { value, .. } => {
                 let shown: String = value.chars().take(SUMMARY_TEXT_CHARS).collect();
                 let cut = if value.chars().count() > SUMMARY_TEXT_CHARS {
                     "\u{2026}"
@@ -3084,6 +3311,15 @@ mod tests {
         assert_eq!(
             summarize("src/App.tsx", line, &[text(&"a".repeat(45))]),
             format!("src/App.tsx:31 · text \"{}\u{2026}\"", "a".repeat(40))
+        );
+        let found: EditOp = serde_json::from_value(json!({
+            "kind": "text_at", "file": "src/i18n/en.json", "base_hash": "0".repeat(64),
+            "at": { "line": 3, "column": 14 }, "value": "Open daily",
+        }))
+        .expect("op");
+        assert_eq!(
+            summarize("src/App.tsx", line, &[found]),
+            "src/App.tsx:31 · text \"Open daily\""
         );
     }
     use crate::project::{PackageManager, Project, Ui};

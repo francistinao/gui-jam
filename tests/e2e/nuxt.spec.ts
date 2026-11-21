@@ -5,12 +5,19 @@ import { fileURLToPath } from 'node:url';
 import { expect, type Locator, type Page, test } from '@playwright/test';
 import { GJD_BINARY, requireDaemonBinary, stopDaemon } from './support/daemon.js';
 import { openFixture } from './support/fixture.js';
-import { editText, pickThemeColor, promptForTwo, sketchWithUndo } from './support/new-features.js';
+import {
+  editFoundText,
+  editText,
+  pickThemeColor,
+  promptForTwo,
+  sketchWithUndo,
+} from './support/new-features.js';
 import { type NuxtServer, startNuxt } from './support/nuxt.js';
 import { searchPath } from './support/process.js';
 
 const NUXT_DIR = fileURLToPath(new URL('../../fixtures/small-nuxt-tailwind4/', import.meta.url));
 const FAKE_CLI_DIR = fileURLToPath(new URL('../fake-cli/', import.meta.url));
+const EXTRAS = join(NUXT_DIR, 'app/components/Extras.vue');
 const ORDER_BUTTON = join(NUXT_DIR, 'app/components/OrderButton.vue');
 const APP = join(NUXT_DIR, 'app/app.vue');
 const BLUE_RGB = 'rgb(29, 78, 216)';
@@ -172,6 +179,19 @@ test('the h1 text is edited without AI, previewed, applied and undone', async ({
     element: page.getByRole('heading', { level: 1 }),
     file: 'app/app.vue',
     path: APP,
+  });
+});
+
+test('a heading rendered from a data array is edited where the array is written', async ({
+  page,
+}) => {
+  await openFixture(page, nuxt.url);
+  await chooseTool(page, 'Select');
+  await editFoundText(page, {
+    element: page.locator('#extras h4'),
+    file: 'app/components/Extras.vue',
+    path: EXTRAS,
+    caption: 'From TABS · Extras.vue:9',
   });
 });
 

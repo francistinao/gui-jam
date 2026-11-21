@@ -416,6 +416,7 @@ mod tests {
     fn writes_an_arbitrary_colour_and_removes_only_base_fill_tokens() {
         let props = FinetuneProps {
             content: Vec::new(),
+            source: None,
             fill: Some(fill(
                 serde_json::json!({ "kind": "hex", "hex": "#2563eb", "opacity": 100 }),
             )),
@@ -432,6 +433,7 @@ mod tests {
     fn prefers_the_theme_token_when_the_colour_matches_one() {
         let props = FinetuneProps {
             content: Vec::new(),
+            source: None,
             fill: Some(fill(
                 serde_json::json!({ "kind": "hex", "hex": "#1D4ED8", "opacity": 80 }),
             )),
@@ -448,6 +450,7 @@ mod tests {
     fn maps_radius_pixels_to_tokens_or_arbitrary_values() {
         let to = |px: i64| FinetuneProps {
             content: Vec::new(),
+            source: None,
             fill: None,
             radius: Some(radius(serde_json::json!({ "kind": "px", "px": px }))),
         };
@@ -478,6 +481,7 @@ mod tests {
     fn removing_a_fill_adds_nothing() {
         let props = FinetuneProps {
             content: Vec::new(),
+            source: None,
             fill: Some(fill(serde_json::json!({ "kind": "none" }))),
             radius: None,
         };
@@ -492,6 +496,7 @@ mod tests {
     fn rejects_out_of_range_values_and_unknown_tokens() {
         let opacity = FinetuneProps {
             content: Vec::new(),
+            source: None,
             fill: Some(fill(
                 serde_json::json!({ "kind": "hex", "hex": "#2563EB", "opacity": 101 }),
             )),
@@ -499,11 +504,13 @@ mod tests {
         };
         let too_round = FinetuneProps {
             content: Vec::new(),
+            source: None,
             fill: None,
             radius: Some(radius(serde_json::json!({ "kind": "px", "px": 1000 }))),
         };
         let unknown = FinetuneProps {
             content: Vec::new(),
+            source: None,
             fill: Some(fill(
                 serde_json::json!({ "kind": "token", "name": "chartreuse" }),
             )),
@@ -529,6 +536,7 @@ mod tests {
         let source = "export const B = (p) => <b className={p.className} />;";
         let props = FinetuneProps {
             content: Vec::new(),
+            source: None,
             fill: Some(fill(
                 serde_json::json!({ "kind": "token", "name": "brand" }),
             )),
@@ -570,6 +578,7 @@ mod tests {
         let source = "export const B = () => <b className=\"p-4\" style={{ backgroundColor: '#fde68a', borderRadius: 8 }}>Gift</b>;";
         let props = FinetuneProps {
             content: Vec::new(),
+            source: None,
             fill: Some(fill(
                 serde_json::json!({ "kind": "hex", "hex": "#1d4ed8", "opacity": 100 }),
             )),
@@ -581,6 +590,7 @@ mod tests {
         );
         let faded = FinetuneProps {
             content: Vec::new(),
+            source: None,
             fill: Some(fill(
                 serde_json::json!({ "kind": "hex", "hex": "#1d4ed8", "opacity": 50 }),
             )),
@@ -592,6 +602,7 @@ mod tests {
         );
         let tokens = FinetuneProps {
             content: Vec::new(),
+            source: None,
             fill: Some(fill(
                 serde_json::json!({ "kind": "token", "name": "brand" }),
             )),
@@ -605,6 +616,7 @@ mod tests {
         );
         let cleared = FinetuneProps {
             content: Vec::new(),
+            source: None,
             fill: Some(fill(serde_json::json!({ "kind": "none" }))),
             radius: None,
         };
@@ -630,6 +642,7 @@ mod tests {
         assert_eq!(style.adapter, ElementStyleAdapter::Inline);
         let props = FinetuneProps {
             content: Vec::new(),
+            source: None,
             fill: Some(fill(
                 serde_json::json!({ "kind": "hex", "hex": "#123456", "opacity": 100 }),
             )),
@@ -656,6 +669,7 @@ mod tests {
         let dynamic = "export const B = (p) => <b style={{ ...p.style }}>Gift</b>;";
         let props = FinetuneProps {
             content: Vec::new(),
+            source: None,
             fill: Some(fill(
                 serde_json::json!({ "kind": "hex", "hex": "#123456", "opacity": 100 }),
             )),
@@ -668,6 +682,7 @@ mod tests {
         let plain = "export const B = () => <b style={{ color: 'red' }}>Gift</b>;";
         let unknown = FinetuneProps {
             content: Vec::new(),
+            source: None,
             fill: Some(fill(serde_json::json!({ "kind": "token", "name": "nope" }))),
             radius: None,
         };
@@ -677,6 +692,7 @@ mod tests {
         );
         let too_round = FinetuneProps {
             content: Vec::new(),
+            source: None,
             fill: None,
             radius: Some(radius(serde_json::json!({ "kind": "px", "px": 1000 }))),
         };
@@ -753,6 +769,7 @@ mod tests {
     fn edits_classes_and_inline_css_in_vue_and_svelte_templates() {
         let blue = FinetuneProps {
             content: Vec::new(),
+            source: None,
             fill: Some(fill(
                 serde_json::json!({ "kind": "hex", "hex": "#1d4ed8", "opacity": 100 }),
             )),
@@ -788,6 +805,7 @@ mod tests {
     fn vuetify_components_get_color_and_rounded_props() {
         let blue = |px: i64| FinetuneProps {
             content: Vec::new(),
+            source: None,
             fill: Some(fill(
                 serde_json::json!({ "kind": "hex", "hex": "#0f766e", "opacity": 100 }),
             )),
@@ -805,6 +823,7 @@ mod tests {
         );
         let pill = FinetuneProps {
             content: Vec::new(),
+            source: None,
             fill: Some(fill(serde_json::json!({ "kind": "none" }))),
             radius: Some(radius(serde_json::json!({ "kind": "full" }))),
         };
@@ -815,6 +834,7 @@ mod tests {
         );
         let faded = FinetuneProps {
             content: Vec::new(),
+            source: None,
             fill: Some(fill(
                 serde_json::json!({ "kind": "hex", "hex": "#0f766e", "opacity": 50 }),
             )),
@@ -893,6 +913,7 @@ mod tests {
         let bound = "<template><VBtn :color=\"tone\">Go</VBtn></template>";
         let props = FinetuneProps {
             content: Vec::new(),
+            source: None,
             fill: Some(fill(
                 serde_json::json!({ "kind": "hex", "hex": "#0f766e", "opacity": 100 }),
             )),

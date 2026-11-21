@@ -8,6 +8,7 @@ import type {
   RadiusValue,
   Route,
   Sketch,
+  TextPlace,
   VariantPreview,
 } from '@guijam/contracts-ts';
 import {
@@ -44,6 +45,7 @@ import {
   type SketchState,
   samplePoints,
   shiftedLine,
+  shownText,
   sketchAnchor,
   sketchOver,
   type Tool,
@@ -60,6 +62,7 @@ const PREVIEW_DEBOUNCE_MS = 120;
 const UNDO_WINDOW_MS = 10_000;
 const NOTICE_MS = 4_000;
 const FOLLOW_MS = 2_000;
+const TEXT_SETTLE_MS = 2_000;
 const SRC_ATTRIBUTE = 'data-gj-src';
 
 export interface Selection {
@@ -68,12 +71,14 @@ export interface Selection {
   line: number;
   column: number;
   instances: number;
+  instance?: number;
 }
 
 export interface Draft {
   fill?: FillValue;
   radius?: RadiusValue;
   content?: Record<number, string>;
+  source?: { place: TextPlace; value: string };
 }
 
 export interface Notice {
@@ -488,10 +493,35 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
     }, PREVIEW_DEBOUNCE_MS);
   }
 
+  function textChanged(element: HTMLElement | undefined): Promise<void> {
+    if (!element) return Promise.resolve();
+    const before = element.textContent;
+    return new Promise((done) => {
+      const observer = new MutationObserver(() => {
+        if (element.textContent === before) return;
+        finish();
+      });
+      const timer = setTimeout(() => finish(), TEXT_SETTLE_MS);
+      function finish(): void {
+        observer.disconnect();
+        clearTimeout(timer);
+        done();
+      }
+      observer.observe(element, { characterData: true, childList: true, subtree: true });
+    });
+  }
+
   async function inspect(selection: Selection, quiet = false): Promise<void> {
+    const element = elementsAt(selection.src)[selection.instance ?? 0];
+    const text = shownText(element?.textContent ?? null);
     const reply = await host.request({
       type: 'element.inspect',
-      payload: { file: selection.file, line: selection.line, column: selection.column },
+      payload: {
+        file: selection.file,
+        line: selection.line,
+        column: selection.column,
+        ...(text === undefined ? {} : { text }),
+      },
     });
     if (store.get().selection?.src !== selection.src) return;
     if (reply.type === 'element.style') store.set({ style: reply.payload });
@@ -543,8 +573,11 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
     }
     clearOptimistic();
     const { dom } = reply.payload;
-    if (dom) domPreview.apply(dom, elementsAt(dom.src));
-    else domPreview.revert();
+    if (dom) {
+      const all = elementsAt(dom.src);
+      const clicked = draft.source ? all[selection.instance ?? 0] : undefined;
+      domPreview.apply(dom, all, clicked ? [clicked] : all);
+    } else domPreview.revert();
     store.set({
       preview: { changesetId: reply.payload.changesetId, changes: reply.payload.changes },
     });
@@ -748,7 +781,10 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
   function selectionOf(element: Element): Selection | null {
     const src = element.getAttribute(SRC_ATTRIBUTE);
     const parsed = src === null ? null : parseSrc(src);
-    return parsed ? { ...parsed, instances: elementsAt(parsed.src).length } : null;
+    if (!parsed) return null;
+    const elements: Element[] = elementsAt(parsed.src);
+    const instance = Math.max(0, elements.indexOf(element));
+    return { ...parsed, instances: elements.length, instance };
   }
 
   async function focusJob(id: string): Promise<void> {
@@ -1205,6 +1241,21 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
       setDraft(next);
     },
 
+    editSource(place: TextPlace, value: string): void {
+      const { draft, style } = store.get();
+      const found = style?.content?.find((part) => part.kind === 'found');
+      const { source: _, ...rest } = draft;
+      const next: Draft =
+        found?.kind === 'found' && found.value === value
+          ? rest
+          : { ...rest, source: { place, value } };
+      if (Object.keys(next).length === 0) {
+        void revert();
+        return;
+      }
+      setDraft(next);
+    },
+
     async apply(): Promise<void> {
       const { selection } = store.get();
       if (!selection) return;
@@ -1232,7 +1283,9 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
       notify(
         {
           kind: 'info',
-          message: appliedMessage([selection.file]),
+          message: appliedMessage(
+            reply.payload.files.length > 0 ? reply.payload.files : [selection.file],
+          ),
           undoJournalId: reply.payload.journalId,
         },
         UNDO_WINDOW_MS,
@@ -1255,8 +1308,11 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
         return;
       }
       notify({ kind: 'info', message: 'Change undone.' });
-      const { selection } = store.get();
+      const { selection, style } = store.get();
       if (!selection) return;
+      if (style?.content?.some((part) => part.kind === 'found')) {
+        await textChanged(elementsAt(selection.src)[selection.instance ?? 0]);
+      }
       const changes = committed.get(journalId);
       committed.delete(journalId);
       const line = changes ? shiftedLine(selection.line, invertChanges(changes)) : selection.line;

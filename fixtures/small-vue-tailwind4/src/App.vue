@@ -21,10 +21,12 @@
         </p>
       </section>
     </main>
+    <Extras />
   </div>
 </template>
 
 <script setup lang="ts">
+import Extras from './components/Extras.vue';
 import OrderButton from './components/OrderButton.vue';
 
 const links = ['Menu', 'Branches', 'Rewards'];

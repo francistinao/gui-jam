@@ -4,12 +4,19 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect, type Locator, type Page, test } from '@playwright/test';
 import { GJD_BINARY, requireDaemonBinary, stopDaemon } from './support/daemon.js';
-import { editText, pickThemeColor, promptForTwo, sketchWithUndo } from './support/new-features.js';
+import {
+  editFoundText,
+  editText,
+  pickThemeColor,
+  promptForTwo,
+  sketchWithUndo,
+} from './support/new-features.js';
 import { type Bundler, type NextServer, startNext } from './support/next.js';
 import { searchPath } from './support/process.js';
 
 const NEXT_DIR = fileURLToPath(new URL('../../fixtures/small-next-tailwind4/', import.meta.url));
 const FAKE_CLI_DIR = fileURLToPath(new URL('../fake-cli/', import.meta.url));
+const EXTRAS = join(NEXT_DIR, 'app/components/Extras.tsx');
 const ORDER_BUTTON = join(NEXT_DIR, 'app/components/OrderButton.tsx');
 const PAGE = join(NEXT_DIR, 'app/page.tsx');
 const BLUE_RGB = 'rgb(29, 78, 216)';
@@ -231,6 +238,19 @@ for (const bundler of BUNDLERS) {
         element: page.getByRole('heading', { level: 1 }),
         file: 'app/page.tsx',
         path: PAGE,
+      });
+    });
+
+    test('a heading rendered from a data array is edited where the array is written', async ({
+      page,
+    }) => {
+      await open(page, next.url);
+      await chooseTool(page, 'Select');
+      await editFoundText(page, {
+        element: page.locator('#extras h4'),
+        file: 'app/components/Extras.tsx',
+        path: EXTRAS,
+        caption: 'From TABS · Extras.tsx:2',
       });
     });
 
