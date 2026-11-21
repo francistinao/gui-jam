@@ -10,6 +10,8 @@ export interface ToolbarChannel {
 
 const WIDGET_URL = '/@guijam/widget.js';
 const REQUEST_TIMEOUT_MS = 20_000;
+const TRACKER_TIMEOUT_MS = 65_000;
+const TRACKER_POST_TIMEOUT_MS = 95_000;
 const GENERATION_TIMEOUT_MS = 365_000;
 const INSTALL_TIMEOUT_MS = 275_000;
 
@@ -75,11 +77,14 @@ function isWidgetModule(value: unknown): value is WidgetModule {
 function timeoutFor(type: string): number {
   if (type === 'generate.request' || type === 'generate.attach') return GENERATION_TIMEOUT_MS;
   if (type === 'dependencies.install') return INSTALL_TIMEOUT_MS;
+  if (type === 'tracker.post' || type === 'tracker.report') return TRACKER_POST_TIMEOUT_MS;
+  if (type.startsWith('tracker.')) return TRACKER_TIMEOUT_MS;
   return REQUEST_TIMEOUT_MS;
 }
 
 const PAGE_KEY = 'guijam:page';
 const JOBS_KEY = 'guijam:jobs';
+const TICKET_PARAM = 'guijam-ticket';
 const PAGE_ID = /^[\w-]{1,100}$/;
 
 function pageId(): string {
@@ -97,6 +102,14 @@ function pageId(): string {
 function hasSavedJobs(): boolean {
   try {
     return Boolean(sessionStorage.getItem(JOBS_KEY));
+  } catch {
+    return false;
+  }
+}
+
+function linksTicket(): boolean {
+  try {
+    return new URL(window.location.href).searchParams.has(TICKET_PARAM);
   } catch {
     return false;
   }
@@ -230,7 +243,7 @@ export function bootToolbar(hot: ToolbarChannel, widgetUrl = WIDGET_URL): void {
     });
   }
 
-  if (hasSavedJobs()) {
+  if (hasSavedJobs() || linksTicket()) {
     loadWidget().catch((error: unknown) => {
       widget = undefined;
       console.error('[guijam] the widget failed to load', error);

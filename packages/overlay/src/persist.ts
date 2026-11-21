@@ -1,4 +1,5 @@
 import type { Job } from './controller';
+import { storedTicket } from './tracker';
 
 export const JOBS_KEY = 'guijam:jobs';
 const VERSION = 1;
@@ -42,6 +43,7 @@ export function serialize(jobs: readonly Job[], focus: string | null, images: bo
       strokes: job.sketch ? [] : job.strokes,
       installing: false,
       attachments: images ? job.attachments : [],
+      ticket: storedTicket(job.ticket),
     })),
   });
 }
@@ -67,6 +69,7 @@ export function parseSaved(text: string | null): Saved | null {
     attachError: null,
     installing: false,
     installError: typeof job.installError === 'string' ? job.installError : null,
+    ticket: isRecord(job.ticket) && isRecord(job.ticket.ref) ? job.ticket : null,
   }));
   if (jobs.length === 0) return null;
   const focus =

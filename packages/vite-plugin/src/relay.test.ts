@@ -22,6 +22,18 @@ describe('checkWidgetRequest', () => {
   });
 
   it.each([
+    'tracker.status',
+    'tracker.search',
+    'tracker.ticket',
+    'tracker.start',
+    'tracker.post',
+    'tracker.report',
+  ])('admits the Jira request %s', (type) => {
+    const request = { type, id: 'w1', payload: {} };
+    expect(checkWidgetRequest(request)).toEqual({ ok: true, message: request });
+  });
+
+  it.each([
     [
       'a daemon-only message',
       { type: 'overlay.set', id: 'w1', payload: { file: 'a', content: '' } },
@@ -57,6 +69,38 @@ describe('replyWindowMs', () => {
     expect(replyWindowMs('dependencies.install')).toBe(270_000);
     expect(replyWindowMs('generate.cancel')).toBeUndefined();
     expect(replyWindowMs('finetune.preview')).toBeUndefined();
+  });
+
+  it('waits past the undo window for a Jira post', () => {
+    expect(replyWindowMs('tracker.post')).toBe(90_000);
+    expect(replyWindowMs('tracker.report')).toBe(90_000);
+    expect(replyWindowMs('tracker.ticket')).toBe(60_000);
+  });
+});
+
+describe('terminalLine for Jira', () => {
+  const ref = { provider: 'jira', site: 'acme.atlassian.net', key: 'WEB-7' } as const;
+  it('says whether a change was posted or held back', () => {
+    expect(
+      terminalLine({
+        type: 'tracker.posted',
+        payload: {
+          ref,
+          journalId: 'j1',
+          outcome: 'posted',
+          url: 'https://acme.atlassian.net/browse/WEB-7',
+        },
+      }),
+    ).toBe('⇪ posted to WEB-7');
+    expect(
+      terminalLine({
+        type: 'tracker.posted',
+        payload: { ref, journalId: 'j1', outcome: 'cancelled', url: '' },
+      }),
+    ).toBe('⇪ nothing posted to WEB-7: the change was undone');
+    expect(terminalLine({ type: 'tracker.reported', payload: { ref, url: '' } })).toBe(
+      '⇪ created WEB-7',
+    );
   });
 });
 

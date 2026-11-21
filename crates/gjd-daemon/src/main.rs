@@ -5,6 +5,7 @@ use std::time::{Duration, Instant};
 use clap::{Parser, Subcommand};
 use gjd_daemon::Outcome;
 use gjd_daemon::run_dir::{DaemonInfo, RunDir};
+use gjd_daemon::tracker::commands;
 use gjd_providers::{
     AuthStatus, Effort, GenerationRequest, ProviderAdapter, ProviderId, RunTimings, ToolPolicy,
     adapter,
@@ -32,6 +33,43 @@ enum Command {
     Provider(ProviderCommand),
     #[command(subcommand)]
     Daemon(DaemonCommand),
+    #[command(subcommand, about = "Connect GUIJam to Jira")]
+    Jira(JiraCommand),
+}
+
+#[derive(Subcommand)]
+enum JiraCommand {
+    #[command(about = "Pair with Jira using the code from a ticket's GUIJam panel")]
+    Pair { code: String },
+    #[command(about = "Show the paired Jira sites")]
+    Status {
+        #[arg(long)]
+        json: bool,
+    },
+    #[command(about = "Unpair a Jira site and revoke this device")]
+    Unpair { site: Option<String> },
+    #[command(about = "Check that the paired Jira site answers")]
+    Test {
+        #[arg(long)]
+        site: Option<String>,
+    },
+    #[command(about = "Create a ticket with a screenshot")]
+    Create {
+        #[arg(long)]
+        site: Option<String>,
+        #[arg(long)]
+        project: String,
+        #[arg(long)]
+        summary: String,
+        #[arg(long)]
+        description_file: Option<PathBuf>,
+        #[arg(long)]
+        image: Option<PathBuf>,
+        #[arg(long, default_value = "")]
+        page_url: String,
+        #[arg(long, default_value = "")]
+        src: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -79,6 +117,51 @@ enum ProviderCommand {
         #[arg(long)]
         effort: Option<Effort>,
     },
+}
+
+async fn jira(command: JiraCommand) -> ExitCode {
+    let outcome = tokio::task::spawn_blocking(move || match command {
+        JiraCommand::Pair { code } => commands::pair(&code),
+        JiraCommand::Status { json } => commands::status(json),
+        JiraCommand::Unpair { site } => commands::unpair(site.as_deref()),
+        JiraCommand::Test { site } => commands::test(site.as_deref()),
+        JiraCommand::Create {
+            site,
+            project,
+            summary,
+            description_file,
+            image,
+            page_url,
+            src,
+        } => {
+            let description = match description_file {
+                Some(path) => std::fs::read_to_string(&path)
+                    .map_err(|error| format!("Can't read {}: {error}", path.display()))?,
+                None => String::new(),
+            };
+            commands::create(&commands::NewTicket {
+                site: site.as_deref(),
+                project: &project,
+                summary: &summary,
+                description: &description,
+                image: image.as_deref(),
+                page_url: &page_url,
+                src: &src,
+            })
+        }
+    })
+    .await
+    .unwrap_or_else(|error| Err(error.to_string()));
+    match outcome {
+        Ok(text) => {
+            println!("{text}");
+            ExitCode::SUCCESS
+        }
+        Err(text) => {
+            eprintln!("{text}");
+            ExitCode::FAILURE
+        }
+    }
 }
 
 fn percentile(samples: &[Duration], p: usize) -> Duration {
@@ -405,6 +488,7 @@ async fn main() -> ExitCode {
         }) => run_daemon(&project, idle_seconds).await,
         Command::Daemon(DaemonCommand::Status { project }) => daemon_status(&project),
         Command::Daemon(DaemonCommand::Stop { project }) => stop_daemon(&project).await,
+        Command::Jira(command) => jira(command).await,
         Command::Provider(ProviderCommand::List { json: true }) => list_json().await,
         Command::Provider(ProviderCommand::List { json: false }) => list().await,
         Command::Provider(ProviderCommand::Use { id, model, effort }) => {

@@ -7,7 +7,7 @@ import {
   SUPPORTED_FRAMEWORKS,
   VITE_FRAMEWORKS,
 } from './detect.js';
-import { gjdVersion, listProviders, probeProvider } from './gjd.js';
+import { gjdVersion, jiraStatus, listProviders, probeProvider } from './gjd.js';
 import { PWA_HINT, projectRunsDevServiceWorker } from './pwa.js';
 import { isWired } from './wire.js';
 
@@ -125,6 +125,20 @@ async function toolChecks(options: DoctorOptions): Promise<Check[]> {
     checks.push({
       level: 'warn',
       message: `${provider.name} login status unknown: ${provider.reason ?? 'no details'}`,
+    });
+  }
+  try {
+    for (const site of await jiraStatus(options.gjd)) {
+      checks.push(
+        site.ok
+          ? { level: 'ok', message: `Jira ${site.site} is paired as ${site.account}` }
+          : { level: 'warn', message: `Jira ${site.site}: ${site.error ?? 'not reachable'}` },
+      );
+    }
+  } catch (error) {
+    checks.push({
+      level: 'warn',
+      message: `Could not check the Jira pairing: ${messageOf(error)}`,
     });
   }
   if (options.probe && provider?.installed) {

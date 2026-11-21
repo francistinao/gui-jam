@@ -1656,6 +1656,270 @@
           }
         },
         {
+          "title": "TrackerStatusMessage",
+          "type": "object",
+          "required": [
+            "type",
+            "payload"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "tracker.status"
+            },
+            "id": {
+              "type": "string",
+              "description": "Set on requests; a reply repeats its request's id."
+            },
+            "payload": {
+              "$ref": "#/$defs/TrackerStatusRequest"
+            }
+          }
+        },
+        {
+          "title": "TrackerStatusOkMessage",
+          "type": "object",
+          "required": [
+            "type",
+            "payload"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "tracker.status.ok"
+            },
+            "id": {
+              "type": "string",
+              "description": "Set on requests; a reply repeats its request's id."
+            },
+            "payload": {
+              "$ref": "#/$defs/TrackerStatus"
+            }
+          }
+        },
+        {
+          "title": "TrackerSearchMessage",
+          "type": "object",
+          "required": [
+            "type",
+            "payload"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "tracker.search"
+            },
+            "id": {
+              "type": "string",
+              "description": "Set on requests; a reply repeats its request's id."
+            },
+            "payload": {
+              "$ref": "#/$defs/TicketSearch"
+            }
+          }
+        },
+        {
+          "title": "TrackerTicketsMessage",
+          "type": "object",
+          "required": [
+            "type",
+            "payload"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "tracker.tickets"
+            },
+            "id": {
+              "type": "string",
+              "description": "Set on requests; a reply repeats its request's id."
+            },
+            "payload": {
+              "$ref": "#/$defs/TicketList"
+            }
+          }
+        },
+        {
+          "title": "TrackerTicketMessage",
+          "type": "object",
+          "required": [
+            "type",
+            "payload"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "tracker.ticket"
+            },
+            "id": {
+              "type": "string",
+              "description": "Set on requests; a reply repeats its request's id."
+            },
+            "payload": {
+              "$ref": "#/$defs/TicketRequest"
+            }
+          }
+        },
+        {
+          "title": "TrackerTicketOkMessage",
+          "type": "object",
+          "required": [
+            "type",
+            "payload"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "tracker.ticket.ok"
+            },
+            "id": {
+              "type": "string",
+              "description": "Set on requests; a reply repeats its request's id."
+            },
+            "payload": {
+              "$ref": "#/$defs/TicketDetail"
+            }
+          }
+        },
+        {
+          "title": "TrackerStartMessage",
+          "type": "object",
+          "required": [
+            "type",
+            "payload"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "tracker.start"
+            },
+            "id": {
+              "type": "string",
+              "description": "Set on requests; a reply repeats its request's id."
+            },
+            "payload": {
+              "$ref": "#/$defs/TicketStart"
+            }
+          }
+        },
+        {
+          "title": "TrackerStartedMessage",
+          "type": "object",
+          "required": [
+            "type",
+            "payload"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "tracker.started"
+            },
+            "id": {
+              "type": "string",
+              "description": "Set on requests; a reply repeats its request's id."
+            },
+            "payload": {
+              "$ref": "#/$defs/TicketStarted"
+            }
+          }
+        },
+        {
+          "title": "TrackerPostMessage",
+          "type": "object",
+          "required": [
+            "type",
+            "payload"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "tracker.post"
+            },
+            "id": {
+              "type": "string",
+              "description": "Set on requests; a reply repeats its request's id."
+            },
+            "payload": {
+              "$ref": "#/$defs/TicketPost"
+            }
+          }
+        },
+        {
+          "title": "TrackerPostedMessage",
+          "type": "object",
+          "required": [
+            "type",
+            "payload"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "tracker.posted"
+            },
+            "id": {
+              "type": "string",
+              "description": "Set on requests; a reply repeats its request's id."
+            },
+            "payload": {
+              "$ref": "#/$defs/TicketPosted"
+            }
+          }
+        },
+        {
+          "title": "TrackerReportMessage",
+          "type": "object",
+          "required": [
+            "type",
+            "payload"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "tracker.report"
+            },
+            "id": {
+              "type": "string",
+              "description": "Set on requests; a reply repeats its request's id."
+            },
+            "payload": {
+              "$ref": "#/$defs/TicketReport"
+            }
+          }
+        },
+        {
+          "title": "TrackerReportedMessage",
+          "type": "object",
+          "required": [
+            "type",
+            "payload"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "tracker.reported"
+            },
+            "id": {
+              "type": "string",
+              "description": "Set on requests; a reply repeats its request's id."
+            },
+            "payload": {
+              "$ref": "#/$defs/TicketReported"
+            }
+          }
+        },
+        {
           "title": "ErrorMessage",
           "type": "object",
           "required": [
@@ -2495,6 +2759,8 @@
         "PROVIDER_CRASHED",
         "PLUGIN_UNAVAILABLE",
         "DAEMON_UNAVAILABLE",
+        "TRACKER_NOT_PAIRED",
+        "TRACKER_FAILED",
         "INTERNAL"
       ]
     },
@@ -2704,6 +2970,793 @@
               }
             }
           }
+        }
+      }
+    },
+    "TicketRef": {
+      "title": "TicketRef",
+      "description": "A ticket in an issue tracker the developer paired with GUIJam. site is the tracker's host, such as acme.atlassian.net.",
+      "type": "object",
+      "required": [
+        "provider",
+        "site",
+        "key"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "provider": {
+          "type": "string",
+          "enum": [
+            "jira"
+          ]
+        },
+        "site": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255
+        },
+        "key": {
+          "type": "string",
+          "pattern": "^[A-Z][A-Z0-9_]*-[0-9]+$",
+          "maxLength": 64
+        }
+      }
+    },
+    "TrackerProject": {
+      "type": "object",
+      "required": [
+        "key",
+        "name"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "key": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        }
+      }
+    },
+    "TrackerSite": {
+      "description": "A paired site. account is the paired person's display name; error says why the site can't be reached right now.",
+      "type": "object",
+      "required": [
+        "provider",
+        "site",
+        "url",
+        "account",
+        "projects"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "provider": {
+          "type": "string",
+          "enum": [
+            "jira"
+          ]
+        },
+        "site": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        },
+        "account": {
+          "type": "string"
+        },
+        "projects": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TrackerProject"
+          }
+        },
+        "error": {
+          "type": "string"
+        }
+      }
+    },
+    "TrackerStatusRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {}
+    },
+    "TrackerStatus": {
+      "type": "object",
+      "required": [
+        "sites"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "sites": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TrackerSite"
+          }
+        }
+      }
+    },
+    "TicketSearch": {
+      "description": "assigned: open tickets assigned to the paired person. queued: tickets someone sent to GUIJam. query matches a key or text.",
+      "type": "object",
+      "required": [
+        "preset"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "site": {
+          "type": "string"
+        },
+        "preset": {
+          "type": "string",
+          "enum": [
+            "assigned",
+            "queued"
+          ]
+        },
+        "query": {
+          "type": "string",
+          "maxLength": 200
+        }
+      }
+    },
+    "TicketSummary": {
+      "type": "object",
+      "required": [
+        "ref",
+        "summary",
+        "status",
+        "url"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "ref": {
+          "$ref": "#/$defs/TicketRef"
+        },
+        "summary": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        }
+      }
+    },
+    "TicketList": {
+      "type": "object",
+      "required": [
+        "tickets"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "tickets": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TicketSummary"
+          }
+        }
+      }
+    },
+    "TicketRequest": {
+      "type": "object",
+      "required": [
+        "ref"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "ref": {
+          "$ref": "#/$defs/TicketRef"
+        }
+      }
+    },
+    "TicketTransition": {
+      "type": "object",
+      "required": [
+        "id",
+        "name"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        }
+      }
+    },
+    "TicketImage": {
+      "type": "object",
+      "required": [
+        "name",
+        "mediaType",
+        "base64"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "mediaType": {
+          "type": "string",
+          "enum": [
+            "image/png",
+            "image/jpeg",
+            "image/webp"
+          ]
+        },
+        "base64": {
+          "type": "string",
+          "maxLength": 4000000
+        }
+      }
+    },
+    "TicketDetail": {
+      "description": "A ticket ready to become a prompt. description is plain text and untrusted; images are its image attachments, at most 4.",
+      "type": "object",
+      "required": [
+        "ref",
+        "summary",
+        "description",
+        "status",
+        "url",
+        "images",
+        "transitions"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "ref": {
+          "$ref": "#/$defs/TicketRef"
+        },
+        "summary": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        },
+        "images": {
+          "type": "array",
+          "maxItems": 4,
+          "items": {
+            "$ref": "#/$defs/TicketImage"
+          }
+        },
+        "transitions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TicketTransition"
+          }
+        }
+      }
+    },
+    "TicketStart": {
+      "description": "The developer linked this ticket to the element at src on pageUrl.",
+      "type": "object",
+      "required": [
+        "ref",
+        "pageUrl",
+        "src"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "ref": {
+          "$ref": "#/$defs/TicketRef"
+        },
+        "pageUrl": {
+          "type": "string",
+          "maxLength": 2000
+        },
+        "src": {
+          "type": "string",
+          "maxLength": 1000
+        }
+      }
+    },
+    "TicketStarted": {
+      "type": "object",
+      "required": [
+        "ref"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "ref": {
+          "$ref": "#/$defs/TicketRef"
+        }
+      }
+    },
+    "TicketPost": {
+      "description": "Post the kept change journalId to the ticket once Undo is no longer offered. The daemon holds it, and an undo first cancels it. before and after are screenshots taken in the page; transitionId moves the ticket.",
+      "type": "object",
+      "required": [
+        "ref",
+        "journalId",
+        "pageUrl",
+        "src",
+        "before",
+        "after"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "ref": {
+          "$ref": "#/$defs/TicketRef"
+        },
+        "journalId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "pageUrl": {
+          "type": "string",
+          "maxLength": 2000
+        },
+        "src": {
+          "type": "string",
+          "maxLength": 1000
+        },
+        "before": {
+          "type": "array",
+          "maxItems": 2,
+          "items": {
+            "$ref": "#/$defs/SketchImage"
+          }
+        },
+        "after": {
+          "type": "array",
+          "maxItems": 2,
+          "items": {
+            "$ref": "#/$defs/SketchImage"
+          }
+        },
+        "transitionId": {
+          "type": "string",
+          "maxLength": 32
+        }
+      }
+    },
+    "TicketPosted": {
+      "description": "posted: the change is on the ticket. cancelled: it was undone in time, so nothing was posted.",
+      "type": "object",
+      "required": [
+        "ref",
+        "journalId",
+        "outcome",
+        "url"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "ref": {
+          "$ref": "#/$defs/TicketRef"
+        },
+        "journalId": {
+          "type": "string"
+        },
+        "outcome": {
+          "type": "string",
+          "enum": [
+            "posted",
+            "cancelled"
+          ]
+        },
+        "url": {
+          "type": "string"
+        }
+      }
+    },
+    "TicketReport": {
+      "description": "Create a ticket for the element at src: the description is written by a person; the screenshot, src and pageUrl are added by GUIJam.",
+      "type": "object",
+      "required": [
+        "site",
+        "project",
+        "summary",
+        "description",
+        "pageUrl",
+        "src",
+        "image"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "site": {
+          "type": "string"
+        },
+        "project": {
+          "type": "string",
+          "pattern": "^[A-Z][A-Z0-9_]*$",
+          "maxLength": 32
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255
+        },
+        "description": {
+          "type": "string",
+          "maxLength": 4000
+        },
+        "pageUrl": {
+          "type": "string",
+          "maxLength": 2000
+        },
+        "src": {
+          "type": "string",
+          "maxLength": 1000
+        },
+        "image": {
+          "$ref": "#/$defs/SketchImage"
+        }
+      }
+    },
+    "TicketReported": {
+      "type": "object",
+      "required": [
+        "ref",
+        "url"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "ref": {
+          "$ref": "#/$defs/TicketRef"
+        },
+        "url": {
+          "type": "string"
+        }
+      }
+    },
+    "BridgeErrorCode": {
+      "enum": [
+        "UNAUTHORIZED",
+        "FORBIDDEN",
+        "NOT_FOUND",
+        "INVALID_REQUEST",
+        "TOO_LARGE",
+        "RATE_LIMITED",
+        "JIRA_ERROR",
+        "INTERNAL"
+      ]
+    },
+    "BridgeError": {
+      "description": "What the GUIJam for Jira app answers when a bridge call fails.",
+      "type": "object",
+      "required": [
+        "ok",
+        "code",
+        "message"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "ok": {
+          "type": "boolean",
+          "const": false
+        },
+        "code": {
+          "$ref": "#/$defs/BridgeErrorCode"
+        },
+        "message": {
+          "type": "string"
+        }
+      }
+    },
+    "BridgeWhoami": {
+      "type": "object",
+      "required": [
+        "accountId",
+        "displayName",
+        "site",
+        "url",
+        "projects"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "accountId": {
+          "type": "string"
+        },
+        "displayName": {
+          "type": "string"
+        },
+        "site": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        },
+        "projects": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TrackerProject"
+          }
+        }
+      }
+    },
+    "BridgeTicketSummary": {
+      "type": "object",
+      "required": [
+        "key",
+        "summary",
+        "status"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "key": {
+          "type": "string"
+        },
+        "summary": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string"
+        }
+      }
+    },
+    "BridgeTicketPage": {
+      "type": "object",
+      "required": [
+        "tickets"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "tickets": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/BridgeTicketSummary"
+          }
+        }
+      }
+    },
+    "BridgeAttachment": {
+      "type": "object",
+      "required": [
+        "id",
+        "filename",
+        "mimeType",
+        "size"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "filename": {
+          "type": "string"
+        },
+        "mimeType": {
+          "type": "string"
+        },
+        "size": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "BridgeTicket": {
+      "type": "object",
+      "required": [
+        "key",
+        "summary",
+        "description",
+        "status",
+        "attachments",
+        "transitions"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "key": {
+          "type": "string"
+        },
+        "summary": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "attachments": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/BridgeAttachment"
+          }
+        },
+        "transitions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TicketTransition"
+          }
+        }
+      }
+    },
+    "BridgeImage": {
+      "type": "object",
+      "required": [
+        "mediaType",
+        "base64"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "mediaType": {
+          "type": "string",
+          "enum": [
+            "image/png",
+            "image/jpeg",
+            "image/webp"
+          ]
+        },
+        "base64": {
+          "type": "string"
+        }
+      }
+    },
+    "BridgeStart": {
+      "type": "object",
+      "required": [
+        "pageUrl",
+        "src"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "pageUrl": {
+          "type": "string",
+          "maxLength": 2000
+        },
+        "src": {
+          "type": "string",
+          "maxLength": 1000
+        }
+      }
+    },
+    "BridgeResult": {
+      "description": "A kept change for the ticket. changes holds at most 200 changed lines; the full diff is in patch. agent says who made it: a provider and model, or direct for an edit made without AI.",
+      "type": "object",
+      "required": [
+        "journalId",
+        "summary",
+        "files",
+        "changes",
+        "pageUrl",
+        "src",
+        "agent",
+        "before",
+        "after"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "journalId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "summary": {
+          "type": "string",
+          "maxLength": 500
+        },
+        "files": {
+          "type": "array",
+          "maxItems": 50,
+          "items": {
+            "type": "string"
+          }
+        },
+        "changes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/CodeChange"
+          }
+        },
+        "patch": {
+          "type": "string",
+          "maxLength": 1000000
+        },
+        "pageUrl": {
+          "type": "string",
+          "maxLength": 2000
+        },
+        "src": {
+          "type": "string",
+          "maxLength": 1000
+        },
+        "agent": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "before": {
+          "type": "array",
+          "maxItems": 2,
+          "items": {
+            "$ref": "#/$defs/SketchImage"
+          }
+        },
+        "after": {
+          "type": "array",
+          "maxItems": 2,
+          "items": {
+            "$ref": "#/$defs/SketchImage"
+          }
+        },
+        "transitionId": {
+          "type": "string",
+          "maxLength": 32
+        }
+      }
+    },
+    "BridgePosted": {
+      "type": "object",
+      "required": [
+        "key",
+        "url"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "key": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        }
+      }
+    },
+    "BridgeReverted": {
+      "type": "object",
+      "required": [
+        "journalId"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "journalId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        }
+      }
+    },
+    "BridgeCreate": {
+      "type": "object",
+      "required": [
+        "project",
+        "summary",
+        "description",
+        "pageUrl",
+        "src"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "project": {
+          "type": "string",
+          "pattern": "^[A-Z][A-Z0-9_]*$",
+          "maxLength": 32
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255
+        },
+        "description": {
+          "type": "string",
+          "maxLength": 4000
+        },
+        "pageUrl": {
+          "type": "string",
+          "maxLength": 2000
+        },
+        "src": {
+          "type": "string",
+          "maxLength": 1000
+        },
+        "image": {
+          "$ref": "#/$defs/SketchImage"
         }
       }
     }

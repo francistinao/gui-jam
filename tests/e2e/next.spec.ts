@@ -7,6 +7,7 @@ import { GJD_BINARY, requireDaemonBinary, stopDaemon } from './support/daemon.js
 import {
   editFoundText,
   editText,
+  jiraLoop,
   pickThemeColor,
   promptForTwo,
   sketchWithUndo,
@@ -239,6 +240,22 @@ for (const bundler of BUNDLERS) {
         file: 'app/page.tsx',
         path: PAGE,
       });
+    });
+
+    test('a linked Jira ticket gets the applied change once Undo is gone', async ({ page }) => {
+      test.setTimeout(90_000);
+      await jiraLoop(
+        page,
+        {
+          element: page.getByRole('heading', { level: 1 }),
+          file: 'app/page.tsx',
+          path: PAGE,
+        },
+        async () => {
+          await open(page, next.url);
+          await chooseTool(page, 'Select');
+        },
+      );
     });
 
     test('a heading rendered from a data array is edited where the array is written', async ({

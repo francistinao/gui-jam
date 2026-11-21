@@ -36,6 +36,16 @@ function Notice({ store, controller }: { store: Store<WidgetState>; controller: 
         {notice.message}
         {notice.action ? <span className="block text-white-600">{notice.action}</span> : null}
       </span>
+      {notice.link ? (
+        <a
+          href={notice.link.href}
+          target="_blank"
+          rel="noreferrer"
+          className="whitespace-nowrap text-blue-300 underline"
+        >
+          {notice.link.label}
+        </a>
+      ) : null}
       {undoJournalId ? (
         <Button variant="link" onClick={() => void controller.undo(undoJournalId)}>
           Undo

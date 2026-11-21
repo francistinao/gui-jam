@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs';
 import { appendFile, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join, relative } from 'node:path';
-import { cancel, confirm, intro, log, note, outro, select, spinner } from '@clack/prompts';
+import { cancel, confirm, intro, log, note, outro, select, spinner, text } from '@clack/prompts';
 import { describeProject, detectProject, type Project, runScriptCommand } from './detect.js';
 import {
   defaultProvider,
@@ -10,6 +10,7 @@ import {
   type ModelInfo,
   needsProbe,
   type ProviderInfo,
+  pairJira,
   probeProvider,
   providerHint,
   rankModels,
@@ -373,6 +374,49 @@ async function ignoreStep(root: string): Promise<void> {
   log.success('Created .gitignore with .guijam/');
 }
 
+const JIRA_PURPOSE =
+  'Link UI tickets to your changes: GUIJam posts before/after screenshots and the diff to the ticket.';
+
+async function jiraStep(options: InitOptions): Promise<void> {
+  if (!options.interactive || options.gjd === undefined) return;
+  log.info(JIRA_PURPOSE);
+  const wanted = answered(await confirm({ message: 'Connect Jira?', initialValue: false }));
+  if (!wanted) {
+    log.message('You can connect later with npx guijam jira pair <code>.');
+    return;
+  }
+  note(
+    [
+      '1. Your Jira admin installs the GUIJam for Jira app.',
+      '2. Open any ticket, find the GUIJam panel, and choose Pair GUIJam.',
+      '3. Copy the code it shows (it starts with gjp_).',
+    ].join('\n'),
+    'Get a pairing code',
+  );
+  const code = answered<string>(
+    await text({
+      message: 'Paste the pairing code (leave empty to skip)',
+      validate: (value) =>
+        !value?.trim() || value.trim().startsWith('gjp_')
+          ? undefined
+          : 'Pairing codes start with gjp_.',
+    }),
+  );
+  if (!code.trim()) {
+    log.message('Skipped. Connect later with npx guijam jira pair <code>.');
+    return;
+  }
+  const progress = spinner();
+  progress.start('Pairing with Jira');
+  const paired = await pairJira(options.gjd, code);
+  if (paired.ok) {
+    progress.stop(paired.message);
+  } else {
+    progress.error('Pairing failed');
+    log.error(paired.message);
+  }
+}
+
 function nextSteps(
   project: Project,
   highlight: (text: string) => string,
@@ -401,6 +445,7 @@ export async function init(options: InitOptions): Promise<number> {
     const wired = await wireStep(project);
     const ready = await providerStep(options);
     await ignoreStep(project.root);
+    await jiraStep(options);
     note(
       nextSteps(project, options.highlight, await projectRunsDevServiceWorker(project)),
       'Next steps',

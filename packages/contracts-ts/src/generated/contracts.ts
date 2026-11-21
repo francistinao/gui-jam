@@ -85,6 +85,18 @@ export type GuijamMessage =
       id?: string;
       payload: PreviewRelease;
     }
+  | TrackerStatusMessage
+  | TrackerStatusOkMessage
+  | TrackerSearchMessage
+  | TrackerTicketsMessage
+  | TrackerTicketMessage
+  | TrackerTicketOkMessage
+  | TrackerStartMessage
+  | TrackerStartedMessage
+  | TrackerPostMessage
+  | TrackerPostedMessage
+  | TrackerReportMessage
+  | TrackerReportedMessage
   | ErrorMessage;
 export type ErrorCode =
   | 'CONFLICT'
@@ -105,6 +117,17 @@ export type ErrorCode =
   | 'PROVIDER_CRASHED'
   | 'PLUGIN_UNAVAILABLE'
   | 'DAEMON_UNAVAILABLE'
+  | 'TRACKER_NOT_PAIRED'
+  | 'TRACKER_FAILED'
+  | 'INTERNAL';
+export type BridgeErrorCode =
+  | 'UNAUTHORIZED'
+  | 'FORBIDDEN'
+  | 'NOT_FOUND'
+  | 'INVALID_REQUEST'
+  | 'TOO_LARGE'
+  | 'RATE_LIMITED'
+  | 'JIRA_ERROR'
   | 'INTERNAL';
 
 export interface ReplaceSnippetOp {
@@ -698,6 +721,164 @@ export interface GenerateAttach {
 export interface PreviewRelease {
   runId: string;
 }
+export interface TrackerStatusMessage {
+  type: 'tracker.status';
+  id?: string;
+  payload: TrackerStatusRequest;
+}
+export interface TrackerStatusRequest {}
+export interface TrackerStatusOkMessage {
+  type: 'tracker.status.ok';
+  id?: string;
+  payload: TrackerStatus;
+}
+export interface TrackerStatus {
+  sites: TrackerSite[];
+}
+export interface TrackerSite {
+  provider: 'jira';
+  site: string;
+  url: string;
+  account: string;
+  projects: TrackerProject[];
+  error?: string;
+}
+export interface TrackerProject {
+  key: string;
+  name: string;
+}
+export interface TrackerSearchMessage {
+  type: 'tracker.search';
+  id?: string;
+  payload: TicketSearch;
+}
+export interface TicketSearch {
+  site?: string;
+  preset: 'assigned' | 'queued';
+  query?: string;
+}
+export interface TrackerTicketsMessage {
+  type: 'tracker.tickets';
+  id?: string;
+  payload: TicketList;
+}
+export interface TicketList {
+  tickets: TicketSummary[];
+}
+export interface TicketSummary {
+  ref: TicketRef;
+  summary: string;
+  status: string;
+  type?: string;
+  url: string;
+}
+export interface TicketRef {
+  provider: 'jira';
+  site: string;
+  key: string;
+}
+export interface TrackerTicketMessage {
+  type: 'tracker.ticket';
+  id?: string;
+  payload: TicketRequest;
+}
+export interface TicketRequest {
+  ref: TicketRef;
+}
+export interface TrackerTicketOkMessage {
+  type: 'tracker.ticket.ok';
+  id?: string;
+  payload: TicketDetail;
+}
+export interface TicketDetail {
+  ref: TicketRef;
+  summary: string;
+  description: string;
+  status: string;
+  url: string;
+  images:
+    | []
+    | [TicketImage]
+    | [TicketImage, TicketImage]
+    | [TicketImage, TicketImage, TicketImage]
+    | [TicketImage, TicketImage, TicketImage, TicketImage];
+  transitions: TicketTransition[];
+}
+export interface TicketImage {
+  name: string;
+  mediaType: 'image/png' | 'image/jpeg' | 'image/webp';
+  base64: string;
+}
+export interface TicketTransition {
+  id: string;
+  name: string;
+}
+export interface TrackerStartMessage {
+  type: 'tracker.start';
+  id?: string;
+  payload: TicketStart;
+}
+export interface TicketStart {
+  ref: TicketRef;
+  pageUrl: string;
+  src: string;
+}
+export interface TrackerStartedMessage {
+  type: 'tracker.started';
+  id?: string;
+  payload: TicketStarted;
+}
+export interface TicketStarted {
+  ref: TicketRef;
+}
+export interface TrackerPostMessage {
+  type: 'tracker.post';
+  id?: string;
+  payload: TicketPost;
+}
+export interface TicketPost {
+  ref: TicketRef;
+  journalId: string;
+  pageUrl: string;
+  src: string;
+  before: [] | [SketchImage] | [SketchImage, SketchImage];
+  after: [] | [SketchImage] | [SketchImage, SketchImage];
+  transitionId?: string;
+}
+export interface TrackerPostedMessage {
+  type: 'tracker.posted';
+  id?: string;
+  payload: TicketPosted;
+}
+export interface TicketPosted {
+  ref: TicketRef;
+  journalId: string;
+  outcome: 'posted' | 'cancelled';
+  url: string;
+}
+export interface TrackerReportMessage {
+  type: 'tracker.report';
+  id?: string;
+  payload: TicketReport;
+}
+export interface TicketReport {
+  site: string;
+  project: string;
+  summary: string;
+  description: string;
+  pageUrl: string;
+  src: string;
+  image: SketchImage;
+}
+export interface TrackerReportedMessage {
+  type: 'tracker.reported';
+  id?: string;
+  payload: TicketReported;
+}
+export interface TicketReported {
+  ref: TicketRef;
+  url: string;
+}
 export interface ErrorMessage {
   type: 'error';
   id?: string;
@@ -707,4 +888,75 @@ export interface ErrorPayload {
   code: ErrorCode;
   message: string;
   action?: string;
+}
+export interface BridgeError {
+  ok: false;
+  code: BridgeErrorCode;
+  message: string;
+}
+export interface BridgeWhoami {
+  accountId: string;
+  displayName: string;
+  site: string;
+  url: string;
+  projects: TrackerProject[];
+}
+export interface BridgeTicketSummary {
+  key: string;
+  summary: string;
+  status: string;
+  type?: string;
+}
+export interface BridgeTicketPage {
+  tickets: BridgeTicketSummary[];
+}
+export interface BridgeAttachment {
+  id: string;
+  filename: string;
+  mimeType: string;
+  size: number;
+}
+export interface BridgeTicket {
+  key: string;
+  summary: string;
+  description: string;
+  status: string;
+  attachments: BridgeAttachment[];
+  transitions: TicketTransition[];
+}
+export interface BridgeImage {
+  mediaType: 'image/png' | 'image/jpeg' | 'image/webp';
+  base64: string;
+}
+export interface BridgeStart {
+  pageUrl: string;
+  src: string;
+}
+export interface BridgeResult {
+  journalId: string;
+  summary: string;
+  files: string[];
+  changes: CodeChange[];
+  patch?: string;
+  pageUrl: string;
+  src: string;
+  agent: string;
+  before: [] | [SketchImage] | [SketchImage, SketchImage];
+  after: [] | [SketchImage] | [SketchImage, SketchImage];
+  transitionId?: string;
+}
+export interface BridgePosted {
+  key: string;
+  url: string;
+}
+export interface BridgeReverted {
+  journalId: string;
+}
+export interface BridgeCreate {
+  project: string;
+  summary: string;
+  description: string;
+  pageUrl: string;
+  src: string;
+  image?: SketchImage;
 }

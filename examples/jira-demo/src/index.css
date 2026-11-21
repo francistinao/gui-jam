@@ -1,0 +1,11 @@
+@import "tailwindcss";
+
+@theme {
+  --color-brand: #be123c;
+  --color-ocean: #1d4ed8;
+  --color-espresso: #3b2418;
+  --color-crema: #f6efe6;
+  --font-display: Georgia, serif;
+  --font-sans: ui-sans-serif, system-ui, sans-serif;
+  --radius-card: 10px;
+}

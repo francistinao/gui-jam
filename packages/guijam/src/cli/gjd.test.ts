@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   defaultProvider,
+  parseJiraStatus,
   parseModelList,
   parseProviderList,
   probeSummary,
@@ -132,5 +133,32 @@ describe('usableModels', () => {
         model('deepseek/deepseek-chat', false),
       ]).map((entry) => entry.id),
     ).toEqual(['opencode/claude-fable-5', 'lmstudio/qwen3-coder', 'deepseek/deepseek-chat']);
+  });
+});
+
+describe('parseJiraStatus', () => {
+  it('reads each paired site and why one is unreachable', () => {
+    expect(
+      parseJiraStatus(
+        JSON.stringify([
+          { site: 'acme.atlassian.net', account: 'Francis', ok: true },
+          {
+            site: 'beta.atlassian.net',
+            account: 'Francis',
+            ok: false,
+            error: 'Jira no longer accepts this pairing.',
+          },
+        ]),
+      ),
+    ).toEqual([
+      { site: 'acme.atlassian.net', account: 'Francis', ok: true, error: undefined },
+      {
+        site: 'beta.atlassian.net',
+        account: 'Francis',
+        ok: false,
+        error: 'Jira no longer accepts this pairing.',
+      },
+    ]);
+    expect(parseJiraStatus('{}')).toEqual([]);
   });
 });

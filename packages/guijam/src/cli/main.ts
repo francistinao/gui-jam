@@ -17,6 +17,11 @@ Commands
   provider list        List the AI coding CLIs GUIJam can drive
   provider use <id>    Choose the CLI GUIJam drives; add --model <id> to pick its
                        model, or --effort low|medium|high to fix how hard it thinks
+  jira pair <code>     Connect Jira with the code from a ticket's GUIJam panel
+  jira status          Show the paired Jira sites
+  jira test            Check that the paired Jira site answers
+  jira unpair [site]   Disconnect Jira and revoke this device
+  jira create          Create a ticket with a screenshot (see guijam jira create --help)
 
 Options
   -y, --yes            Use the defaults instead of asking
@@ -67,6 +72,14 @@ export async function main(argv: string[]): Promise<number> {
       return 1;
     }
     return runCommand(gjd, ['provider', ...(rest.length === 0 ? ['list'] : rest)], process.cwd());
+  }
+  if (first === 'jira') {
+    const gjd = findDaemonBinary();
+    if (gjd === undefined) {
+      process.stderr.write(`${missingGjd()}\n`);
+      return 1;
+    }
+    return runCommand(gjd, ['jira', ...(rest.length === 0 ? ['status'] : rest)], process.cwd());
   }
 
   let parsed: ReturnType<typeof parse>;

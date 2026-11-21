@@ -18,6 +18,7 @@ pub mod route;
 pub mod run_dir;
 pub mod screenshot;
 pub mod timings;
+pub mod tracker;
 
 use std::fmt::Write as _;
 use std::io;

@@ -21,6 +21,7 @@ import {
 } from './model';
 import { CodeChanges, Popover, PopoverHeader, SKETCH_LABEL } from './Popover';
 import { type Store, useStore } from './store';
+import { TicketField } from './TicketField';
 
 const GROUP_LABELS: Record<StyleGroup, string> = {
   radius: 'Radius',
@@ -302,6 +303,7 @@ export function FinetunePanel({ store, controller }: PanelProps) {
   const draft = useStore(store, (state) => state.draft);
   const preview = useStore(store, (state) => state.preview);
   const busy = useStore(store, (state) => state.busy);
+  const ticket = useStore(store, (state) => state.ticket);
 
   if (!selection || !anchor) return null;
   const unsaved = preview !== null || Object.keys(draft).length > 0;
@@ -332,6 +334,13 @@ export function FinetunePanel({ store, controller }: PanelProps) {
       <p className="typography-body-small mb-2 text-grey-500">
         Shift+click to add more components to one Ask AI prompt.
       </p>
+      <TicketField
+        store={store}
+        controller={controller}
+        ticket={ticket}
+        prompt={false}
+        report={true}
+      />
       {selection.instances > 1 ? (
         <p
           role="note"

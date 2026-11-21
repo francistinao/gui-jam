@@ -11,14 +11,24 @@ const WIDGET_REQUEST_TYPES = [
   'variant.select',
   'dependencies.install',
   'generate.discard',
+  'tracker.status',
+  'tracker.search',
+  'tracker.ticket',
+  'tracker.start',
+  'tracker.post',
+  'tracker.report',
 ] as const satisfies readonly GuijamMessage['type'][];
 
 const GENERATION_REPLY_MS = 360_000;
 const INSTALL_REPLY_MS = 270_000;
+const TRACKER_REPLY_MS = 60_000;
+const TRACKER_POST_REPLY_MS = 90_000;
 
 export function replyWindowMs(type: GuijamMessage['type']): number | undefined {
   if (type === 'generate.request') return GENERATION_REPLY_MS;
   if (type === 'dependencies.install') return INSTALL_REPLY_MS;
+  if (type === 'tracker.post' || type === 'tracker.report') return TRACKER_POST_REPLY_MS;
+  if (type.startsWith('tracker.')) return TRACKER_REPLY_MS;
   return undefined;
 }
 
@@ -78,6 +88,12 @@ export function terminalLine(reply: GuijamMessage): string | undefined {
       return `↺ undid ${reply.payload.undoOf}`;
     case 'generate.done':
       return `✦ ${reply.payload.summary}`;
+    case 'tracker.posted':
+      return reply.payload.outcome === 'posted'
+        ? `⇪ posted to ${reply.payload.ref.key}`
+        : `⇪ nothing posted to ${reply.payload.ref.key}: the change was undone`;
+    case 'tracker.reported':
+      return `⇪ created ${reply.payload.ref.key}`;
     default:
       return undefined;
   }

@@ -14,6 +14,7 @@ import { type FixtureServer, openFixture, startFixtureServer } from './support/f
 import {
   editFoundText,
   editText,
+  jiraLoop,
   pickThemeColor,
   promptForTwo,
   sketchWithUndo,
@@ -223,6 +224,21 @@ test('the h1 text is edited without AI, previewed, applied and undone', async ({
     file: 'src/App.tsx',
     path: APP,
   });
+});
+
+test('a linked Jira ticket gets the applied change once Undo is gone', async ({ page }) => {
+  test.setTimeout(90_000);
+  await jiraLoop(
+    page,
+    {
+      element: page.getByRole('heading', { level: 1 }),
+      file: 'src/App.tsx',
+      path: APP,
+    },
+    async () => {
+      await select(page);
+    },
+  );
 });
 
 test('a heading rendered from a data array is edited where the array is written', async ({

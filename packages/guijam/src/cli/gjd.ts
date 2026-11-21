@@ -150,6 +150,42 @@ export async function probeProvider(gjd: string, id: string): Promise<ProbeResul
   }
 }
 
+export interface JiraSite {
+  site: string;
+  account: string;
+  ok: boolean;
+  error: string | undefined;
+}
+
+export function parseJiraStatus(stdout: string): JiraSite[] {
+  const value: unknown = JSON.parse(stdout);
+  if (!Array.isArray(value)) return [];
+  return value.filter(isRecord).map((entry) => ({
+    site: String(entry.site ?? ''),
+    account: String(entry.account ?? ''),
+    ok: entry.ok === true,
+    error: optionalString(entry.error),
+  }));
+}
+
+export async function jiraStatus(gjd: string): Promise<JiraSite[]> {
+  const { stdout } = await run(gjd, ['jira', 'status', '--json'], { timeout: LIST_TIMEOUT_MS });
+  return parseJiraStatus(stdout);
+}
+
+export async function pairJira(
+  gjd: string,
+  code: string,
+): Promise<{ ok: boolean; message: string }> {
+  try {
+    const { stdout } = await run(gjd, ['jira', 'pair', code.trim()], { timeout: LIST_TIMEOUT_MS });
+    return { ok: true, message: stdout.trim() };
+  } catch (error) {
+    const stderr = isRecord(error) && typeof error.stderr === 'string' ? error.stderr.trim() : '';
+    return { ok: false, message: stderr || 'Pairing failed.' };
+  }
+}
+
 export async function gjdVersion(gjd: string): Promise<string> {
   const { stdout } = await run(gjd, ['--version']);
   return stdout.trim();

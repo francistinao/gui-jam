@@ -37,6 +37,7 @@ const job = (id: string, status: 'idle' | 'running' | 'ready' = 'ready'): Job =>
     attachError: 'old problem',
     installing: true,
     installError: null,
+    ticket: null,
   }) as Job;
 
 describe('persisted jobs', () => {
@@ -48,6 +49,28 @@ describe('persisted jobs', () => {
     expect(saved?.jobs[0]?.attachError).toBeNull();
     expect(saved?.jobs[0]?.attachments).toHaveLength(1);
     expect(saved?.jobs[1]?.generation.status).toBe('running');
+  });
+
+  it('keeps a linked ticket without its images, and gives an older save none', () => {
+    const linked = {
+      ...job('j1'),
+      ticket: {
+        ref: { provider: 'jira' as const, site: 'acme.atlassian.net', key: 'WEB-7' },
+        summary: 'Make Subscribe blue',
+        description: 'It should match the brand.',
+        url: 'https://acme.atlassian.net/browse/WEB-7',
+        transitions: [{ id: '31', name: 'In Review' }],
+        images: [{ name: 'mock.png', mediaType: 'image/png' as const, base64: 'AAAA' }],
+        before: [{ mediaType: 'image/jpeg' as const, base64: 'BBBB' }],
+        transitionId: '31',
+        screenshots: true,
+      },
+    };
+    const saved = parseSaved(serialize([linked], null, true));
+    expect(saved?.jobs[0]?.ticket).toEqual({ ...linked.ticket, images: [], before: [] });
+    const older = JSON.parse(serialize([job('j2')], null, true));
+    delete older.jobs[0].ticket;
+    expect(parseSaved(JSON.stringify(older))?.jobs[0]?.ticket).toBeNull();
   });
 
   it('can leave the images out when storage is short', () => {

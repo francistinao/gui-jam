@@ -1,5 +1,6 @@
 import { readFile, writeFile } from 'node:fs/promises';
 import { expect, type Locator, type Page } from '@playwright/test';
+import { callsOf, pairWith, startBridge, unpair } from './jira-bridge.js';
 
 export interface Component {
   element: Locator;
@@ -214,5 +215,58 @@ export async function editFoundText(page: Page, found: FoundText): Promise<void>
     await expect(found.element).toHaveText(FOUND_ORIGINAL, { timeout: READY_MS });
   } finally {
     if ((await readFile(found.path, 'utf8')) !== before) await writeFile(found.path, before);
+  }
+}
+
+const JIRA_TEXT = 'Fresh coffee, every morning';
+const POST_MS = 30_000;
+
+export async function jiraLoop(
+  page: Page,
+  component: Component,
+  open: () => Promise<void>,
+): Promise<void> {
+  const bridge = await startBridge();
+  const before = await readFile(component.path, 'utf8');
+  await pairWith(bridge);
+  try {
+    await open();
+    await component.element.click();
+    const panel = finetunePanel(page, component);
+    await panel.getByRole('button', { name: 'Link a Jira ticket' }).click();
+    await panel.getByRole('button', { name: 'WEB-1 · Rename the hero heading' }).click();
+    await expect(panel.getByRole('region', { name: 'Linked ticket' })).toContainText('WEB-1', {
+      timeout: READY_MS,
+    });
+    await expect.poll(() => callsOf(bridge, '/v1/tickets/WEB-1/start').length).toBe(1);
+    await panel.getByRole('combobox', { name: 'Move the ticket to' }).selectOption('In Review');
+    await panel.getByRole('textbox', { name: 'Text content', exact: true }).fill(JIRA_TEXT);
+    await expect(component.element).toHaveText(JIRA_TEXT, { timeout: READY_MS });
+    expect(await readFile(component.path, 'utf8')).toBe(before);
+    await panel.getByRole('button', { name: 'Apply' }).click();
+
+    await expect(
+      page.getByRole('status').filter({ hasText: 'Posts to WEB-1 in 10 s unless you undo.' }),
+    ).toBeVisible();
+    await expect
+      .poll(() => callsOf(bridge, '/v1/tickets/WEB-1/result').length, { timeout: POST_MS })
+      .toBe(1);
+    const posted = callsOf(bridge, '/v1/tickets/WEB-1/result')[0]?.body ?? {};
+    expect(posted).toMatchObject({
+      files: [component.file],
+      agent: 'Direct edit, no AI',
+      transitionId: '31',
+    });
+    expect(String(posted.src)).toContain(component.file);
+    expect(JSON.stringify(posted.changes)).toContain(JIRA_TEXT);
+    expect((posted.before as unknown[]).length).toBeGreaterThan(0);
+    expect((posted.after as unknown[]).length).toBeGreaterThan(0);
+    await expect(page.getByRole('status').filter({ hasText: 'Posted to WEB-1.' })).toBeVisible();
+    expect(await readFile(component.path, 'utf8')).toContain(JIRA_TEXT);
+  } finally {
+    await unpair();
+    bridge.server.close();
+    if ((await readFile(component.path, 'utf8')) !== before)
+      await writeFile(component.path, before);
   }
 }

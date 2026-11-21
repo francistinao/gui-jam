@@ -97,3 +97,18 @@ export async function captureSketch(
   const crop = closeUpRect(closeUpOf, { width: page.width, height: page.height });
   return crop ? [shown, encoded(cropped(page, crop), 'image/jpeg')] : [shown];
 }
+
+export async function captureView(
+  exclude: Element,
+  focus: Element,
+): Promise<[SketchImage] | [SketchImage, SketchImage] | []> {
+  const page = await pageWithStrokes([], exclude);
+  if (!page) return [];
+  const shown = encoded(page, 'image/jpeg');
+  const { left, top, width, height } = focus.getBoundingClientRect();
+  const crop = closeUpRect(
+    { left, top, width, height },
+    { width: page.width, height: page.height },
+  );
+  return crop ? [encoded(cropped(page, crop), 'image/jpeg'), shown] : [shown];
+}

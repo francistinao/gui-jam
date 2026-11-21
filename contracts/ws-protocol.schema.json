@@ -565,6 +565,234 @@
       }
     },
     {
+      "title": "TrackerStatusMessage",
+      "type": "object",
+      "required": ["type", "payload"],
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "tracker.status"
+        },
+        "id": {
+          "type": "string",
+          "description": "Set on requests; a reply repeats its request's id."
+        },
+        "payload": {
+          "$ref": "tracker.schema.json#/$defs/TrackerStatusRequest"
+        }
+      }
+    },
+    {
+      "title": "TrackerStatusOkMessage",
+      "type": "object",
+      "required": ["type", "payload"],
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "tracker.status.ok"
+        },
+        "id": {
+          "type": "string",
+          "description": "Set on requests; a reply repeats its request's id."
+        },
+        "payload": {
+          "$ref": "tracker.schema.json#/$defs/TrackerStatus"
+        }
+      }
+    },
+    {
+      "title": "TrackerSearchMessage",
+      "type": "object",
+      "required": ["type", "payload"],
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "tracker.search"
+        },
+        "id": {
+          "type": "string",
+          "description": "Set on requests; a reply repeats its request's id."
+        },
+        "payload": {
+          "$ref": "tracker.schema.json#/$defs/TicketSearch"
+        }
+      }
+    },
+    {
+      "title": "TrackerTicketsMessage",
+      "type": "object",
+      "required": ["type", "payload"],
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "tracker.tickets"
+        },
+        "id": {
+          "type": "string",
+          "description": "Set on requests; a reply repeats its request's id."
+        },
+        "payload": {
+          "$ref": "tracker.schema.json#/$defs/TicketList"
+        }
+      }
+    },
+    {
+      "title": "TrackerTicketMessage",
+      "type": "object",
+      "required": ["type", "payload"],
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "tracker.ticket"
+        },
+        "id": {
+          "type": "string",
+          "description": "Set on requests; a reply repeats its request's id."
+        },
+        "payload": {
+          "$ref": "tracker.schema.json#/$defs/TicketRequest"
+        }
+      }
+    },
+    {
+      "title": "TrackerTicketOkMessage",
+      "type": "object",
+      "required": ["type", "payload"],
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "tracker.ticket.ok"
+        },
+        "id": {
+          "type": "string",
+          "description": "Set on requests; a reply repeats its request's id."
+        },
+        "payload": {
+          "$ref": "tracker.schema.json#/$defs/TicketDetail"
+        }
+      }
+    },
+    {
+      "title": "TrackerStartMessage",
+      "type": "object",
+      "required": ["type", "payload"],
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "tracker.start"
+        },
+        "id": {
+          "type": "string",
+          "description": "Set on requests; a reply repeats its request's id."
+        },
+        "payload": {
+          "$ref": "tracker.schema.json#/$defs/TicketStart"
+        }
+      }
+    },
+    {
+      "title": "TrackerStartedMessage",
+      "type": "object",
+      "required": ["type", "payload"],
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "tracker.started"
+        },
+        "id": {
+          "type": "string",
+          "description": "Set on requests; a reply repeats its request's id."
+        },
+        "payload": {
+          "$ref": "tracker.schema.json#/$defs/TicketStarted"
+        }
+      }
+    },
+    {
+      "title": "TrackerPostMessage",
+      "type": "object",
+      "required": ["type", "payload"],
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "tracker.post"
+        },
+        "id": {
+          "type": "string",
+          "description": "Set on requests; a reply repeats its request's id."
+        },
+        "payload": {
+          "$ref": "tracker.schema.json#/$defs/TicketPost"
+        }
+      }
+    },
+    {
+      "title": "TrackerPostedMessage",
+      "type": "object",
+      "required": ["type", "payload"],
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "tracker.posted"
+        },
+        "id": {
+          "type": "string",
+          "description": "Set on requests; a reply repeats its request's id."
+        },
+        "payload": {
+          "$ref": "tracker.schema.json#/$defs/TicketPosted"
+        }
+      }
+    },
+    {
+      "title": "TrackerReportMessage",
+      "type": "object",
+      "required": ["type", "payload"],
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "tracker.report"
+        },
+        "id": {
+          "type": "string",
+          "description": "Set on requests; a reply repeats its request's id."
+        },
+        "payload": {
+          "$ref": "tracker.schema.json#/$defs/TicketReport"
+        }
+      }
+    },
+    {
+      "title": "TrackerReportedMessage",
+      "type": "object",
+      "required": ["type", "payload"],
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "tracker.reported"
+        },
+        "id": {
+          "type": "string",
+          "description": "Set on requests; a reply repeats its request's id."
+        },
+        "payload": {
+          "$ref": "tracker.schema.json#/$defs/TicketReported"
+        }
+      }
+    },
+    {
       "title": "ErrorMessage",
       "type": "object",
       "required": ["type", "payload"],
@@ -1283,6 +1511,8 @@
         "PROVIDER_CRASHED",
         "PLUGIN_UNAVAILABLE",
         "DAEMON_UNAVAILABLE",
+        "TRACKER_NOT_PAIRED",
+        "TRACKER_FAILED",
         "INTERNAL"
       ]
     },

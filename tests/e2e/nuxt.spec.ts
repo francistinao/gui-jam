@@ -8,6 +8,7 @@ import { openFixture } from './support/fixture.js';
 import {
   editFoundText,
   editText,
+  jiraLoop,
   pickThemeColor,
   promptForTwo,
   sketchWithUndo,
@@ -180,6 +181,22 @@ test('the h1 text is edited without AI, previewed, applied and undone', async ({
     file: 'app/app.vue',
     path: APP,
   });
+});
+
+test('a linked Jira ticket gets the applied change once Undo is gone', async ({ page }) => {
+  test.setTimeout(90_000);
+  await jiraLoop(
+    page,
+    {
+      element: page.getByRole('heading', { level: 1 }),
+      file: 'app/app.vue',
+      path: APP,
+    },
+    async () => {
+      await openFixture(page, nuxt.url);
+      await chooseTool(page, 'Select');
+    },
+  );
 });
 
 test('a heading rendered from a data array is edited where the array is written', async ({

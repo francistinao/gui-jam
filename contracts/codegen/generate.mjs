@@ -13,12 +13,14 @@ const ROOT_SCHEMAS = [
   'element-style.schema.json',
   'finetune.schema.json',
   'ws-protocol.schema.json',
+  'tracker.schema.json',
 ];
 
 const OUTPUTS = {
   bundle: join(contractsDir, 'generated', 'contracts.bundle.schema.json'),
   variantSet: join(contractsDir, 'generated', 'variant-set.provider.schema.json'),
   ts: join(repoRoot, 'packages', 'contracts-ts', 'src', 'generated', 'contracts.ts'),
+  bridge: join(repoRoot, 'integrations', 'jira-forge', 'src', 'generated', 'bridge.ts'),
 };
 
 const GENERATED_NOTICE =
@@ -64,6 +66,16 @@ function bundle(byFile) {
   return defs;
 }
 
+function bridgeDefs(defs) {
+  const root = {
+    $defs: defs,
+    anyOf: Object.keys(defs)
+      .filter((name) => name.startsWith('Bridge'))
+      .map((name) => ({ $ref: `#/$defs/${name}` })),
+  };
+  return pruneUnreferenced(root).$defs;
+}
+
 function rootedAt(title, defs) {
   const { [title]: root, ...rest } = defs;
   return { ...root, $defs: rest };
@@ -91,9 +103,9 @@ function pruneUnreferenced(schema) {
   return { ...schema, $defs };
 }
 
-async function generateTs(defs) {
+async function generateTs(defs, title = 'GuiJamContracts') {
   const source = {
-    title: 'GuiJamContracts',
+    title,
     type: 'object',
     additionalProperties: false,
     properties: Object.fromEntries(
@@ -101,7 +113,7 @@ async function generateTs(defs) {
     ),
     $defs: defs,
   };
-  const ts = await compile(source, 'GuiJamContracts', {
+  const ts = await compile(source, title, {
     bannerComment: '',
     additionalProperties: false,
     unreachableDefinitions: true,
@@ -110,7 +122,7 @@ async function generateTs(defs) {
     style: { singleQuote: true, printWidth: 100 },
   });
   return ts
-    .replace(/export interface GuiJamContracts \{[^}]*\}\n\n?/, '')
+    .replace(new RegExp(`export interface ${title} \\{[^}]*\\}\\n\\n?`), '')
     .replace(/^[ \t]*\/\*\*[\s\S]*?\*\/[ \t]*\n/gm, '');
 }
 
@@ -124,6 +136,7 @@ async function main() {
     [OUTPUTS.bundle, json({ $comment: GENERATED_NOTICE, $defs: defs })],
     [OUTPUTS.variantSet, json(pruneUnreferenced(rootedAt('VariantSet', defs)))],
     [OUTPUTS.ts, await generateTs(defs)],
+    [OUTPUTS.bridge, await generateTs(bridgeDefs(defs), 'GuiJamBridge')],
   ]);
 
   const stale = [];

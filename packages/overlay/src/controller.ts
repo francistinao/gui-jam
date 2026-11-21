@@ -9,6 +9,9 @@ import type {
   Route,
   Sketch,
   TextPlace,
+  TicketRef,
+  TicketSummary,
+  TrackerStatus,
   VariantPreview,
 } from '@guijam/contracts-ts';
 import {
@@ -55,14 +58,24 @@ import {
 } from './model';
 import { collectPageOutline } from './page-outline';
 import type { Saved } from './persist';
-import { captureSketch } from './sketch';
+import { captureSketch, captureView } from './sketch';
 import type { Store } from './store';
+import {
+  fileOfImage,
+  type LinkedTicket,
+  linkedTicket,
+  pageUrl,
+  promptFromTicket,
+  type TicketLoading,
+} from './tracker';
 
 const PREVIEW_DEBOUNCE_MS = 120;
 const UNDO_WINDOW_MS = 10_000;
 const NOTICE_MS = 4_000;
 const FOLLOW_MS = 2_000;
 const TEXT_SETTLE_MS = 2_000;
+const AFTER_CAPTURE_MS = 400;
+const SEARCH_LIMIT = 8;
 const SRC_ATTRIBUTE = 'data-gj-src';
 
 export interface Selection {
@@ -86,6 +99,7 @@ export interface Notice {
   message: string;
   action?: string;
   undoJournalId?: string;
+  link?: { label: string; href: string };
 }
 
 export type PanelMode = 'finetune' | 'prompt';
@@ -146,6 +160,7 @@ export interface Job {
   attachError: string | null;
   installing: boolean;
   installError: string | null;
+  ticket: LinkedTicket | null;
 }
 
 export interface WidgetState {
@@ -164,6 +179,10 @@ export interface WidgetState {
   busy: boolean;
   notice: Notice | null;
   selectionGone: boolean;
+  tracker: TrackerStatus | null;
+  ticket: LinkedTicket | null;
+  pendingTicket: string | null;
+  ticketLoading: TicketLoading | null;
 }
 
 export const initialState: WidgetState = {
@@ -182,6 +201,10 @@ export const initialState: WidgetState = {
   busy: false,
   notice: null,
   selectionGone: false,
+  tracker: null,
+  ticket: null,
+  pendingTicket: null,
+  ticketLoading: null,
 };
 
 export function rectOf(element: Element): Rect {
@@ -384,6 +407,7 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
   function clearPanel(): void {
     store.set({
       focus: null,
+      ticket: null,
       selection: null,
       anchor: null,
       group: [],
@@ -812,6 +836,127 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
     await inspect(job.target);
   }
 
+  function ticketTarget(): { ticket: LinkedTicket | null; target: Selection | null } {
+    const job = focused();
+    if (job) return { ticket: job.ticket, target: job.target };
+    const { ticket, selection } = store.get();
+    return { ticket, target: selection };
+  }
+
+  function setTicket(ticket: LinkedTicket | null): void {
+    const job = focused();
+    if (job) updateJob(job.id, (entry) => ({ ...entry, ticket }));
+    else store.set({ ticket });
+  }
+
+  function willFill(): boolean {
+    const job = focused();
+    return Boolean(job && job.generation.status === 'idle' && !job.generation.prompt.trim());
+  }
+
+  async function linkTicket(ref: TicketRef): Promise<boolean> {
+    const { target } = ticketTarget();
+    if (!target || store.get().ticketLoading) return false;
+    const fills = willFill();
+    store.set({ ticketLoading: { key: ref.key, step: 'reading', images: 0, fills } });
+    try {
+      const reply = await host.request({ type: 'tracker.ticket', payload: { ref } });
+      if (reply.type !== 'tracker.ticket.ok') {
+        notify(failure(reply));
+        return false;
+      }
+      const images = Math.min(reply.payload.images.length, MAX_ATTACHMENTS);
+      store.set({ ticketLoading: { key: ref.key, step: 'screenshot', images, fills } });
+      const element = elementsAt(target.src)[target.instance ?? 0];
+      const before = element ? await captureView(host.hostElement, element) : [];
+      setTicket(linkedTicket(reply.payload, before));
+      void host
+        .request({
+          type: 'tracker.start',
+          payload: { ref, pageUrl: pageUrl(window.location), src: target.src },
+        })
+        .then((started) => {
+          if (started.type === 'error') notify(failure(started));
+        });
+      if (fills && willFill()) await fillPrompt();
+      return true;
+    } finally {
+      store.set({ ticketLoading: null });
+    }
+  }
+
+  async function fillPrompt(): Promise<void> {
+    const job = focused();
+    const ticket = job?.ticket;
+    if (!job || !ticket) return;
+    const room = Math.max(0, MAX_ATTACHMENTS - job.attachments.length);
+    const images = ticket.images.slice(0, room);
+    store.set({
+      ticketLoading: { key: ticket.ref.key, step: 'prompt', images: images.length, fills: true },
+    });
+    setGeneration(job.id, { ...job.generation, prompt: promptFromTicket(ticket) });
+    if (images.length > 0) await controllerApi.attach(images.map(fileOfImage));
+  }
+
+  async function fillPromptFromTicket(): Promise<void> {
+    if (store.get().ticketLoading) return;
+    try {
+      await fillPrompt();
+    } finally {
+      store.set({ ticketLoading: null });
+    }
+  }
+
+  function settled(): Promise<void> {
+    return new Promise((done) => {
+      requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(done, AFTER_CAPTURE_MS)));
+    });
+  }
+
+  function postToTicket(ticket: LinkedTicket, journalId: string, src: string): void {
+    const { key } = ticket.ref;
+    void (async () => {
+      await settled();
+      const element = elementsAt(src)[0];
+      const after =
+        ticket.screenshots && element ? await captureView(host.hostElement, element) : [];
+      const reply = await host.request({
+        type: 'tracker.post',
+        payload: {
+          ref: ticket.ref,
+          journalId,
+          pageUrl: pageUrl(window.location),
+          src,
+          before: ticket.screenshots ? ticket.before : [],
+          after,
+          ...(ticket.transitionId ? { transitionId: ticket.transitionId } : {}),
+        },
+      });
+      if (reply.type !== 'tracker.posted') {
+        notify(failure(reply), UNDO_WINDOW_MS);
+        return;
+      }
+      if (reply.payload.outcome === 'cancelled') {
+        notify({ kind: 'info', message: `Change undone. Nothing was posted to ${key}.` });
+        return;
+      }
+      notify(
+        {
+          kind: 'info',
+          message: `Posted to ${key}.`,
+          link: { label: `Open ${key}`, href: reply.payload.url },
+        },
+        UNDO_WINDOW_MS,
+      );
+    })();
+  }
+
+  function withTicketNote(notice: Notice, ticket: LinkedTicket | null): Notice {
+    return ticket
+      ? { ...notice, action: `Posts to ${ticket.ref.key} in 10 s unless you undo.` }
+      : notice;
+  }
+
   async function addJob(
     target: Selection,
     anchor: Rect,
@@ -834,6 +979,7 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
       attachError: null,
       installing: false,
       installError: null,
+      ticket: store.get().selection?.src === target.src ? store.get().ticket : null,
     };
     store.set({ jobs: [...jobs, job] });
     await focusJob(job.id);
@@ -863,8 +1009,15 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
       draft: {},
       preview: null,
       selectionGone: false,
+      ticket: null,
     });
     await inspect(selection);
+    const { pendingTicket, tracker } = store.get();
+    const site = tracker?.sites[0]?.site;
+    if (pendingTicket && site) {
+      store.set({ pendingTicket: null });
+      await linkTicket({ provider: 'jira', site, key: pendingTicket });
+    }
   }
 
   function regroup(job: Job, picked: Selection): void {
@@ -906,9 +1059,96 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
     await addJob(selection, anchor, [], null, [picked]);
   }
 
-  return {
+  const controllerApi = {
     select: (element: Element, additive = false) =>
       additive ? extend(element) : openFinetune(element),
+
+    async loadTracker(): Promise<void> {
+      const reply = await host.request({ type: 'tracker.status', payload: {} });
+      store.set({ tracker: reply.type === 'tracker.status.ok' ? reply.payload : null });
+    },
+
+    async searchTickets(
+      preset: 'assigned' | 'queued',
+      query: string,
+    ): Promise<{ tickets: TicketSummary[] } | { error: string }> {
+      const site = store.get().tracker?.sites[0]?.site;
+      const reply = await host.request({
+        type: 'tracker.search',
+        payload: {
+          preset,
+          ...(site ? { site } : {}),
+          ...(query.trim() ? { query: query.trim().slice(0, 200) } : {}),
+        },
+      });
+      if (reply.type === 'tracker.tickets') {
+        return { tickets: reply.payload.tickets.slice(0, SEARCH_LIMIT) };
+      }
+      return { error: reply.type === 'error' ? reply.payload.message : 'Jira did not answer.' };
+    },
+
+    linkTicket,
+
+    fillPromptFromTicket,
+
+    unlinkTicket(): void {
+      setTicket(null);
+    },
+
+    setTicketOptions(change: Partial<Pick<LinkedTicket, 'transitionId' | 'screenshots'>>): void {
+      const { ticket } = ticketTarget();
+      if (ticket) setTicket({ ...ticket, ...change });
+    },
+
+    openTicketLink(key: string): void {
+      store.set({ pendingTicket: key, tool: 'select' });
+      host.onToolChange('select');
+      notify({ kind: 'info', message: `Select the element for ${key}.` }, UNDO_WINDOW_MS);
+    },
+
+    async reportToJira(report: {
+      project: string;
+      summary: string;
+      description: string;
+    }): Promise<boolean> {
+      const { selection, tracker } = store.get();
+      const site = tracker?.sites[0]?.site;
+      if (!selection || !site) return false;
+      const element = elementsAt(selection.src)[selection.instance ?? 0];
+      const [image] = element ? await captureView(host.hostElement, element) : [];
+      if (!image) {
+        notify({ kind: 'error', message: 'Could not take a screenshot of this element.' });
+        return false;
+      }
+      store.set({ busy: true });
+      const reply = await host.request({
+        type: 'tracker.report',
+        payload: {
+          site,
+          project: report.project,
+          summary: report.summary.trim().slice(0, 255),
+          description: report.description.slice(0, 4000),
+          pageUrl: pageUrl(window.location),
+          src: selection.src,
+          image,
+        },
+      });
+      store.set({ busy: false });
+      if (reply.type !== 'tracker.reported') {
+        notify(failure(reply), UNDO_WINDOW_MS);
+        return false;
+      }
+      const { key } = reply.payload.ref;
+      notify(
+        {
+          kind: 'info',
+          message: `Created ${key}.`,
+          link: { label: `Open ${key}`, href: reply.payload.url },
+        },
+        UNDO_WINDOW_MS,
+      );
+      return true;
+    },
 
     removeTarget(src: string): void {
       const job = focused();
@@ -1192,11 +1432,15 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
       });
       const moved = moveTarget(target);
       const element = elementsAt(moved.src)[0];
-      const applied = {
-        kind: 'info' as const,
-        message: appliedMessage(editedFiles(variant)),
-        undoJournalId: reply.payload.journalId,
-      };
+      const applied = withTicketNote(
+        {
+          kind: 'info' as const,
+          message: appliedMessage(editedFiles(variant)),
+          undoJournalId: reply.payload.journalId,
+        },
+        job.ticket,
+      );
+      if (job.ticket) postToTicket(job.ticket, reply.payload.journalId, moved.src);
       if (!element) {
         store.set({ busy: false });
         clearPanel();
@@ -1280,16 +1524,21 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
         return;
       }
       domPreview.keep();
+      const { ticket: linked } = ticketTarget();
       notify(
-        {
-          kind: 'info',
-          message: appliedMessage(
-            reply.payload.files.length > 0 ? reply.payload.files : [selection.file],
-          ),
-          undoJournalId: reply.payload.journalId,
-        },
+        withTicketNote(
+          {
+            kind: 'info',
+            message: appliedMessage(
+              reply.payload.files.length > 0 ? reply.payload.files : [selection.file],
+            ),
+            undoJournalId: reply.payload.journalId,
+          },
+          linked,
+        ),
         UNDO_WINDOW_MS,
       );
+      if (linked) postToTicket(linked, reply.payload.journalId, selection.src);
       const job = focused();
       if (job) {
         removeJob(job.id);
@@ -1364,4 +1613,5 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
       if (element) store.set({ anchor: rectOf(element) });
     },
   };
+  return controllerApi;
 }

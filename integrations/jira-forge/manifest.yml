@@ -1,0 +1,103 @@
+modules:
+  webtrigger:
+    - key: guijam-bridge
+      function: bridge
+      urlFormat: v2
+      response:
+        type: dynamic
+  jira:issuePanel:
+    - key: guijam-panel
+      resource: panel
+      resolver:
+        function: resolver
+      render: native
+      title: GUIJam
+      icon: resource:icons;guijam.png
+  jira:issueAction:
+    - key: guijam-send
+      resource: action
+      resolver:
+        function: resolver
+      render: native
+      title: Send to GUIJam
+  jira:entityProperty:
+    - key: guijam-status
+      entityType: issue
+      propertyKey: guijam
+      values:
+        - path: status
+          type: string
+          searchAlias: guijamStatus
+        - path: file
+          type: text
+          searchAlias: guijamFile
+        - path: appliedAt
+          type: date
+          searchAlias: guijamAppliedAt
+  rovo:mcp:
+    - key: guijam-mcp
+      name: GUIJam
+      tools:
+        - list-ui-tickets
+        - get-guijam-result
+  action:
+    - key: list-ui-tickets
+      name: List GUIJam UI tickets
+      function: list-ui-tickets-tool
+      actionVerb: GET
+      description: >-
+        Lists Jira tickets that are linked to GUIJam, the tool that edits a
+        running web app's UI in place. Each ticket has its GUIJam status
+        (queued, in_progress, applied or reverted) and the source file and line
+        that was changed.
+      inputs:
+        status:
+          title: GUIJam status
+          type: string
+          required: false
+          description: One of queued, in_progress, applied or reverted. Leave empty for all.
+    - key: get-guijam-result
+      name: Get a GUIJam result
+      function: get-guijam-result-tool
+      actionVerb: GET
+      description: >-
+        Returns what GUIJam changed for one Jira ticket: who applied it, which
+        AI CLI or direct edit made it, the element's file and line, the changed
+        files, the diff, and the ids of the before and after screenshots
+        attached to the ticket.
+      inputs:
+        issueKey:
+          title: Ticket key
+          type: string
+          required: true
+          description: The Jira ticket key, such as WEB-12.
+  function:
+    - key: bridge
+      handler: index.bridge
+    - key: resolver
+      handler: index.handler
+    - key: list-ui-tickets-tool
+      handler: index.listUiTicketsTool
+    - key: get-guijam-result-tool
+      handler: index.guijamResultTool
+resources:
+  - key: panel
+    path: src/frontend/panel.tsx
+  - key: action
+    path: src/frontend/action.tsx
+  - key: icons
+    path: static
+app:
+  id: ari:cloud:ecosystem::app/9f6e7bd4-561f-42c1-967c-534533ca84fd
+  runtime:
+    name: nodejs24.x
+permissions:
+  scopes:
+    - read:jira-work
+    - write:jira-work
+    - read:jira-user
+    - read:permission:jira
+    - storage:app
+  external:
+    images:
+      - address: "*.atlassian.net"

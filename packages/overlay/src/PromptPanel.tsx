@@ -20,6 +20,7 @@ import { INPUT_BASE_CLASS } from './figui/text-input';
 import { formatElapsed, linksIn, MAX_LINKS, stillWorking } from './model';
 import { Popover, PopoverHeader, SKETCH_LABEL } from './Popover';
 import { type Store, useStore } from './store';
+import { TicketField } from './TicketField';
 import { VariantsPanel } from './VariantsPanel';
 
 interface PanelProps {
@@ -93,6 +94,23 @@ function Progress({
         </li>
       ))}
     </ol>
+  );
+}
+
+const ARRIVING = ['first', 'second', 'third', 'fourth'] as const;
+
+function ImagesArriving({ count }: { count: number }) {
+  return (
+    <ul aria-label="Adding the ticket's images" className="m-0 flex list-none gap-1.5 p-0">
+      {ARRIVING.slice(0, count).map((slot) => (
+        <li
+          key={slot}
+          className="grid size-11 place-items-center rounded-md bg-grey-100 ring-1 ring-black-100"
+        >
+          <LoaderCircle aria-hidden="true" className="size-4 animate-spin text-blue-500" />
+        </li>
+      ))}
+    </ul>
   );
 }
 
@@ -205,6 +223,9 @@ export function PromptPanel({ store, controller }: PanelProps) {
   const gone = useStore(store, (state) => state.selectionGone);
   const draft = useStore(store, (state) => state.draft);
   const finetuned = useStore(store, (state) => state.preview);
+  const filling = useStore(store, (state) =>
+    state.ticketLoading?.fills ? state.ticketLoading : null,
+  );
   const now = useNow(job?.generation.status === 'running');
   const picker = useRef<HTMLInputElement>(null);
   const [dragging, setDragging] = useState(false);
@@ -257,6 +278,15 @@ export function PromptPanel({ store, controller }: PanelProps) {
             ? `${reused.length === 1 ? 'One of these is' : 'Some of these are'} used more than once on this page. Changes apply to every instance.`
             : `Used ${selection.instances}× on this page. Changes apply to every instance.`}
         </p>
+      ) : null}
+      {status === 'idle' || job.ticket ? (
+        <TicketField
+          store={store}
+          controller={controller}
+          ticket={job.ticket}
+          prompt={status === 'idle' && generation.variants.length === 0}
+          report={false}
+        />
       ) : null}
       {answered ? (
         <AnswerPanel generation={generation} controller={controller} />
@@ -329,33 +359,48 @@ export function PromptPanel({ store, controller }: PanelProps) {
               Sketch anywhere on the page now, then describe it below.
             </p>
           ) : null}
-          <textarea
-            aria-label="Describe the change"
-            placeholder={sketched ? 'Describe what you sketched' : 'Make it pill-shaped and darker'}
-            rows={3}
-            value={prompt}
-            disabled={status === 'running'}
-            className={cn(INPUT_BASE_CLASS, 'h-auto resize-none py-1.5')}
-            onChange={(event) => controller.setPrompt(event.target.value)}
-            onPaste={(event) => {
-              const images = imageFiles(event.clipboardData.files);
-              if (images.length === 0) return;
-              event.preventDefault();
-              void controller.attach(images);
-            }}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter' && !event.shiftKey) {
-                event.preventDefault();
-                event.currentTarget.form?.requestSubmit();
+          <div className="relative">
+            <textarea
+              aria-label="Describe the change"
+              aria-busy={filling !== null}
+              placeholder={
+                sketched ? 'Describe what you sketched' : 'Make it pill-shaped and darker'
               }
-            }}
-          />
+              rows={3}
+              value={prompt}
+              disabled={status === 'running' || filling !== null}
+              className={cn(INPUT_BASE_CLASS, 'h-auto resize-none py-1.5')}
+              onChange={(event) => controller.setPrompt(event.target.value)}
+              onPaste={(event) => {
+                const images = imageFiles(event.clipboardData.files);
+                if (images.length === 0) return;
+                event.preventDefault();
+                void controller.attach(images);
+              }}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' && !event.shiftKey) {
+                  event.preventDefault();
+                  event.currentTarget.form?.requestSubmit();
+                }
+              }}
+            />
+            {filling ? (
+              <div
+                aria-hidden="true"
+                className="typography-body-small absolute inset-0 flex items-center justify-center gap-2 rounded-md bg-grey-100/90 text-blue-900"
+              >
+                <LoaderCircle className="size-4 animate-spin text-blue-500" />
+                {`Filling in from ${filling.key}…`}
+              </div>
+            ) : null}
+          </div>
           <LinkChips prompt={prompt} />
           <Thumbnails
             attachments={job.attachments}
             disabled={status === 'running'}
             controller={controller}
           />
+          {filling && filling.images > 0 ? <ImagesArriving count={filling.images} /> : null}
           {job.attachError ? (
             <p role="alert" className="typography-body-small m-0 text-red-700">
               {job.attachError}

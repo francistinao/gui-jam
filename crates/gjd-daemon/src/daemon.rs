@@ -51,6 +51,7 @@ use crate::route::{self, Tier};
 use crate::run_dir::RunDir;
 use crate::screenshot::{self, Browser};
 use crate::timings;
+use crate::tracker::{self, Snapshot, SnapshotFile, Tracker, TrackerError};
 
 const UPDATE_TIMEOUT: Duration = Duration::from_secs(5);
 const CLI_SLOTS: usize = 6;
@@ -193,6 +194,20 @@ impl From<CommitError> for Failure {
             CommitError::Corrupt(_) | CommitError::Io(_) => {
                 Self::new(ErrorCode::Internal, error.to_string())
             }
+        }
+    }
+}
+
+impl From<TrackerError> for Failure {
+    fn from(error: TrackerError) -> Self {
+        let code = match error {
+            TrackerError::NotPaired | TrackerError::UnknownSite(_) => ErrorCode::TrackerNotPaired,
+            _ => ErrorCode::TrackerFailed,
+        };
+        let failure = Self::new(code, error.to_string());
+        match error.action() {
+            Some(action) => failure.with_action(action),
+            None => failure,
         }
     }
 }
@@ -1010,6 +1025,7 @@ pub struct Daemon {
     next_id: AtomicU64,
     connections: AtomicUsize,
     last_disconnect: Mutex<Instant>,
+    tracker: Tracker,
 }
 
 impl Daemon {
@@ -1033,6 +1049,7 @@ impl Daemon {
             next_id: AtomicU64::new(1),
             connections: AtomicUsize::new(0),
             last_disconnect: Mutex::new(Instant::now()),
+            tracker: Tracker::default(),
         }
     }
 
@@ -1144,6 +1161,12 @@ impl Daemon {
                     }),
             ),
             GuijamMessage::GenerateCancel { id, payload } => self.cancel_run(id, payload),
+            message @ (GuijamMessage::TrackerStatus { .. }
+            | GuijamMessage::TrackerSearch { .. }
+            | GuijamMessage::TrackerTicket { .. }
+            | GuijamMessage::TrackerStart { .. }
+            | GuijamMessage::TrackerPost { .. }
+            | GuijamMessage::TrackerReport { .. }) => self.handle_tracker_request(message).await,
             message @ (GuijamMessage::VariantSelect { .. }
             | GuijamMessage::DependenciesInstall { .. }
             | GuijamMessage::PreviewRelease { .. }
@@ -1167,11 +1190,74 @@ impl Daemon {
             | GuijamMessage::CommitDone { id, .. }
             | GuijamMessage::ChangesetDiscarded { id, .. }
             | GuijamMessage::UndoDone { id, .. }
+            | GuijamMessage::TrackerStatusOk { id, .. }
+            | GuijamMessage::TrackerTickets { id, .. }
+            | GuijamMessage::TrackerTicketOk { id, .. }
+            | GuijamMessage::TrackerStarted { id, .. }
+            | GuijamMessage::TrackerPosted { id, .. }
+            | GuijamMessage::TrackerReported { id, .. }
             | GuijamMessage::Error { id, .. } => Failure::new(
                 ErrorCode::InvalidRequest,
                 "the daemon does not accept this message",
             )
             .into_message(id),
+        }
+    }
+
+    async fn handle_tracker_request(&self, message: GuijamMessage) -> GuijamMessage {
+        let tracker = &self.tracker;
+        match message {
+            GuijamMessage::TrackerStatus { id, .. } => reply(
+                id,
+                tracker
+                    .status()
+                    .await
+                    .map_err(Failure::from)
+                    .map(|payload| GuijamMessage::TrackerStatusOk { id: None, payload }),
+            ),
+            GuijamMessage::TrackerSearch { id, payload } => reply(
+                id,
+                tracker
+                    .search(&payload)
+                    .await
+                    .map_err(Failure::from)
+                    .map(|payload| GuijamMessage::TrackerTickets { id: None, payload }),
+            ),
+            GuijamMessage::TrackerTicket { id, payload } => reply(
+                id,
+                tracker
+                    .ticket(&payload.ref_)
+                    .await
+                    .map_err(Failure::from)
+                    .map(|payload| GuijamMessage::TrackerTicketOk { id: None, payload }),
+            ),
+            GuijamMessage::TrackerStart { id, payload } => reply(
+                id,
+                tracker
+                    .start(&payload)
+                    .await
+                    .map_err(Failure::from)
+                    .map(|payload| GuijamMessage::TrackerStarted { id: None, payload }),
+            ),
+            GuijamMessage::TrackerPost { id, payload } => reply(
+                id,
+                tracker
+                    .post(&payload)
+                    .await
+                    .map_err(Failure::from)
+                    .map(|payload| GuijamMessage::TrackerPosted { id: None, payload }),
+            ),
+            GuijamMessage::TrackerReport { id, payload } => reply(
+                id,
+                tracker
+                    .report(&payload)
+                    .await
+                    .map_err(Failure::from)
+                    .map(|payload| GuijamMessage::TrackerReported { id: None, payload }),
+            ),
+            other => {
+                Failure::invalid_request("not a tracker request").into_message(message_id(&other))
+            }
         }
     }
 
@@ -2969,16 +3055,30 @@ impl Daemon {
                 self.show(file, None).await?;
             }
         }
+        let (journal_id, snapshot) = written?;
+        self.tracker.remember(
+            &journal_id,
+            Snapshot {
+                files: snapshot,
+                summary: changeset.summary.clone(),
+                agent: agent_of(changeset.origin),
+                committed_at: Instant::now(),
+            },
+        );
         Ok(CommitDone {
-            journal_id: written?,
+            journal_id,
             files: edited,
             summary: changeset.summary,
         })
     }
 
-    async fn write_changeset(&self, changeset: &Changeset) -> Result<String, Failure> {
+    async fn write_changeset(
+        &self,
+        changeset: &Changeset,
+    ) -> Result<(String, Vec<SnapshotFile>), Failure> {
         let _write = self.write_lock.lock().await;
         let mut changes = Vec::new();
+        let mut snapshot = Vec::new();
         for (path, version) in &changeset.files {
             if version.ops.is_empty() {
                 if version.base != version.content {
@@ -2987,12 +3087,22 @@ impl Daemon {
                         content_hash(version.base.as_bytes()),
                         version.content.clone(),
                     ));
+                    snapshot.push(SnapshotFile {
+                        path: path.clone(),
+                        before: version.base.clone(),
+                        after: version.content.clone(),
+                    });
                 }
                 continue;
             }
             let disk = self.read_project_file(path).await?;
             let content = materialize(path, version, &disk)?;
             if content != disk {
+                snapshot.push(SnapshotFile {
+                    path: path.clone(),
+                    before: disk.clone(),
+                    after: content.clone(),
+                });
                 changes.push(FileChange::edit(
                     path.clone(),
                     content_hash(disk.as_bytes()),
@@ -3000,6 +3110,13 @@ impl Daemon {
                 ));
             }
         }
+        snapshot.extend(changeset.created.iter().filter_map(|asset| {
+            Some(SnapshotFile {
+                path: asset.path.clone(),
+                before: String::new(),
+                after: String::from_utf8(asset.content.clone()).ok()?,
+            })
+        }));
         changes.extend(
             changeset
                 .created
@@ -3015,10 +3132,12 @@ impl Daemon {
         let journal = Arc::clone(&self.journal);
         let summary = changeset.summary.clone();
         let origin = changeset.origin;
-        tokio::task::spawn_blocking(move || journal.commit(&changes, origin, &summary))
-            .await
-            .map_err(|error| Failure::new(ErrorCode::Internal, error.to_string()))?
-            .map_err(Failure::from)
+        let journal_id =
+            tokio::task::spawn_blocking(move || journal.commit(&changes, origin, &summary))
+                .await
+                .map_err(|error| Failure::new(ErrorCode::Internal, error.to_string()))?
+                .map_err(Failure::from)?;
+        Ok((journal_id, snapshot))
     }
 
     async fn discard(&self, changeset_id: &str) -> Result<(), Failure> {
@@ -3046,6 +3165,14 @@ impl Daemon {
         drop(write);
         for path in &paths {
             self.refresh(path);
+        }
+        if let Some((site, key)) = self.tracker.undone(&journal_id) {
+            let reverted = journal_id.clone();
+            tokio::spawn(async move {
+                if let Err(error) = tracker::revert(site, key, reverted).await {
+                    tracing::warn!(%error, "couldn't mark the ticket as reverted");
+                }
+            });
         }
         Ok(UndoDone {
             journal_id: undo_id,
@@ -3149,6 +3276,17 @@ fn reply(id: Option<String>, result: Result<GuijamMessage, Failure>) -> GuijamMe
     }
 }
 
+fn agent_of(origin: &str) -> String {
+    if origin == "finetune" {
+        return "Direct edit, no AI".to_owned();
+    }
+    let provider = config::active_provider().unwrap_or(DEFAULT_PROVIDER);
+    match config::provider_model(provider) {
+        Some(model) => format!("{provider} · {model}"),
+        None => provider.to_string(),
+    }
+}
+
 fn with_id(mut message: GuijamMessage, reply_to: Option<String>) -> GuijamMessage {
     match &mut message {
         GuijamMessage::PluginHello { id, .. }
@@ -3181,6 +3319,18 @@ fn with_id(mut message: GuijamMessage, reply_to: Option<String>) -> GuijamMessag
         | GuijamMessage::GenerateAttach { id, .. }
         | GuijamMessage::PreviewRelease { id, .. }
         | GuijamMessage::PreviewReleased { id, .. }
+        | GuijamMessage::TrackerStatus { id, .. }
+        | GuijamMessage::TrackerStatusOk { id, .. }
+        | GuijamMessage::TrackerSearch { id, .. }
+        | GuijamMessage::TrackerTickets { id, .. }
+        | GuijamMessage::TrackerTicket { id, .. }
+        | GuijamMessage::TrackerTicketOk { id, .. }
+        | GuijamMessage::TrackerStart { id, .. }
+        | GuijamMessage::TrackerStarted { id, .. }
+        | GuijamMessage::TrackerPost { id, .. }
+        | GuijamMessage::TrackerPosted { id, .. }
+        | GuijamMessage::TrackerReport { id, .. }
+        | GuijamMessage::TrackerReported { id, .. }
         | GuijamMessage::Error { id, .. } => *id = reply_to,
     }
     message

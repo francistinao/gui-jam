@@ -8,6 +8,11 @@ echo "== build";        pnpm -s build
 echo "== typecheck";    pnpm -s typecheck > /dev/null
 echo "== unit";         pnpm -s test > "$log_dir/unit.log" 2>&1 || { cat "$log_dir/unit.log"; exit 1; }
 echo "== contracts";    pnpm -s contracts:check
+echo "== jira app";     {
+  pnpm -s --dir integrations/jira-forge install --frozen-lockfile &&
+    pnpm -s --dir integrations/jira-forge typecheck &&
+    pnpm -s --dir integrations/jira-forge test
+} > "$log_dir/jira-app.log" 2>&1 || { cat "$log_dir/jira-app.log"; exit 1; }
 echo "== package";      { cargo build -q -p gjd-daemon && GJD_BINARY=target/debug/gjd scripts/smoke-package.sh; } > "$log_dir/package.log" 2>&1 || { cat "$log_dir/package.log"; exit 1; }
 echo "== rustfmt";      cargo fmt --all --check
 echo "== clippy";       cargo clippy -q --workspace --all-targets -- -D warnings

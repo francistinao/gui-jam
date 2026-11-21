@@ -139,6 +139,21 @@ With Laravel's `@vite` directive, Inertia, or any server that renders the HTML i
 - **Safe writes.** Edits are journaled with the exact previous bytes, conflicts with your own unsaved work are refused, and undo restores files exactly.
 - **Your CLI, your login.** GUIJam runs the provider CLI headlessly with no write tools and never reads its credentials.
 
+## Jira (optional)
+
+GUIJam can work from Jira tickets and report back to them. Your Jira admin installs the [GUIJam for Jira](https://github.com/francistinao/gui-jam/tree/main/integrations/jira-forge) app, then each developer pairs once:
+
+```bash
+npx guijam jira pair <code>   # the code comes from Pair GUIJam in any ticket's GUIJam panel
+```
+
+- **Tickets in.** In the Select or Draw panel, choose **Link a Jira ticket**. The ticket's text and screenshots become the prompt; edit it or keep it.
+- **Results out.** When you apply a change, GUIJam posts it to the ticket once Undo is no longer offered (10 seconds): before and after screenshots, the element's file and line, the diff, and optionally a status move such as In Review. Undo before then and nothing is posted; undo later and the ticket says it was reverted.
+- **Report to Jira.** QA and designers running the app can file a ticket from any element. The screenshot, file and line, and page address are added for them.
+- **For the team in Jira.** The GUIJam panel on each ticket shows the result without running GUIJam, and `guijamStatus = queued` finds tickets waiting for a developer.
+
+Privacy: with Jira paired, GUIJam itself sends something for the first time: the screenshots and diffs of changes you link, only to your own Jira site, through the app your admin installed. Your Atlassian password and API tokens are never on your machine; GUIJam keeps only a pairing token, revocable from Jira, in `~/.config/guijam/trackers.toml` (readable only by you). The Jira app makes no AI calls.
+
 ## Architecture
 
 ```

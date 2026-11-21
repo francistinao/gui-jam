@@ -15,7 +15,8 @@
     "test:e2e": "pnpm build && playwright test",
     "contracts:gen": "node contracts/codegen/generate.mjs",
     "contracts:check": "node contracts/codegen/generate.mjs --check",
-    "test:playground": "pnpm build && playwright test -c playwright.playground.config.ts"
+    "test:playground": "pnpm build && playwright test -c playwright.playground.config.ts",
+    "screenshots": "pnpm build && playwright test -c tests/screenshots/playwright.config.ts"
   },
   "devDependencies": {
     "@biomejs/biome": "2.6.4",
