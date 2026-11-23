@@ -1,8 +1,10 @@
+import { events } from '@forge/bridge';
 import ForgeReconciler, {
   Box,
   Button,
   Code,
   CodeBlock,
+  Frame,
   Heading,
   Image,
   Inline,
@@ -53,6 +55,15 @@ function Shots({ ids, site, label }: { ids: string[]; site: string; label: strin
 function Pairing({ devices, onChange }: { devices: Device[]; onChange: () => Promise<void> }) {
   const [code, setCode] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    if (!code) return;
+    const command = `npx guijam jira pair ${code}`;
+    const ready = events.on('guijam:pair-ready', () => events.emit('guijam:pair-command', command));
+    void events.emit('guijam:pair-command', command);
+    return () => {
+      void ready.then((subscription) => subscription.unsubscribe());
+    };
+  }, [code]);
   const pair = async () => {
     setBusy(true);
     try {
@@ -81,7 +92,7 @@ function Pairing({ devices, onChange }: { devices: Device[]; onChange: () => Pro
       </Text>
       {code ? (
         <SectionMessage appearance="success" title="Run this in your project">
-          <CodeBlock text={`npx guijam jira pair ${code}`} />
+          <Frame resource="copy-frame" />
           <Text>This code is shown once. Anyone with it can act as you through GUIJam.</Text>
         </SectionMessage>
       ) : null}

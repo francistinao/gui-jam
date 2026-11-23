@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "build": "vite build src/copy-frame --base ./ --outDir ../../copy-frame --emptyOutDir",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "forge": "forge"
@@ -21,6 +22,7 @@
     "@types/node": "22.20.5",
     "@types/react": "18.3.31",
     "typescript": "5.9.3",
+    "vite": "8.3.6",
     "vitest": "5.1.0"
   },
   "engines": {

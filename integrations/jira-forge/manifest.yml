@@ -87,6 +87,8 @@ resources:
     path: src/frontend/action.tsx
   - key: icons
     path: static
+  - key: copy-frame
+    path: copy-frame
 app:
   id: ari:cloud:ecosystem::app/9f6e7bd4-561f-42c1-967c-534533ca84fd
   runtime:

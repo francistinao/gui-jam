@@ -47,6 +47,7 @@ cd integrations/jira-forge
 pnpm install
 pnpm exec forge login          # asks for an Atlassian API token
 pnpm exec forge register       # writes this app's id into manifest.yml
+pnpm build                     # builds the pairing code's copy frame
 pnpm exec forge deploy -e development
 pnpm exec forge install -e development --site <your-site>.atlassian.net --product jira
 ```
@@ -54,6 +55,7 @@ pnpm exec forge install -e development --site <your-site>.atlassian.net --produc
 To share it with others, the judges included:
 
 ```bash
+pnpm build
 pnpm exec forge deploy -e production
 ```
 
