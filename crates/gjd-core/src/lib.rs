@@ -1,4 +1,5 @@
 pub mod codemod;
+pub mod components;
 pub mod content;
 pub mod journal;
 pub mod jsx;

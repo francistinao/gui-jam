@@ -84,7 +84,7 @@ pub struct JsxElement {
     pub content: Option<Vec<ContentPart>>,
 }
 
-fn source_type(path: &str) -> Result<SourceType, JsxError> {
+pub(crate) fn source_type(path: &str) -> Result<SourceType, JsxError> {
     SourceType::from_path(path).map_err(|_| JsxError::UnsupportedFile(path.to_owned()))
 }
 
@@ -232,7 +232,7 @@ pub fn renders_children(
         .any(|slot| *slot > target.start && *slot < target.end))
 }
 
-fn is_component_name(name: &str) -> bool {
+pub(crate) fn is_component_name(name: &str) -> bool {
     let mut chars = name.chars();
     chars.next().is_some_and(|first| first.is_ascii_uppercase())
         && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
@@ -528,7 +528,7 @@ fn overridden(at: Option<usize>, last_spread: Option<usize>) -> bool {
     }
 }
 
-fn describe(source: &str, element: &JSXOpeningElement<'_>) -> JsxElement {
+pub(crate) fn describe(source: &str, element: &JSXOpeningElement<'_>) -> JsxElement {
     let mut class = ClassSource::None;
     let mut style = StyleSource::None;
     let mut class_index = None;

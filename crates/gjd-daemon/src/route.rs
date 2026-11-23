@@ -12,6 +12,7 @@ pub struct Decision {
     pub tier: Tier,
     pub question: bool,
     pub needs_usages: bool,
+    pub reuse: bool,
     pub notice: Option<&'static str>,
 }
 
@@ -49,6 +50,22 @@ const MULTI_FILE: [&str; 7] = [
     "globally",
     "sitewide",
 ];
+const SEARCH_WORD: &str = "across";
+const REUSE_STRONG: [&str; 6] = [
+    "existing", "reuse", "reusable", "re-use", "codebase", "atomic",
+];
+const REUSE_WEAK: [&str; 8] = [
+    "already",
+    "shared",
+    "search",
+    "find",
+    "consistent",
+    "inconsistent",
+    "library",
+    "global",
+];
+const REUSE_PHRASES: [&str; 3] = ["design system", "look for", "re use"];
+const COMPONENT_WORDS: [&str; 2] = ["component", "components"];
 const MULTI_FILE_PHRASES: [&str; 7] = [
     "all pages",
     "every page",
@@ -202,10 +219,14 @@ pub fn classify(prompt: &str, exact: bool, force_ai: bool, rich: bool) -> Decisi
     let lowered = prompt.to_lowercase();
     let has = |list: &[&str]| words.iter().any(|word| list.contains(&word.as_str()));
     let needs_usages = !question && (has(&PLACEMENT) || mentions_file(prompt));
+    let reuse = has(&REUSE_STRONG)
+        || REUSE_PHRASES.iter().any(|phrase| lowered.contains(phrase))
+        || (has(&REUSE_WEAK) && has(&COMPONENT_WORDS));
     let decision = |tier, notice| Decision {
         tier,
         question,
         needs_usages,
+        reuse,
         notice,
     };
     if rich {
@@ -214,12 +235,18 @@ pub fn classify(prompt: &str, exact: bool, force_ai: bool, rich: bool) -> Decisi
     if exact && !force_ai && !question {
         return decision(Tier::R0, Some(EXACT_NOTICE));
     }
-    if has(&MULTI_FILE)
+    let spread = words
+        .iter()
+        .any(|word| MULTI_FILE.contains(&word.as_str()) && !(reuse && word == SEARCH_WORD));
+    if spread
         || MULTI_FILE_PHRASES
             .iter()
             .any(|phrase| lowered.contains(phrase))
     {
         return decision(Tier::R2, Some(MULTI_FILE_NOTICE));
+    }
+    if reuse {
+        return decision(Tier::R2, None);
     }
     let short = words.len() < SHORT_PROMPT_WORDS;
     let styled = has(&STYLE) || has(&MOTION) || has(&PALETTE);
@@ -358,6 +385,51 @@ mod tests {
     fn sends_sketches_to_the_standard_tier_even_when_the_prompt_is_exact() {
         let decision = classify("make it blue", true, false, true);
         assert_eq!((decision.tier, decision.notice), (Tier::R2, None));
+    }
+
+    #[test]
+    fn a_request_to_reuse_an_existing_component_goes_to_the_standard_tier_without_the_cli_notice() {
+        for prompt in [
+            "I think there's already an existing component, I want you to search it across the codebase",
+            "use the existing ErrorMessage here",
+            "swap this for our reusable alert",
+            "find the shared component for this",
+            "match the design system",
+            "this should re-use the atomic error text",
+        ] {
+            let decision = classify(prompt, false, false, false);
+            assert!(decision.reuse, "{prompt}");
+            assert_eq!(
+                (decision.tier, decision.notice),
+                (Tier::R2, None),
+                "{prompt}"
+            );
+        }
+    }
+
+    #[test]
+    fn spreading_a_change_across_files_still_suggests_the_cli() {
+        for prompt in [
+            "refactor this across the codebase to use the existing alert",
+            "rename it everywhere",
+            "make the buttons consistent across all pages",
+            "apply this across the app",
+        ] {
+            let decision = classify(prompt, false, false, false);
+            assert_eq!(decision.notice, Some(MULTI_FILE_NOTICE), "{prompt}");
+        }
+    }
+
+    #[test]
+    fn everyday_words_alone_do_not_ask_for_reuse() {
+        for prompt in [
+            "it's already blue, make it red",
+            "make it consistent with the header",
+            "find a nicer shade of green",
+        ] {
+            let decision = classify(prompt, false, false, false);
+            assert!(!decision.reuse, "{prompt}");
+        }
     }
 
     #[test]

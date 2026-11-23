@@ -1,4 +1,5 @@
 pub mod assets;
+pub mod components;
 pub mod config;
 pub mod daemon;
 pub mod diff;
@@ -85,6 +86,8 @@ pub async fn run(project: &Path, idle_timeout: Duration) -> Result<Outcome, RunE
     })?;
 
     let daemon = Arc::new(Daemon::new(project, journal));
+    let warming = Arc::clone(&daemon);
+    tokio::spawn(async move { warming.warm_components().await });
     let shutdown = CancellationToken::new();
     tokio::spawn(stop_on_signal(shutdown.clone()));
     tokio::spawn(stop_when_idle(

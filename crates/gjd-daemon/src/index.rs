@@ -95,7 +95,7 @@ async fn git_files(root: &Path) -> Option<Vec<String>> {
     )
 }
 
-fn walk(root: &Path) -> Vec<String> {
+pub(crate) fn walk(root: &Path) -> Vec<String> {
     let mut files = Vec::new();
     let mut pending = vec![(root.to_path_buf(), 0)];
     while let Some((directory, depth)) = pending.pop() {

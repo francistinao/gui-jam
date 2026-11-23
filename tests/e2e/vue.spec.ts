@@ -79,7 +79,7 @@ test.beforeAll(async () => {
   process.env.GUIJAM_GJD_BIN = GJD_BINARY;
   process.env.GUIJAM_FAKE_CLAUDE_LOG = join(workDir, 'runs.jsonl');
   process.env.PATH = searchPath(FAKE_CLI_DIR, savedPath);
-  for (const file of [ORDER_BUTTON, APP]) originals.set(file, await readFile(file, 'utf8'));
+  for (const file of [ORDER_BUTTON, APP, EXTRAS]) originals.set(file, await readFile(file, 'utf8'));
   fixture = await startFixtureServer(undefined, VUE_DIR);
   await waitForDaemon(widgetRequests(fixture.api), {
     file: 'src/components/OrderButton.vue',
@@ -256,7 +256,7 @@ test('a heading rendered from a data array is edited where the array is written'
     element: page.locator('#extras h4'),
     file: 'src/components/Extras.vue',
     path: EXTRAS,
-    caption: 'From TABS · Extras.vue:9',
+    caption: 'From TABS · Extras.vue:10',
   });
 });
 
@@ -267,4 +267,62 @@ test('the Fill picker applies a theme color and Undo restores it', async ({ page
     file: 'src/components/OrderButton.vue',
     path: ORDER_BUTTON,
   });
+});
+
+test('an inline error in a vue template is swapped for the existing ErrorMessage.vue', async ({
+  page,
+}) => {
+  const log = process.env.GUIJAM_FAKE_CLAUDE_LOG ?? '';
+  const start = (await readFile(log, 'utf8').catch(() => '')).split('\n').filter(Boolean).length;
+  const before = await readFile(EXTRAS, 'utf8');
+  await select(page);
+  const finetune = await pick(
+    page,
+    page.getByText('Enter a valid email address.', { exact: true }),
+    'src/components/Extras.vue',
+  );
+  await finetune.getByRole('button', { name: 'Ask AI' }).click();
+  const prompt = page.getByRole('dialog', { name: 'Ask AI src/components/Extras.vue' });
+  await prompt
+    .getByRole('textbox', { name: 'Describe the change' })
+    .fill('use the existing error component');
+  await prompt.getByRole('button', { name: 'Generate' }).click();
+
+  const variants = prompt.getByRole('region', { name: 'Variants' });
+  await expect(
+    variants.getByRole('group', { name: 'Pick a variant' }).getByRole('button'),
+  ).toHaveCount(2, { timeout: 20_000 });
+  const runs = (await readFile(log, 'utf8'))
+    .split('\n')
+    .filter(Boolean)
+    .slice(start)
+    .map(
+      (line) =>
+        JSON.parse(line) as {
+          components?: { listed: { name: string; import: string | null; scope: string }[] } | null;
+        },
+    )
+    .filter((run) => run.components !== undefined);
+  expect(runs.length).toBeGreaterThan(0);
+  expect(runs[0]?.components?.listed[0]).toMatchObject({
+    name: 'ErrorMessage',
+    scope: 'shared',
+    import: 'import ErrorMessage from "./ErrorMessage.vue";',
+  });
+
+  await variants.getByRole('button', { name: 'Use V1' }).click();
+
+  const toast = page.getByRole('status').filter({ hasText: 'Applied to Extras.vue.' });
+  await expect(toast).toBeVisible();
+  const written = await readFile(EXTRAS, 'utf8');
+  expect(written).toContain('<ErrorMessage message="Enter a valid email address." />');
+  expect(written).toContain('import ErrorMessage from "./ErrorMessage.vue";');
+  await expect(page.getByText('Enter a valid email address.', { exact: true })).toHaveClass(
+    /text-red-700/,
+  );
+
+  await toast.getByRole('button', { name: 'Undo' }).click();
+
+  await expect(page.getByRole('status').filter({ hasText: 'Change undone.' })).toBeVisible();
+  expect(await readFile(EXTRAS, 'utf8')).toBe(before);
 });

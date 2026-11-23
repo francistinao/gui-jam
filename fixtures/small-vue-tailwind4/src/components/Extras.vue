@@ -1,6 +1,7 @@
 <template>
   <section id="extras" class="flex flex-col items-start gap-3 px-12 pb-40">
     <h4 class="text-xl font-semibold">{{ activeTab?.title }}</h4>
+    <p class="mt-2 text-xs text-red-500">Enter a valid email address.</p>
   </section>
 </template>
 

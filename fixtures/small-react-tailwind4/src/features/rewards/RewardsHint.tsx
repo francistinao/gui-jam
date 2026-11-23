@@ -1,0 +1,5 @@
+import type { ReactNode } from 'react';
+
+export function RewardsHint({ children }: { children: ReactNode }) {
+  return <p className="mt-1 text-xs text-espresso/70">{children}</p>;
+}
