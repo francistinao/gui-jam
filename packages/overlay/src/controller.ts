@@ -43,6 +43,7 @@ import {
   nearestIndex,
   nextJobNumber,
   type Point,
+  placedCopy,
   type Rect,
   redoStroke,
   type SketchState,
@@ -161,6 +162,7 @@ export interface Job {
   installing: boolean;
   installError: string | null;
   ticket: LinkedTicket | null;
+  page: string | null;
 }
 
 export interface WidgetState {
@@ -275,6 +277,52 @@ function pageNear(container: Element, bounds: Rect, exclude: Element): string | 
   });
   const index = nearestIndex(bounds, roots.map(rectOf));
   return index === null ? undefined : (roots[index]?.getAttribute(SRC_ATTRIBUTE) ?? undefined);
+}
+
+const MAX_INSTANCES = 10_000;
+const COPY_TEXT = 120;
+
+function srcAt(element: Element): { src: string; file: string } | undefined {
+  const src = element.getAttribute(SRC_ATTRIBUTE);
+  const file = fileOf(element);
+  return src && file ? { src, file } : undefined;
+}
+
+function textOf(element: Element): string {
+  const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+  const parts: string[] = [];
+  while (walker.nextNode()) parts.push(walker.currentNode.textContent ?? '');
+  return parts.join(' ');
+}
+
+function copyOf(
+  target: Selection,
+  exclude: Element,
+): { count: number; placedAt?: string; index?: number; text?: string } | null {
+  const elements = elementsAt(target.src);
+  if (elements.length < 2) return null;
+  const element = elements[target.instance ?? 0] ?? elements[0];
+  const own = target.file;
+  const inside = element
+    ? [...element.querySelectorAll(`[${SRC_ATTRIBUTE}]`)]
+        .filter((node) => !exclude.contains(node) && fileOf(node) !== own)
+        .flatMap((node) => srcAt(node) ?? [])
+    : [];
+  let parent = element?.parentElement?.closest(`[${SRC_ATTRIBUTE}]`) ?? null;
+  while (parent && fileOf(parent) === own) {
+    parent = parent.parentElement?.closest(`[${SRC_ATTRIBUTE}]`) ?? null;
+  }
+  const ancestor = parent && !exclude.contains(parent) ? srcAt(parent) : undefined;
+  const placedAt = placedCopy(inside, ancestor);
+  const index = element ? elements.indexOf(element) : -1;
+  const shown = element ? shownText(textOf(element)) : undefined;
+  const text = shown ? [...shown].slice(0, COPY_TEXT).join('') : undefined;
+  return {
+    count: Math.min(elements.length, MAX_INSTANCES),
+    ...(placedAt ? { placedAt } : {}),
+    ...(index >= 0 && index < MAX_INSTANCES ? { index } : {}),
+    ...(text ? { text } : {}),
+  };
 }
 
 function touchedBy(bounds: Rect, exclude: Element): string[] {
@@ -648,6 +696,7 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
         ? await sketchRequest(job.sketch, job.target)
         : null;
     if (!runs.has(runId)) return;
+    const copy = copyOf(job.target, host.hostElement);
     const reply = await host.request({
       type: 'generate.request',
       payload: {
@@ -659,6 +708,7 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
         ...(job.also.length > 0
           ? { alsoSelected: job.also.map(({ file, line, column }) => ({ file, line, column })) }
           : {}),
+        ...(copy ? { instance: copy } : {}),
         page: collectPageOutline(document, host.hostElement),
         ...(drawn ? { sketch: drawn } : {}),
         ...(job.attachments.length > 0
@@ -809,6 +859,14 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
     const elements: Element[] = elementsAt(parsed.src);
     const instance = Math.max(0, elements.indexOf(element));
     return { ...parsed, instances: elements.length, instance };
+  }
+
+  async function openJob(id: string): Promise<void> {
+    const job = jobById(id);
+    if (!job?.page || job.page === pageUrl(window.location)) return focusJob(id);
+    if (hasUnsaved()) await revert('Unsaved tweaks were reverted.');
+    store.set({ focus: id });
+    window.location.assign(job.page);
   }
 
   async function focusJob(id: string): Promise<void> {
@@ -980,6 +1038,7 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
       installing: false,
       installError: null,
       ticket: store.get().selection?.src === target.src ? store.get().ticket : null,
+      page: pageUrl(window.location),
     };
     store.set({ jobs: [...jobs, job] });
     await focusJob(job.id);
@@ -1156,7 +1215,7 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
       if (job && target && growable(job)) regroup(job, target);
     },
 
-    focus: (id: string) => focusJob(id),
+    focus: (id: string) => openJob(id),
 
     async draw(points: Point[], bounds: Rect): Promise<boolean> {
       if (editSketch((sketch) => addStroke(sketch, points, bounds))) return true;
@@ -1202,9 +1261,10 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
         return;
       }
       const { selection, anchor } = store.get();
-      await revert(hasUnsaved() ? 'Unsaved tweaks were reverted.' : undefined);
-      if (!selection || !anchor || atLimit()) return;
-      await addJob(selection, anchor, [], sketchOver(anchor));
+      const reverted = revert(hasUnsaved() ? 'Unsaved tweaks were reverted.' : undefined);
+      if (selection && anchor && !atLimit())
+        await addJob(selection, anchor, [], sketchOver(anchor));
+      await reverted;
     },
 
     clearSketch(): void {

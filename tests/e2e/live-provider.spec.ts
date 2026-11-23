@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { expect, type Locator, type Page, test } from '@playwright/test';
 import {
@@ -270,4 +270,57 @@ test('a real AI tool changes a selected component to match a sketch over it', as
   await toast.getByRole('button', { name: 'Undo' }).click();
   await expect(page.getByRole('status').filter({ hasText: 'Change undone.' })).toBeVisible();
   expect(await readFile(ORDER_BUTTON, 'utf8')).toBe(before.content);
+});
+
+test('a real AI tool redesigns one copy of a shared card where that copy is placed', async ({
+  page,
+}) => {
+  const app = fixturePath('src/App.tsx');
+  const menuCard = fixturePath('src/components/MenuCard.tsx');
+  const beforeApp = await readFile(app, 'utf8');
+  const beforeCard = await readFile(menuCard, 'utf8');
+  try {
+    await openFixture(page, fixture.url);
+    await page
+      .getByRole('toolbar', { name: 'GUIJam' })
+      .getByRole('button', { name: 'Draw' })
+      .click();
+    await circle(page, page.getByRole('article').filter({ hasText: 'Ensaymada' }));
+    const prompt = page.getByRole('dialog', { name: 'Ask AI src/components/MenuCard.tsx' });
+    await prompt
+      .getByRole('textbox', { name: 'Describe the change' })
+      .fill(
+        'Change this card into a featured chef’s special card with a big price badge and a one-line tagline',
+      );
+    await prompt.getByRole('button', { name: 'Generate' }).click();
+
+    const tiles = await answered(prompt);
+    const count = await tiles.count();
+    const note = prompt.getByText(/variants? (was|were) dropped/);
+    const dropped = (await note.count()) > 0 ? ` (${await note.textContent()})` : '';
+    console.log(`${PROVIDER} ${MODEL ?? 'default model'} shared copy: ${count} variants${dropped}`);
+    expect(await readFile(app, 'utf8')).toBe(beforeApp);
+
+    await prompt
+      .getByRole('button', { name: /^Use V\d$/ })
+      .first()
+      .click();
+    const toast = page.getByRole('status').filter({ hasText: /^Applied to / });
+    await expect(toast).toBeVisible();
+    console.log(await toast.textContent());
+    const afterApp = await readFile(app, 'utf8');
+    console.log(afterApp);
+    expect(afterApp).not.toBe(beforeApp);
+    expect(await readFile(menuCard, 'utf8')).toBe(beforeCard);
+
+    await toast.getByRole('button', { name: 'Undo' }).click();
+    await expect(page.getByRole('status').filter({ hasText: 'Change undone.' })).toBeVisible();
+    expect(await readFile(app, 'utf8')).toBe(beforeApp);
+  } finally {
+    if ((await readFile(app, 'utf8')) !== beforeApp) await writeFile(app, beforeApp);
+    if ((await readFile(menuCard, 'utf8')) !== beforeCard) await writeFile(menuCard, beforeCard);
+    for (const level of ['atoms', 'molecules', 'organisms']) {
+      await rm(fixturePath(`src/components/${level}`), { recursive: true, force: true });
+    }
+  }
 });

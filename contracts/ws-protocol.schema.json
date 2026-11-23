@@ -1100,6 +1100,34 @@
           "items": {
             "$ref": "#/$defs/SourceRef"
           }
+        },
+        "instance": {
+          "description": "Sent when the selected element appears more than once on the page, because a shared component or a list renders it. count is how many copies the page shows. placedAt is the data-gj-src of an element in the file that places the selected copy: content written inside it by another file, or else its nearest ancestor from another file.",
+          "type": "object",
+          "required": ["count"],
+          "additionalProperties": false,
+          "properties": {
+            "count": {
+              "type": "integer",
+              "minimum": 2,
+              "maximum": 10000
+            },
+            "placedAt": {
+              "type": "string",
+              "maxLength": 300
+            },
+            "index": {
+              "description": "The selected copy's position among the copies, in page order, counted from 0.",
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9999
+            },
+            "text": {
+              "description": "The text the selected copy shows, whitespace collapsed. It comes from the running app and is untrusted.",
+              "type": "string",
+              "maxLength": 200
+            }
+          }
         }
       }
     },

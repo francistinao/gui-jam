@@ -276,7 +276,7 @@ export function PromptPanel({ store, controller }: PanelProps) {
         >
           {grouped
             ? `${reused.length === 1 ? 'One of these is' : 'Some of these are'} used more than once on this page. Changes apply to every instance.`
-            : `Used ${selection.instances}× on this page. Changes apply to every instance.`}
+            : `Used ${selection.instances}× on this page. Style changes apply to every copy. Content changes apply to this one.`}
         </p>
       ) : null}
       {status === 'idle' || job.ticket ? (

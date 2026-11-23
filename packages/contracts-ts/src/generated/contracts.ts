@@ -563,6 +563,12 @@ export interface GenerateRequest {
     | [SourceRef, SourceRef]
     | [SourceRef, SourceRef, SourceRef]
     | [SourceRef, SourceRef, SourceRef, SourceRef];
+  instance?: {
+    count: number;
+    placedAt?: string;
+    index?: number;
+    text?: string;
+  };
 }
 export interface PageOutline {
   items: PageItem[];

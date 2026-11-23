@@ -4,11 +4,13 @@ import {
   activeLayers,
   addStroke,
   appliedMessage,
+  badgeSpot,
   boundsOf,
   changesIn,
   chooseDrawTarget,
   clamp,
   classifyGesture,
+  closesOnEscape,
   closeUpRect,
   containerIndex,
   cssColor,
@@ -27,14 +29,18 @@ import {
   nearestIndex,
   needsLine,
   OPACITY_RANGE,
+  type Placement,
   type Point,
+  pagePath,
   panelSections,
   parseHex,
+  placedCopy,
   placePopover,
   RADIUS_RANGE,
   type Rect,
   radiusOfToken,
   redoStroke,
+  type Size,
   type SketchOwner,
   type SketchState,
   shiftedLine,
@@ -227,6 +233,228 @@ describe('placePopover', () => {
       top: 82,
       side: 'below',
     });
+  });
+
+  it('goes above a wide sketch low on the page instead of sliding up over it', () => {
+    const sketch = { left: 48, top: 505, width: 960, height: 75 };
+
+    expect(placePopover(sketch, { width: 300, height: 360 }, { width: 1280, height: 720 })).toEqual(
+      { left: 48, top: 133, side: 'above' },
+    );
+  });
+
+  it('uses a corner when no side has room next to the anchor', () => {
+    const anchor = { left: 300, top: 200, width: 700, height: 380 };
+
+    const placement = placePopover(
+      anchor,
+      { width: 300, height: 180 },
+      { width: 1280, height: 720 },
+    );
+
+    expect(placement.side).toBe('corner');
+    expect(covered(placement, { width: 300, height: 180 }, anchor)).toBe(0);
+  });
+
+  it('takes below or above, whichever covers less, when the anchor fills the screen', () => {
+    const size = { width: 300, height: 360 };
+    const screen = { width: 1280, height: 720 };
+    const low = { left: 100, top: 80, width: 1100, height: 600 };
+    const high = { left: 100, top: 12, width: 1100, height: 560 };
+
+    expect(placePopover(low, size, screen)).toEqual({ left: 100, top: 12, side: 'above' });
+    expect(placePopover(high, size, screen)).toEqual({ left: 100, top: 348, side: 'below' });
+  });
+
+  function covered(placement: Placement, size: { width: number; height: number }, anchor: Rect) {
+    const width =
+      Math.min(placement.left + size.width, anchor.left + anchor.width) -
+      Math.max(placement.left, anchor.left);
+    const height =
+      Math.min(placement.top + size.height, anchor.top + anchor.height) -
+      Math.max(placement.top, anchor.top);
+    return width > 0 && height > 0 ? width * height : 0;
+  }
+
+  function roomBeside(anchor: Rect, size: { width: number; height: number }, screen: Size) {
+    const gap = 12;
+    const usableWidth = screen.width - 2 * gap;
+    const usableHeight = screen.height - 2 * gap;
+    if (size.width > usableWidth || size.height > usableHeight) return false;
+    const leftBand = anchor.left - gap;
+    const rightBand = screen.width - gap - (anchor.left + anchor.width);
+    const topBand = anchor.top - gap;
+    const bottomBand = screen.height - gap - (anchor.top + anchor.height);
+    return (
+      leftBand >= size.width ||
+      rightBand >= size.width ||
+      topBand >= size.height ||
+      bottomBand >= size.height
+    );
+  }
+
+  it('never covers the anchor when there is room beside it, and stays on screen', () => {
+    const screens = [
+      { width: 1280, height: 720 },
+      { width: 1024, height: 600 },
+    ];
+    const sizes = [
+      { width: 300, height: 360 },
+      { width: 300, height: 520 },
+    ];
+    let checked = 0;
+    for (const screen of screens) {
+      for (const size of sizes) {
+        for (let left = -40; left <= screen.width; left += 64) {
+          for (let top = -40; top <= screen.height; top += 48) {
+            for (const width of [24, 180, 420, 760, screen.width]) {
+              for (const height of [16, 64, 220, 480]) {
+                const anchor = { left, top, width, height };
+                const placement = placePopover(anchor, size, screen);
+                expect(placement.left).toBeGreaterThanOrEqual(12);
+                expect(placement.top).toBeGreaterThanOrEqual(12);
+                expect(placement.left + size.width).toBeLessThanOrEqual(screen.width - 12);
+                expect(placement.top + size.height).toBeLessThanOrEqual(screen.height - 12);
+                if (roomBeside(anchor, size, screen)) {
+                  expect(covered(placement, size, anchor), JSON.stringify(anchor)).toBe(0);
+                }
+                checked += 1;
+              }
+            }
+          }
+        }
+      }
+    }
+    expect(checked).toBeGreaterThan(10_000);
+  });
+
+  it('falls back to below, as it always did, when a full-width element leaves no room', () => {
+    const heading = { left: 48, top: 386, width: 1184, height: 28 };
+
+    expect(
+      placePopover(heading, { width: 300, height: 520 }, { width: 1280, height: 720 }),
+    ).toEqual({ left: 48, top: 188, side: 'below' });
+  });
+
+  it('never picks the bottom-right corner, where the GUIJam toolbar sits', () => {
+    const screen = { width: 1280, height: 720 };
+    const size = { width: 300, height: 360 };
+    for (let left = 0; left < 1280; left += 40) {
+      for (let top = 0; top < 720; top += 40) {
+        const placement = placePopover({ left, top, width: 300, height: 200 }, size, screen);
+        const inToolbarCorner = placement.left === 968 && placement.top === 348;
+        expect(inToolbarCorner && placement.side === 'corner').toBe(false);
+      }
+    }
+  });
+
+  it('moves aside as a sketch grows toward it, and never onto the sketch', () => {
+    const screen = { width: 1280, height: 720 };
+    const size = { width: 300, height: 360 };
+    const element = { left: 48, top: 560, width: 448, height: 16 };
+    const first = placePopover(element, size, screen);
+    const stretched = { left: 48, top: 540, width: 560, height: 40 };
+    const reaching = { left: 48, top: 505, width: 960, height: 75 };
+
+    const aside = placePopover(stretched, size, screen);
+    const above = placePopover(reaching, size, screen);
+
+    expect(first).toEqual({ left: 508, top: 348, side: 'right' });
+    expect(aside).toEqual({ left: 620, top: 348, side: 'right' });
+    expect(above.side).toBe('above');
+    for (const [placement, anchor] of [
+      [first, element],
+      [aside, stretched],
+      [above, reaching],
+    ] as const) {
+      expect(covered(placement, size, anchor)).toBe(0);
+    }
+  });
+});
+
+describe('placedCopy', () => {
+  const at = (src: string) => ({ src, file: src.split(':')[0] ?? '' });
+
+  it('prefers content written inside the copy by the file that holds it', () => {
+    expect(
+      placedCopy(
+        [at('src/components/Icon.tsx:2:10'), at('src/Dashboard.tsx:42:11')],
+        at('src/Dashboard.tsx:30:5'),
+      ),
+    ).toBe('src/Dashboard.tsx:42:11');
+  });
+
+  it('takes the first content from another file when the ancestor is a page further out', () => {
+    expect(placedCopy([at('src/AnalyticsCard.tsx:12:9')], at('src/Dashboard.tsx:30:5'))).toBe(
+      'src/AnalyticsCard.tsx:12:9',
+    );
+  });
+
+  it('falls back to the nearest ancestor from another file, or nothing', () => {
+    expect(placedCopy([], at('src/App.tsx:43:11'))).toBe('src/App.tsx:43:11');
+    expect(placedCopy([], undefined)).toBeUndefined();
+  });
+});
+
+describe('pagePath', () => {
+  it('keeps the path, query and hash, and drops the origin', () => {
+    expect(pagePath('http://localhost:5173/shop/orders?tab=open#latest')).toBe(
+      '/shop/orders?tab=open#latest',
+    );
+    expect(pagePath('http://localhost:5173/')).toBe('/');
+  });
+});
+
+describe('badgeSpot', () => {
+  const screen = { width: 1280, height: 720 };
+
+  it('sits above the box, ending at its right edge', () => {
+    expect(badgeSpot({ left: 100, top: 300, width: 400, height: 80 }, screen)).toEqual({
+      right: 500,
+      top: 272,
+      side: 'above',
+    });
+  });
+
+  it('goes below a box at the top of the screen, and inside only when neither fits', () => {
+    expect(badgeSpot({ left: 100, top: 20, width: 400, height: 80 }, screen)).toEqual({
+      right: 500,
+      top: 104,
+      side: 'below',
+    });
+    expect(badgeSpot({ left: 0, top: 10, width: 1280, height: 700 }, screen)).toEqual({
+      right: 1268,
+      top: 12,
+      side: 'inside',
+    });
+  });
+
+  it('keeps room for its label near the left edge and stays on screen at the right', () => {
+    expect(badgeSpot({ left: 0, top: 300, width: 30, height: 30 }, screen).right).toBe(108);
+    expect(badgeSpot({ left: 1200, top: 300, width: 300, height: 30 }, screen).right).toBe(1268);
+  });
+
+  it('stays clear of every box it has room around', () => {
+    for (let top = 0; top <= 720; top += 20) {
+      for (const height of [10, 100, 300]) {
+        const box = { left: 200, top, width: 300, height };
+        const spot = badgeSpot(box, screen);
+        if (spot.side === 'above') expect(spot.top + 24).toBeLessThanOrEqual(box.top);
+        if (spot.side === 'below') expect(spot.top).toBeGreaterThanOrEqual(box.top + box.height);
+      }
+    }
+  });
+});
+
+describe('closesOnEscape', () => {
+  it('closes on a plain Escape only', () => {
+    expect(closesOnEscape({ key: 'Escape', isComposing: false, keyCode: 27 })).toBe(true);
+    expect(closesOnEscape({ key: 'Enter', isComposing: false, keyCode: 13 })).toBe(false);
+  });
+
+  it('leaves Escape to an input method that is composing', () => {
+    expect(closesOnEscape({ key: 'Escape', isComposing: true, keyCode: 27 })).toBe(false);
+    expect(closesOnEscape({ key: 'Escape', isComposing: false, keyCode: 229 })).toBe(false);
   });
 });
 

@@ -27,9 +27,13 @@ const PRICE = fixturePath('src/components/atoms/Price.tsx');
 const PLAN_CARD = fixturePath('src/components/molecules/PlanCard.tsx');
 const PRICING = fixturePath('src/components/organisms/PricingSection.tsx');
 const OUTSIDE = fixturePath('src/pages/Pricing.tsx');
+const APP = fixturePath('src/App.tsx');
+const MENU_CARD = fixturePath('src/components/MenuCard.tsx');
 
 let fixture: FixtureServer;
 let original: string;
+let originalApp: string;
+let originalMenuCard: string;
 let workDir: string;
 let cliLog: string;
 const savedPath = process.env.PATH;
@@ -37,6 +41,8 @@ const savedPath = process.env.PATH;
 interface CliRun {
   request?: string;
   newUi?: string | null;
+  copies?: string | null;
+  files?: { path: string; why: string }[];
 }
 
 async function cliRuns(): Promise<CliRun[]> {
@@ -103,11 +109,17 @@ test.beforeAll(async () => {
   await removeCreated();
   fixture = await startFixtureServer();
   original = await readFile(ORDER_BUTTON, 'utf8');
+  originalApp = await readFile(APP, 'utf8');
+  originalMenuCard = await readFile(MENU_CARD, 'utf8');
   await waitForDaemon(widgetRequests(fixture.api), ORDER_BUTTON_REF);
 });
 
 test.afterEach(async () => {
   if ((await readFile(ORDER_BUTTON, 'utf8')) !== original) await writeFile(ORDER_BUTTON, original);
+  if ((await readFile(APP, 'utf8')) !== originalApp) await writeFile(APP, originalApp);
+  if ((await readFile(MENU_CARD, 'utf8')) !== originalMenuCard) {
+    await writeFile(MENU_CARD, originalMenuCard);
+  }
   await removeCreated();
 });
 
@@ -188,5 +200,71 @@ test('discarding the variants takes the previewed component files away and write
   await expect(pricing).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Order now' })).toBeVisible();
   for (const path of [PRICE, PLAN_CARD, PRICING, OUTSIDE]) expect(await exists(path)).toBe(false);
+  expect(await readFile(ORDER_BUTTON, 'utf8')).toBe(original);
+});
+
+test('a redesign of one copy of a shared card goes where that copy is placed, not into the shared card', async ({
+  page,
+}) => {
+  await openFixture(page, fixture.url);
+  await page.getByRole('toolbar', { name: 'GUIJam' }).getByRole('button', { name: 'Draw' }).click();
+  await circle(page, page.getByRole('article').filter({ hasText: 'Ensaymada' }));
+  const prompt = page.getByRole('dialog', { name: 'Ask AI src/components/MenuCard.tsx' });
+  await expect(prompt.getByRole('note').filter({ hasText: 'Used 3×' })).toHaveText(
+    'Used 3× on this page. Style changes apply to every copy. Content changes apply to this one.',
+  );
+  const request = 'Redesign this card as the chef’s special';
+  await prompt.getByRole('textbox', { name: 'Describe the change' }).fill(request);
+  await prompt.getByRole('button', { name: 'Generate' }).click();
+
+  const variants = prompt.getByRole('region', { name: 'Variants' });
+  await expect(variants.getByRole('group', { name: 'Pick a variant' })).toBeVisible();
+  const special = page.getByRole('main').getByRole('region', { name: 'Special' });
+  await expect(special).toContainText(/Chef’s special \d/);
+  const runs = (await cliRuns()).filter((run) => run.request === request);
+  expect(runs.length).toBeGreaterThan(0);
+  for (const run of runs) {
+    expect(run.copies).toContain(
+      'the page shows 3 copies of the selected element, all rendered by one shared component. The selected one is copy 3 of 3 in page order and shows "Ensaymada Buttery brioche with queso and sugar',
+    );
+    expect(run.copies).toContain(
+      'It is placed in src/App.tsx, the <file> with why="places this copy…". When that file renders the copies from a list, change only this copy\'s item',
+    );
+    expect(run.files?.[0]).toEqual({ path: 'src/App.tsx', why: 'places this copy of MenuCard' });
+  }
+  expect(await readFile(APP, 'utf8')).toBe(originalApp);
+
+  await variants.getByRole('button', { name: 'Use V1' }).click();
+
+  const toast = page.getByRole('status').filter({ hasText: 'Applied to App.tsx.' });
+  await expect(toast).toBeVisible();
+  const used = /<SpecialCard(\d) \/>/.exec(await readFile(APP, 'utf8'));
+  expect(used).not.toBeNull();
+  expect(await readFile(MENU_CARD, 'utf8')).toBe(originalMenuCard);
+  expect(await exists(fixturePath(`src/components/organisms/SpecialCard${used?.[1]}.tsx`))).toBe(
+    true,
+  );
+
+  await toast.getByRole('button', { name: 'Undo' }).click();
+
+  await expect(page.getByRole('status').filter({ hasText: 'Change undone.' })).toBeVisible();
+  expect(await readFile(APP, 'utf8')).toBe(originalApp);
+  await expect(special).toHaveCount(0);
+});
+
+test('new components the AI leaves off the page give one clear error with advice', async ({
+  page,
+}) => {
+  const prompt = await askFor(page, 'Redesign this button');
+
+  const error = prompt.getByText('None of the 3 variants could be used.');
+  await expect(error).toBeVisible();
+  await expect(error).toContainText(
+    "None of the 3 variants could be used. It made new components but didn't put them on the page.",
+  );
+  await expect(error).toContainText(
+    'Retry, and say where the new part goes, for example "replace what this section shows".',
+  );
+  expect(((await error.textContent()) ?? '').split("didn't put them on the page").length).toBe(2);
   expect(await readFile(ORDER_BUTTON, 'utf8')).toBe(original);
 });

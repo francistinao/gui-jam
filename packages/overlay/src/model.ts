@@ -131,24 +131,86 @@ export interface Size {
 export interface Placement {
   left: number;
   top: number;
-  side: 'right' | 'left' | 'below';
+  side: 'right' | 'left' | 'below' | 'above' | 'corner';
 }
 
 export function placePopover(anchor: Rect, popover: Size, viewport: Size, gap = 12): Placement {
-  const fitsTop = (top: number) =>
-    Math.min(Math.max(top, gap), Math.max(gap, viewport.height - popover.height - gap));
-  const right = anchor.left + anchor.width + gap;
-  if (right + popover.width + gap <= viewport.width) {
-    return { left: right, top: fitsTop(anchor.top), side: 'right' };
-  }
-  const left = anchor.left - gap - popover.width;
-  if (left >= gap) return { left, top: fitsTop(anchor.top), side: 'left' };
-  const below = Math.min(Math.max(anchor.left, gap), viewport.width - popover.width - gap);
-  return {
-    left: Math.max(gap, below),
-    top: fitsTop(anchor.top + anchor.height + gap),
+  const maxLeft = Math.max(gap, viewport.width - popover.width - gap);
+  const maxTop = Math.max(gap, viewport.height - popover.height - gap);
+  const clampLeft = (left: number) => Math.min(Math.max(left, gap), maxLeft);
+  const clampTop = (top: number) => Math.min(Math.max(top, gap), maxTop);
+  const cover = (placement: Placement) =>
+    overlap({ left: placement.left, top: placement.top, ...popover }, anchor);
+  const inside = (placement: Placement) =>
+    placement.left >= gap &&
+    placement.top >= gap &&
+    placement.left <= maxLeft &&
+    placement.top <= maxTop;
+  const free = (placement: Placement) => inside(placement) && cover(placement) === 0;
+  const onScreen = (placement: Placement): Placement => ({
+    ...placement,
+    left: clampLeft(placement.left),
+    top: clampTop(placement.top),
+  });
+  const toRight: Placement = {
+    left: anchor.left + anchor.width + gap,
+    top: clampTop(anchor.top),
+    side: 'right',
+  };
+  const toLeft: Placement = {
+    left: anchor.left - gap - popover.width,
+    top: clampTop(anchor.top),
+    side: 'left',
+  };
+  const toBelow: Placement = {
+    left: clampLeft(anchor.left),
+    top: anchor.top + anchor.height + gap,
     side: 'below',
   };
+  const toAbove: Placement = {
+    left: clampLeft(anchor.left),
+    top: anchor.top - gap - popover.height,
+    side: 'above',
+  };
+  const corners: Placement[] = [
+    { left: maxLeft, top: gap, side: 'corner' },
+    { left: gap, top: gap, side: 'corner' },
+    { left: gap, top: maxTop, side: 'corner' },
+  ];
+  const found = [toRight, toLeft, toBelow, toAbove, ...corners].find(free);
+  if (found) return found;
+  const below = onScreen(toBelow);
+  const above = onScreen(toAbove);
+  return cover(above) < cover(below) ? above : below;
+}
+
+const BADGE_EDGE = 12;
+const BADGE_GAP = 4;
+const BADGE_HEIGHT = 24;
+const BADGE_ROOM = 96;
+
+export interface BadgeSpot {
+  right: number;
+  top: number;
+  side: 'above' | 'below' | 'inside';
+}
+
+export function badgeSpot(anchor: Rect, viewport: Size): BadgeSpot {
+  const right = Math.min(
+    Math.max(anchor.left + anchor.width, BADGE_EDGE + BADGE_ROOM),
+    viewport.width - BADGE_EDGE,
+  );
+  const above = anchor.top - BADGE_GAP - BADGE_HEIGHT;
+  if (above >= BADGE_EDGE) return { right, top: above, side: 'above' };
+  const below = anchor.top + anchor.height + BADGE_GAP;
+  if (below + BADGE_HEIGHT <= viewport.height - BADGE_EDGE) {
+    return { right, top: below, side: 'below' };
+  }
+  const top = Math.min(
+    Math.max(anchor.top, BADGE_EDGE),
+    viewport.height - BADGE_EDGE - BADGE_HEIGHT,
+  );
+  return { right, top, side: 'inside' };
 }
 
 export interface Point {
@@ -350,12 +412,24 @@ export function redoStroke(sketch: SketchState): SketchState {
   return withStrokes(sketch, [...sketch.strokes, next], sketch.undone.slice(0, -1));
 }
 
+const IME_KEY_CODE = 229;
+
 export interface ShortcutKeys {
   key: string;
   ctrlKey: boolean;
   metaKey: boolean;
   shiftKey: boolean;
   altKey: boolean;
+}
+
+export interface EscapeKey {
+  key: string;
+  isComposing: boolean;
+  keyCode: number;
+}
+
+export function closesOnEscape(event: EscapeKey): boolean {
+  return event.key === 'Escape' && !event.isComposing && event.keyCode !== IME_KEY_CODE;
 }
 
 export function strokeShortcut(keys: ShortcutKeys): 'undo' | 'redo' | null {
@@ -480,6 +554,26 @@ export function jobBadge({ status, variants, answered, failed }: BadgeInput): {
   }
   if (failed) return { state: 'error', text: 'Failed' };
   return { state: 'draft', text: 'Draft' };
+}
+
+export function pagePath(page: string): string {
+  const url = new URL(page);
+  return `${url.pathname}${url.search}${url.hash}`;
+}
+
+export interface SrcAt {
+  src: string;
+  file: string;
+}
+
+export function placedCopy(
+  inside: readonly SrcAt[],
+  ancestor: SrcAt | undefined,
+): string | undefined {
+  const sameAsAncestor = ancestor
+    ? inside.find((entry) => entry.file === ancestor.file)
+    : undefined;
+  return (sameAsAncestor ?? inside[0] ?? ancestor)?.src;
 }
 
 export interface WorkContext {
