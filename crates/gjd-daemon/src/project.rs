@@ -14,7 +14,7 @@ const COMPONENT_DIRS: [&str; 4] = [
 pub const LEVELS: [&str; 3] = ["atoms", "molecules", "organisms"];
 pub const MAX_NEW_FILES: usize = 8;
 pub const MAX_NEW_FILE_BYTES: usize = 60 * 1024;
-const EXISTING_SHOWN: usize = 40;
+pub const EXISTING_SHOWN: usize = 40;
 const LOCKFILES: [(&str, PackageManager); 5] = [
     ("pnpm-lock.yaml", PackageManager::Pnpm),
     ("yarn.lock", PackageManager::Yarn),
@@ -198,7 +198,7 @@ fn import_without_extension(from_file: &str, target: &str) -> String {
 }
 
 #[must_use]
-pub fn new_ui_section(project: &Project, files: &[String], file: &str) -> String {
+pub fn new_ui_section(project: &Project, existing: &[String], file: &str) -> String {
     if !project.ui.jsx() {
         return String::new();
     }
@@ -211,7 +211,6 @@ pub fn new_ui_section(project: &Project, files: &[String], file: &str) -> String
     };
     let organism =
         import_without_extension(file, &format!("{dir}/organisms/PricingSection.{extension}"));
-    let existing = existing_components(project, files);
     let mut out = format!(
         "\n<new-ui components=\"{dir}\" extension=\"{extension}\" library=\"{library}\">\n\
 When the request adds UI that isn't on the page yet (what a sketch shows, or a section, card, form \
@@ -224,7 +223,9 @@ Add each new component with a create_file op: one exported function component pe
 its PascalCase file ({dir}/atoms/PriceTag.{extension} exports PriceTag),{props} styled with the \
 project's theme tokens. Import components with relative paths and no extension. Reuse the existing \
 components below instead of creating similar ones. In {file}, import only the organism (an organism \
-named PricingSection is imported from \"{organism}\") and render it where the sketch sits. Create at \
+named PricingSection is imported from \"{organism}\") and render it where the sketch sits. When the \
+request changes one copy of a shared component (a Copies line), import and render the organism in \
+the file that places that copy instead, with a path relative to that file. Create at \
 most {MAX_NEW_FILES} files. When the request changes elements that already exist, edit them in place \
 and create no files.\n",
         library = project.ui.name(),
@@ -493,7 +494,11 @@ mod tests {
             "src/components/Navbar.tsx",
         ]);
 
-        let section = new_ui_section(&react(true), &list, "src/components/OrderButton.tsx");
+        let section = new_ui_section(
+            &react(true),
+            &existing_components(&react(true), &list),
+            "src/components/OrderButton.tsx",
+        );
 
         assert!(
             section.starts_with(
@@ -526,6 +531,11 @@ mod tests {
             "{section}"
         );
 
+        assert!(
+            section.contains("When the request changes one copy of a shared component (a Copies line), import and render the organism in the file that places that copy instead"),
+            "{section}"
+        );
+
         let from_app = new_ui_section(&react(false), &[], "src/App.jsx");
         assert!(from_app.contains("extension=\"jsx\""), "{from_app}");
         assert!(!from_app.contains("typed props"), "{from_app}");
@@ -543,5 +553,16 @@ mod tests {
             ..react(true)
         };
         assert_eq!(new_ui_section(&plain, &list, "index.html"), "");
+        let indexed = new_ui_section(
+            &react(true),
+            &["ErrorMessage (src/components/ErrorMessage.tsx)".to_owned()],
+            "src/App.tsx",
+        );
+        assert!(
+            indexed.contains(
+                "Existing components: ErrorMessage (src/components/ErrorMessage.tsx)\n</new-ui>"
+            ),
+            "{indexed}"
+        );
     }
 }

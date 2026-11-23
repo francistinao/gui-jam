@@ -49,7 +49,9 @@ const group = [...text.matchAll(/^- <\w+> at (.+):(\d+):(\d+), base_hash: ([0-9a
   ([, path, line, column, hash]) => ({ path, line: Number(line), column: Number(column), hash }),
 );
 const shown = [
-  ...text.matchAll(/<file path="([^"]+)" base_hash="([0-9a-f]{64})" lines="[^"]*" why="([^"]+)">/g),
+  ...text.matchAll(
+    /<file path="([^"]+)" base_hash="([0-9a-f]{64})" lines="[^"]*" why="([^"]+)"(?: whole="true")?>/g,
+  ),
 ].map(([, path, hash, why]) => ({ path, hash, why }));
 const shownFile = (why) => shown.find((file) => why.test(file.why));
 const component = /^Component: (.*)$/m.exec(text)?.[1] ?? null;
@@ -68,6 +70,32 @@ const pick = (answer) =>
     ? answer
     : { ...answer, variants: answer.variants[slot] ? [answer.variants[slot]] : [] };
 const field = (block, name) => new RegExp(`^${name}: (.*)$`, 'm').exec(block)?.[1] ?? null;
+const componentsBlock = /<components for="([^"]+)">\n([\s\S]*?)<\/components>/.exec(text);
+const listed = componentsBlock
+  ? [
+      ...componentsBlock[2].matchAll(
+        /^- (\S+) · ([^·]+) · (\S+):(\d+) · ([^\n]+)\n {2}(import [^\n]+|no import needed[^\n]*)\n {2}props: ([^\n]*)\n/gm,
+      ),
+    ].map(([, name, scope, path, , used, importLine, props]) => ({
+      name,
+      scope: scope.trim(),
+      path,
+      used,
+      import: importLine.startsWith('import ') ? importLine : null,
+      props,
+    }))
+  : [];
+const previousAttempt = /<previous-attempt>\n[^\n]*\n((?:- [^\n]*\n)*)/.exec(text);
+const repairReasons = previousAttempt
+  ? previousAttempt[1]
+      .split('\n')
+      .filter(Boolean)
+      .map((reason) => reason.slice(2))
+  : [];
+const wholeSource = /<source file="[^"]+" lines="[^"]+" whole="true">/.test(text);
+const componentSources = [...text.matchAll(/<component-source path="([^"]+)"/g)].map(
+  (match) => match[1],
+);
 const links = [
   ...text.matchAll(/<link url="([^"]*)"((?: \w+="[^"]*")*)>\n([\s\S]*?)<\/link>/g),
 ].map(([, url, attrs, body]) => ({
@@ -92,6 +120,7 @@ log({
   imageBytes: images.map((image) => image.source.data.length),
   inspiration: /<inspiration images="([^"]+)">/.exec(text)?.[1] ?? null,
   newUi: /<new-ui components="([^"]+)"/.exec(text)?.[1] ?? null,
+  copies: /^Copies: (.*)$/m.exec(text)?.[1] ?? null,
   libraries: /<libraries installed="([^"]*)">/.exec(text)?.[1] ?? null,
   links,
   assets: [...text.matchAll(/ · asset (\S+)/g)].map((match) => match[1]),
@@ -101,6 +130,11 @@ log({
   component,
   layout,
   alsoSelected: group.map(({ path, line, column }) => `${path}:${line}:${column}`),
+  components: componentsBlock ? { for: componentsBlock[1], listed } : null,
+  componentSources,
+  previousAttempt: previousAttempt !== null,
+  repairReasons,
+  wholeSource,
 });
 
 print({ type: 'system', subtype: 'init' });
@@ -213,6 +247,36 @@ if (/slow/i.test(request) || (/staggered/i.test(request) && slot === 2)) {
       ),
     ],
   };
+  const placesCopy = shownFile(/^places this copy/);
+  const redesign = {
+    variants: [1, 2, 3].map((index) => ({
+      ...variant(`Special ${index}`, 'Feature', 'A featured card for this copy.', '', ''),
+      ops: [
+        ...(placesCopy
+          ? [
+              {
+                kind: 'replace_snippet',
+                file: placesCopy.path,
+                base_hash: placesCopy.hash,
+                find: "import { MenuCard } from './components/MenuCard';",
+                replace: `import { MenuCard } from './components/MenuCard';\nimport { SpecialCard${index} } from './components/organisms/SpecialCard${index}';`,
+              },
+              {
+                kind: 'replace_snippet',
+                file: placesCopy.path,
+                base_hash: placesCopy.hash,
+                find: '<h2 className="text-xl font-semibold">Today’s menu</h2>',
+                replace: `<h2 className="text-xl font-semibold">Today’s menu</h2>\n          <SpecialCard${index} />`,
+              },
+            ]
+          : []),
+        create(
+          `src/components/organisms/SpecialCard${index}.tsx`,
+          `export function SpecialCard${index}() {\n  return (\n    <section aria-label="Special" className="rounded-card bg-white p-6">\n      Chef’s special ${index}\n    </section>\n  );\n}\n`,
+        ),
+      ],
+    })),
+  };
   const grouped = {
     variants: ['V1', 'V2', 'V3'].map((name, index) => ({
       label: `Grouped ${name}`,
@@ -281,6 +345,112 @@ if (/slow/i.test(request) || (/staggered/i.test(request) && slot === 2)) {
     find,
     replace,
   });
+  const selectedSource = [
+    ...text.matchAll(
+      /<(?:source|imports) file="[^"]+" lines="[^"]+"(?: whole="true")?>\n([\s\S]*?)<\/(?:source|imports)>/g,
+    ),
+  ]
+    .map((match) => match[1])
+    .join('\n');
+  const selectedLine = new RegExp(`^\\s*${line} \\| (.*)$`, 'm').exec(selectedSource)?.[1] ?? '';
+  const inline = /<(\w+)[^>]*>([^<]*)<\/\1>/.exec(selectedLine);
+  const swapIn = (target, importLine) => {
+    if (!inline) return null;
+    const [markup, , inner] = inline;
+    const tag = /import \{?\s*(\w+)/.exec(importLine ?? '')?.[1] ?? target.name;
+    const usage = /\bmessage\b/.test(target.props)
+      ? `<${tag} message="${inner}" />`
+      : `<${tag}>${inner}</${tag}>`;
+    const source = importLine ? /from ["']([^"']+)["']/.exec(importLine)?.[1] : null;
+    const already =
+      !source ||
+      selectedSource.includes(`from '${source}'`) ||
+      selectedSource.includes(`from "${source}"`);
+    const ops = [edit(markup, usage)];
+    const anchor = /^\s*\d+ \| (export (?:default )?function \w+|<script setup[^>]*>)/m.exec(
+      selectedSource,
+    )?.[1];
+    if (!already && anchor) {
+      ops.push(
+        edit(
+          anchor,
+          anchor.startsWith('<script') ? `${anchor}\n${importLine}` : `${importLine}\n\n${anchor}`,
+        ),
+      );
+    }
+    return ops;
+  };
+  const sourceBlock =
+    /<source file="[^"]+" lines="[^"]+"(?: whole="true")?>\n([\s\S]*?)<\/source>/.exec(text)?.[1];
+  const rebuilt = sourceBlock
+    ?.split('\n')
+    .slice(0, -1)
+    .map((numbered) => numbered.replace(/^\s*\d+ \| ?/, ''))
+    .join('\n');
+  const rewriteOf = (label, style, from, to) => ({
+    ...variant(label, style, `Rewrote the whole file: ${from} became ${to}.`, '', ''),
+    ops: [
+      {
+        kind: 'rewrite_file',
+        file,
+        base_hash: baseHash,
+        content: (rebuilt ?? '').replace(from, to),
+      },
+    ],
+  });
+  const rewriting =
+    /\brewrite\b/i.test(request) && rebuilt !== undefined
+      ? {
+          variants: [
+            rewriteOf('Rounder', 'Rewrite', 'rounded-card', 'rounded-3xl'),
+            rewriteOf('Deeper', 'Shadow', 'shadow-sm', 'shadow-lg'),
+            rewriteOf('Roomier', 'Space', 'p-6', 'p-8'),
+          ],
+        }
+      : null;
+  const misquoted = (index) =>
+    variant(
+      `Guess ${index}`,
+      'Guess',
+      'Quotes code that is not there.',
+      `bg-nowhere-${index}`,
+      'bg-sea',
+    );
+  const broken =
+    /\bhopeless\b/i.test(request) || (/\bflaky\b/i.test(request) && previousAttempt === null)
+      ? { variants: [misquoted(1), misquoted(2), misquoted(3)] }
+      : null;
+  const reuse =
+    listed.length > 0 && inline && /\b(existing|reuse|search)\b|match the rest/i.test(request)
+      ? {
+          variants: [
+            {
+              ...variant(`Uses ${listed[0].name}`, 'Reuse', `Uses ${listed[0].name}.`, '', ''),
+              ops: swapIn(listed[0], listed[0].import),
+            },
+            {
+              ...variant(
+                'Made-up import',
+                'Guess',
+                'Imports a component that is not there.',
+                '',
+                '',
+              ),
+              ops: swapIn(
+                { name: 'ErrorMsg', props: listed[0].props },
+                "import { ErrorMsg } from './components/ErrorMsg';",
+              ),
+            },
+            variant(
+              'Larger text',
+              'Plain',
+              'Keeps the markup and enlarges the text.',
+              inline[0],
+              inline[0].replace(/\btext-xs\b/, 'text-sm'),
+            ),
+          ],
+        }
+      : null;
   const renders = shownFile(/^renders OrderButton$/);
   const card = shown.find((file) => file.path.endsWith('MenuCard.tsx'));
   const page = shownFile(/^holds the routed page next to the sketch$/);
@@ -384,92 +554,103 @@ if (/slow/i.test(request) || (/staggered/i.test(request) && slot === 2)) {
         ? grouped
         : crossFile
           ? crossFile
-          : /\b3d\b/i.test(request)
-            ? scene
-            : /pricing/i.test(request)
-              ? pricing
-              : over
-                ? sketchedOver
-                : sketched
-                  ? {
-                      variants: Array.from({ length: /\btwin\b/i.test(request) ? 2 : 1 }, () => ({
-                        ...variant(
-                          cardText,
-                          'Card',
-                          `A card with a ${icon} icon, built from the sketch.`,
-                          '<OrderButton />',
-                          sketchedCard,
-                        ),
-                        ops: [
-                          {
-                            kind: 'replace_snippet',
-                            file,
-                            base_hash: baseHash,
-                            find: "import { Counter } from './components/Counter';",
-                            replace: `import ${icon}Icon from './assets/icons/${icon}-icon.svg';\nimport { Counter } from './components/Counter';`,
-                          },
-                          {
-                            kind: 'replace_snippet',
-                            file,
-                            base_hash: baseHash,
-                            find: '<OrderButton />',
-                            replace: sketchedCard,
-                          },
-                        ],
-                        assets: [
-                          {
-                            name: `${icon}-icon`,
-                            format: 'svg',
-                            svg: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 9h12v5a5 5 0 0 1-5 5H9a5 5 0 0 1-5-5z" fill="#3b2418"/></svg>',
-                          },
-                        ],
-                      })),
-                    }
-                  : headerImage
-                    ? {
-                        variants: [
-                          variant(
-                            'Header image',
-                            'Icon',
-                            'Adds the header image before the label.',
-                            'Order now',
-                            `<img src="${headerImage.replace(/^public/, '')}" alt="" className="size-4" />Order now`,
-                          ),
-                        ],
-                      }
-                    : {
-                        variants: [
-                          variant(
-                            'Blue button',
-                            'Solid',
-                            'Swapped the brand fill for blue.',
-                            'bg-brand',
-                            'bg-[#2563EB]',
-                          ),
-                          /invalid/i.test(request)
-                            ? variant(
-                                'Deep blue',
-                                'Deep',
-                                'A darker blue.',
-                                'bg-nowhere',
-                                'bg-[#1D4ED8]',
-                              )
-                            : variant(
-                                'Deep blue',
-                                'Deep',
-                                'A darker blue.',
-                                'bg-brand',
-                                'bg-[#1D4ED8]',
+          : rewriting
+            ? rewriting
+            : broken
+              ? broken
+              : reuse
+                ? reuse
+                : /\bredesign\b/i.test(request)
+                  ? redesign
+                  : /\b3d\b/i.test(request)
+                    ? scene
+                    : /pricing/i.test(request)
+                      ? pricing
+                      : over
+                        ? sketchedOver
+                        : sketched
+                          ? {
+                              variants: Array.from(
+                                { length: /\btwin\b/i.test(request) ? 2 : 1 },
+                                () => ({
+                                  ...variant(
+                                    cardText,
+                                    'Card',
+                                    `A card with a ${icon} icon, built from the sketch.`,
+                                    '<OrderButton />',
+                                    sketchedCard,
+                                  ),
+                                  ops: [
+                                    {
+                                      kind: 'replace_snippet',
+                                      file,
+                                      base_hash: baseHash,
+                                      find: "import { Counter } from './components/Counter';",
+                                      replace: `import ${icon}Icon from './assets/icons/${icon}-icon.svg';\nimport { Counter } from './components/Counter';`,
+                                    },
+                                    {
+                                      kind: 'replace_snippet',
+                                      file,
+                                      base_hash: baseHash,
+                                      find: '<OrderButton />',
+                                      replace: sketchedCard,
+                                    },
+                                  ],
+                                  assets: [
+                                    {
+                                      name: `${icon}-icon`,
+                                      format: 'svg',
+                                      svg: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 9h12v5a5 5 0 0 1-5 5H9a5 5 0 0 1-5-5z" fill="#3b2418"/></svg>',
+                                    },
+                                  ],
+                                }),
                               ),
-                          variant(
-                            'Outline',
-                            'Outline',
-                            'A white button with a blue border.',
-                            'bg-brand',
-                            'border-2 border-[#2563EB] bg-white',
-                          ),
-                        ],
-                      },
+                            }
+                          : headerImage
+                            ? {
+                                variants: [
+                                  variant(
+                                    'Header image',
+                                    'Icon',
+                                    'Adds the header image before the label.',
+                                    'Order now',
+                                    `<img src="${headerImage.replace(/^public/, '')}" alt="" className="size-4" />Order now`,
+                                  ),
+                                ],
+                              }
+                            : {
+                                variants: [
+                                  variant(
+                                    'Blue button',
+                                    'Solid',
+                                    'Swapped the brand fill for blue.',
+                                    'bg-brand',
+                                    'bg-[#2563EB]',
+                                  ),
+                                  /invalid/i.test(request)
+                                    ? variant(
+                                        'Deep blue',
+                                        'Deep',
+                                        'A darker blue.',
+                                        'bg-nowhere',
+                                        'bg-[#1D4ED8]',
+                                      )
+                                    : variant(
+                                        'Deep blue',
+                                        'Deep',
+                                        'A darker blue.',
+                                        'bg-brand',
+                                        'bg-[#1D4ED8]',
+                                      ),
+                                  variant(
+                                    'Outline',
+                                    'Outline',
+                                    'A white button with a blue border.',
+                                    'bg-brand',
+                                    'border-2 border-[#2563EB] bg-white',
+                                  ),
+                                ],
+                              },
     ),
   });
 }

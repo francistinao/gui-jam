@@ -129,6 +129,11 @@ fn shown(lines: &[&str], anchors: &[u64]) -> Vec<Range<usize>> {
     merged
 }
 
+#[must_use]
+pub fn shows_whole(file: &RelatedFile) -> bool {
+    file.content.split('\n').count() <= WHOLE_FILE_LINES
+}
+
 fn block(file: &RelatedFile) -> String {
     let lines: Vec<&str> = file
         .content
@@ -140,8 +145,13 @@ fn block(file: &RelatedFile) -> String {
         .iter()
         .map(|range| format!("{}-{}", range.start + 1, range.end))
         .collect();
+    let whole = if shows_whole(file) {
+        " whole=\"true\""
+    } else {
+        ""
+    };
     let mut out = format!(
-        "\n<file path=\"{}\" base_hash=\"{}\" lines=\"{}\" why=\"{}\">\n",
+        "\n<file path=\"{}\" base_hash=\"{}\" lines=\"{}\" why=\"{}\"{whole}>\n",
         file.path,
         content_hash(file.content.as_bytes()).as_str(),
         label.join(","),
@@ -166,22 +176,40 @@ fn block(file: &RelatedFile) -> String {
     out
 }
 
-#[must_use]
-pub fn render(related: &[RelatedFile]) -> String {
-    let mut out = String::new();
-    let selected = related.iter().filter(|file| file.selected);
-    let others = related.iter().filter(|file| !file.selected);
-    for file in selected {
-        out.push_str(&block(file));
-    }
-    for file in others {
+fn rendered_blocks(related: &[RelatedFile]) -> Vec<(&RelatedFile, String)> {
+    let mut shown: Vec<(&RelatedFile, String)> = Vec::new();
+    let mut size = 0;
+    for file in related.iter().filter(|file| file.selected) {
         let block = block(file);
-        if !out.is_empty() && out.len() + block.len() > BUDGET {
+        size += block.len();
+        shown.push((file, block));
+    }
+    for file in related.iter().filter(|file| !file.selected) {
+        let block = block(file);
+        if size > 0 && size + block.len() > BUDGET {
             break;
         }
-        out.push_str(&block);
+        size += block.len();
+        shown.push((file, block));
     }
-    out
+    shown
+}
+
+#[must_use]
+pub fn render(related: &[RelatedFile]) -> String {
+    rendered_blocks(related)
+        .into_iter()
+        .map(|(_, block)| block)
+        .collect()
+}
+
+#[must_use]
+pub fn shown_whole(related: &[RelatedFile]) -> Vec<&str> {
+    rendered_blocks(related)
+        .into_iter()
+        .filter(|(file, _)| shows_whole(file))
+        .map(|(file, _)| file.path.as_str())
+        .collect()
 }
 
 #[cfg(test)]
@@ -303,13 +331,31 @@ mod tests {
     }
 
     #[test]
+    fn reports_which_files_were_shown_whole_within_the_budget() {
+        let short = related(
+            "src/App.tsx",
+            "export const App = () => <main />;\n",
+            &[1],
+            "renders Card",
+        );
+        let long_text = "x\n".repeat(500);
+        let long = related("src/Long.tsx", &long_text, &[250], "named in the request");
+        let big_text = "y\n".repeat(390) + &"z".repeat(70 * 1024);
+        let big = related("src/Big.tsx", &big_text, &[2], "named in the request");
+
+        let files = [short, long, big];
+
+        assert_eq!(super::shown_whole(&files), ["src/App.tsx"]);
+    }
+
+    #[test]
     fn shows_a_short_file_whole_with_its_hash_and_why() {
         let content = "import { Card } from './Card';\n\nexport const App = () => <Card />;\n";
 
         let text = render(&[related("src/App.tsx", content, &[3], "renders Card")]);
 
         assert!(text.starts_with(&format!(
-            "\n<file path=\"src/App.tsx\" base_hash=\"{}\" lines=\"1-4\" why=\"renders Card\">\n",
+            "\n<file path=\"src/App.tsx\" base_hash=\"{}\" lines=\"1-4\" why=\"renders Card\" whole=\"true\">\n",
             content_hash(content.as_bytes()).as_str()
         )));
         assert!(text.contains("   3 | export const App = () => <Card />;\n"));

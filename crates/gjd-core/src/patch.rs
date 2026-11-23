@@ -54,9 +54,21 @@ pub enum PatchError {
     },
     #[error("{file} would no longer parse: {source}")]
     Syntax { file: String, source: JsxError },
+    #[error("{file} is rewritten and also edited in the same change")]
+    RewriteWithEdits { file: String },
+    #[error("op {op}: the new {file} is {bytes} bytes, over the {MAX_REWRITE_BYTES}-byte limit")]
+    TooLarge {
+        op: usize,
+        file: String,
+        bytes: usize,
+    },
 }
 
+pub const MAX_REWRITE_BYTES: usize = 256 * 1024;
+
 type StyleKey<'a> = (&'a str, u64, u64);
+
+const BOM: char = '\u{feff}';
 
 struct TextEdit {
     op: usize,
@@ -83,6 +95,13 @@ pub fn apply_with(
 ) -> Result<BTreeMap<String, String>, PatchError> {
     let mut edits: BTreeMap<&str, Vec<TextEdit>> = BTreeMap::new();
     let mut styles: Vec<(StyleKey<'_>, Vec<usize>)> = Vec::new();
+    let rewritten: Vec<&str> = ops
+        .iter()
+        .filter_map(|edit_op| match edit_op {
+            EditOp::RewriteFile { file, .. } => Some(file.as_str()),
+            _ => None,
+        })
+        .collect();
     for (op, edit_op) in ops.iter().enumerate() {
         if let EditOp::StyleProp { file, at, .. } = edit_op {
             let key = (file.as_str(), at.line.get(), at.column.get());
@@ -102,6 +121,11 @@ pub fn apply_with(
 
     let mut changed = BTreeMap::new();
     for (file, mut file_edits) in edits {
+        if file_edits.len() > 1 && rewritten.contains(&file) {
+            return Err(PatchError::RewriteWithEdits {
+                file: file.to_owned(),
+            });
+        }
         file_edits.sort_by_key(|edit| (edit.range.start, edit.range.end));
         if let Some(pair) = file_edits
             .windows(2)
@@ -254,10 +278,11 @@ fn resolve<'s>(
             op,
             kind: "create_file",
         }),
-        EditOp::RewriteFile { .. } => Err(PatchError::Unsupported {
-            op,
-            kind: "rewrite_file",
-        }),
+        EditOp::RewriteFile {
+            file,
+            base_hash,
+            content,
+        } => resolve_rewrite(op, current(op, file, base_hash, sources)?, content),
     }
 }
 
@@ -312,6 +337,50 @@ fn resolve_text(
         range,
         text: content::encode(value),
     })
+}
+
+fn resolve_rewrite<'s>(
+    op: usize,
+    (path, source): (&'s str, &'s str),
+    content: &str,
+) -> Result<(&'s str, TextEdit), PatchError> {
+    if content.len() > MAX_REWRITE_BYTES {
+        return Err(PatchError::TooLarge {
+            op,
+            file: path.to_owned(),
+            bytes: content.len(),
+        });
+    }
+    Ok((path, rewrite(op, source, content)))
+}
+
+fn rewrite(op: usize, source: &str, content: &str) -> TextEdit {
+    let mut text = if uses_crlf(source) {
+        to_crlf(content)
+    } else {
+        content.to_owned()
+    };
+    if source.starts_with(BOM) && !text.starts_with(BOM) {
+        text.insert(0, BOM);
+    }
+    let prefix: usize = source
+        .chars()
+        .zip(text.chars())
+        .take_while(|(old, new)| old == new)
+        .map(|(old, _)| old.len_utf8())
+        .sum();
+    let suffix: usize = source[prefix..]
+        .chars()
+        .rev()
+        .zip(text[prefix..].chars().rev())
+        .take_while(|(old, new)| old == new)
+        .map(|(old, _)| old.len_utf8())
+        .sum();
+    TextEdit {
+        op,
+        range: prefix..source.len() - suffix,
+        text: text[prefix..text.len() - suffix].to_owned(),
+    }
 }
 
 fn uses_crlf(source: &str) -> bool {
@@ -626,6 +695,130 @@ mod tests {
     }
 
     const CARD: &str = "export const B = () => (\n  <div>\n    <b />\n  </div>\n);\n";
+
+    fn rewrite_op(file: &str, base: &str, content: &str) -> EditOp {
+        op(json!({
+            "kind": "rewrite_file", "file": file, "base_hash": content_hash(base.as_bytes()).as_str(),
+            "content": content,
+        }))
+    }
+
+    const CARDS: &str = "import { cn } from './cn';\n\nexport function Cards() {\n  return (\n    <div className=\"grid grid-cols-4\">\n      <article>Total</article>\n    </div>\n  );\n}\n";
+
+    #[test]
+    fn a_rewrite_writes_the_whole_new_file_and_changes_only_what_differs() {
+        let redesigned = CARDS.replace(
+            "      <article>Total</article>\n",
+            "      <article className=\"rounded-xl\">Total<svg /></article>\n      <article>Storage</article>\n",
+        );
+
+        let changed =
+            apply(&sources(CARDS), &[rewrite_op(FILE, CARDS, &redesigned)]).expect("applies");
+
+        assert_eq!(changed[FILE], redesigned);
+    }
+
+    #[test]
+    fn a_rewrite_keeps_windows_line_endings_and_a_byte_order_mark() {
+        let windows = format!("\u{feff}{}", CARDS.replace('\n', "\r\n"));
+        let redesigned = CARDS.replace("Total", "Total documents");
+
+        let changed = apply(
+            &sources(&windows),
+            &[rewrite_op(FILE, &windows, &redesigned)],
+        )
+        .expect("applies");
+
+        assert_eq!(
+            changed[FILE],
+            format!("\u{feff}{}", redesigned.replace('\n', "\r\n"))
+        );
+    }
+
+    #[test]
+    fn a_rewrite_with_the_same_content_changes_nothing() {
+        let changed = apply(&sources(CARDS), &[rewrite_op(FILE, CARDS, CARDS)]).expect("applies");
+
+        assert_eq!(changed[FILE], CARDS);
+    }
+
+    #[test]
+    fn a_rewrite_of_a_changed_file_is_stale() {
+        let older = CARDS.replace("Total", "All");
+
+        assert!(matches!(
+            apply(&sources(CARDS), &[rewrite_op(FILE, &older, CARDS)]),
+            Err(PatchError::StaleBase { op: 0, .. })
+        ));
+    }
+
+    #[test]
+    fn a_rewrite_must_be_the_only_edit_to_its_file() {
+        let ops = [
+            rewrite_op(FILE, CARDS, &CARDS.replace("Total", "Sum")),
+            snippet(CARDS, "grid-cols-4", "grid-cols-2"),
+        ];
+
+        assert_eq!(
+            apply(&sources(CARDS), &ops),
+            Err(PatchError::RewriteWithEdits {
+                file: FILE.to_owned()
+            })
+        );
+    }
+
+    #[test]
+    fn a_rewrite_goes_with_edits_to_other_files() {
+        let other = "src/C.tsx";
+        let card = "export const C = () => <p className=\"p-2\" />;\n";
+        let sources = BTreeMap::from([
+            (FILE.to_owned(), CARDS.to_owned()),
+            (other.to_owned(), card.to_owned()),
+        ]);
+        let ops = [
+            rewrite_op(FILE, CARDS, &CARDS.replace("Total", "Sum")),
+            op(json!({
+                "kind": "replace_snippet", "file": other,
+                "base_hash": content_hash(card.as_bytes()).as_str(), "find": "p-2", "replace": "p-4",
+            })),
+        ];
+
+        let changed = apply(&sources, &ops).expect("applies");
+
+        assert!(changed[FILE].contains("Sum"));
+        assert!(changed[other].contains("p-4"));
+    }
+
+    #[test]
+    fn a_rewrite_that_breaks_the_file_or_is_too_big_is_refused() {
+        let broken = CARDS.replace("  );\n}", "  );\n");
+        let huge = format!("{CARDS}{}", " ".repeat(super::MAX_REWRITE_BYTES));
+
+        assert!(matches!(
+            apply(&sources(CARDS), &[rewrite_op(FILE, CARDS, &broken)]),
+            Err(PatchError::Syntax { .. })
+        ));
+        assert!(matches!(
+            apply(&sources(CARDS), &[rewrite_op(FILE, CARDS, &huge)]),
+            Err(PatchError::TooLarge { op: 0, .. })
+        ));
+    }
+
+    #[test]
+    fn a_rewrite_of_text_with_multibyte_characters_stays_on_char_boundaries() {
+        let korean = "export const K = () => <p>오늘의 추천 라떼</p>;\n";
+        let changed = apply(
+            &sources(korean),
+            &[rewrite_op(
+                FILE,
+                korean,
+                &korean.replace("라떼", "우베 라떼"),
+            )],
+        )
+        .expect("applies");
+
+        assert_eq!(changed[FILE], korean.replace("라떼", "우베 라떼"));
+    }
 
     fn text_op(file: &str, content: &str, needle: &str, run: u64, value: &str) -> EditOp {
         let (line, column) = crate::srcloc::LineIndex::new(content)

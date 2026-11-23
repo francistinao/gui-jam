@@ -35,6 +35,7 @@ use tokio::sync::{Semaphore, mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
 use crate::assets::{self, AssetFile, Format};
+use crate::components::{self, ComponentIndex};
 use crate::config;
 use crate::diff::code_changes;
 use crate::found_text;
@@ -62,6 +63,7 @@ const MAX_NEEDS: usize = 4;
 const READ_CONCURRENCY: usize = 32;
 const PAGE_WHY: &str = "holds the routed page next to the sketch";
 const NAMED_WHY: &str = "named in the request";
+const PLACES_COPY_WHY: &str = "places this copy";
 const SELECTED_WHY: &str = "selected too";
 const MAX_ALSO_SELECTED: usize = 4;
 const SUMMARY_TEXT_CHARS: usize = 40;
@@ -349,12 +351,147 @@ fn not_authenticated(provider: ProviderId, login_command: &str, detail: Option<&
     Failure::new(ErrorCode::ProviderNotAuthenticated, message).with_action(action)
 }
 
-fn invalid_output(detail: &str) -> Failure {
-    Failure::new(
-        ErrorCode::ProviderInvalidOutput,
-        format!("The model's answer wasn't valid edits: {detail}"),
-    )
-    .with_action("Retry, or simplify the prompt.")
+fn invalid_output(reason: &str) -> Failure {
+    Failure::new(ErrorCode::ProviderInvalidOutput, reason.to_owned()).with_action(RETRY)
+}
+
+fn plain_reason(error: &PatchError) -> String {
+    match error {
+        PatchError::UnknownFile { file, .. } => {
+            format!("{NOT_SHOWN}{file}, which GUIJam didn't share with it.")
+        }
+        PatchError::StaleBase { file, .. } => format!("{file}{STALE}"),
+        PatchError::Element { source, .. } => match source {
+            JsxError::ElementNotFound { line, column } => {
+                format!("Its edit points at line {line}, column {column}, where no element starts.")
+            }
+            JsxError::Syntax(detail) => format!(
+                "Its edit landed in code GUIJam can't read ({}).",
+                first_line(detail)
+            ),
+            JsxError::UnsupportedFile(file) => {
+                format!("It edited {file} in a way GUIJam can't apply to that kind of file.")
+            }
+        },
+        PatchError::NotEditable { .. } => {
+            "It edited a className that is computed at runtime, so it can't be changed directly."
+                .to_owned()
+        }
+        PatchError::StyleNotEditable { .. } => {
+            "It edited a style that is computed at runtime, so it can't be changed directly."
+                .to_owned()
+        }
+        PatchError::AttributeNotEditable { name, .. } => {
+            format!("It edited {name}, which is set at runtime, so it can't be changed directly.")
+        }
+        PatchError::TextNotEditable { .. } => {
+            "It edited text that isn't plain text in the element.".to_owned()
+        }
+        PatchError::NoTextAt {
+            file, line, column, ..
+        } => format!("Its edit points at {file}:{line}:{column}, where no text starts."),
+        PatchError::SnippetNotUnique { file, count: 0, .. } => {
+            format!("Its edit quoted code that isn't in {file}.")
+        }
+        PatchError::SnippetNotUnique { file, count, .. } => format!(
+            "Its edit quoted code that appears {count} times in {file}, so GUIJam can't tell which to change."
+        ),
+        PatchError::Unsupported { kind, .. } => {
+            format!("It used a {kind} edit, which GUIJam can't apply there.")
+        }
+        PatchError::Overlap { file, .. } => {
+            format!("Two of its edits change the same lines of {file}.")
+        }
+        PatchError::Syntax { file, source } => {
+            let detail = match source {
+                JsxError::Syntax(detail) => first_line(detail).to_owned(),
+                other => other.to_string(),
+            };
+            format!("Its change would leave {file} unable to compile ({detail}).")
+        }
+        PatchError::RewriteWithEdits { file } => {
+            format!("It rewrote {file} and also edited parts of it.")
+        }
+        PatchError::TooLarge { file, .. } => format!(
+            "Its rewrite of {file} is over {} KB.",
+            patch::MAX_REWRITE_BYTES / 1024
+        ),
+    }
+}
+
+fn first_line(text: &str) -> &str {
+    text.lines().next().unwrap_or(text).trim()
+}
+
+const RETRY: &str = "Retry, or simplify the prompt.";
+const UNPLACED: &str = "It made new components but didn't put them on the page.";
+const NOT_SHOWN: &str = "It tried to change ";
+const PARTIAL_REWRITE: &str = "It rewrote all of ";
+const PARTIAL_REWRITE_END: &str = ", but was shown only part of it.";
+const STALE: &str = " changed since the AI read it.";
+
+#[derive(Clone, Copy)]
+struct Shared<'a> {
+    count: i64,
+    placed: bool,
+    name: Option<&'a str>,
+}
+
+fn advice_for(reason: &str, shared: Option<Shared<'_>>) -> Option<String> {
+    if reason == UNPLACED {
+        return Some(match shared.filter(|shared| !shared.placed) {
+            Some(Shared {
+                count,
+                name: Some(name),
+                ..
+            }) => format!(
+                "{name} is used {count}× on this page. Select something inside this {name} instead, or Shift+click it to add it to the selection, then retry."
+            ),
+            Some(Shared { count, .. }) => format!(
+                "This element is used {count}× on this page. Select something inside it instead, or Shift+click it to add it to the selection, then retry."
+            ),
+            None => "Retry, and say where the new part goes, for example \"replace what this section shows\".".to_owned(),
+        });
+    }
+    if reason.starts_with(PARTIAL_REWRITE) {
+        return Some(
+            "Select a smaller element, or ask for a smaller change, then retry.".to_owned(),
+        );
+    }
+    if reason.starts_with(NOT_SHOWN) {
+        return Some(
+            "Name that file in your prompt so GUIJam shares it with the AI, then retry.".to_owned(),
+        );
+    }
+    reason
+        .ends_with(STALE)
+        .then(|| "Generate again.".to_owned())
+}
+
+fn rejected(reasons: &[&str], shared: Option<Shared<'_>>) -> Failure {
+    let mut unique: Vec<&str> = Vec::new();
+    for reason in reasons {
+        if !unique.contains(reason) {
+            unique.push(reason);
+        }
+    }
+    let action = unique
+        .iter()
+        .find_map(|reason| advice_for(reason, shared))
+        .unwrap_or_else(|| RETRY.to_owned());
+    Failure::new(ErrorCode::ProviderInvalidOutput, unique.join(" ")).with_action(action)
+}
+
+fn none_usable(tried: usize, failure: Failure) -> Failure {
+    let head = if tried == 1 {
+        "The variant couldn't be used.".to_owned()
+    } else {
+        format!("None of the {tried} variants could be used.")
+    };
+    Failure {
+        message: format!("{head} {}", failure.message),
+        ..failure
+    }
 }
 
 type Contents = BTreeMap<String, String>;
@@ -362,7 +499,7 @@ type Contents = BTreeMap<String, String>;
 fn apply_variant(ops: &[EditOp], editable: &Contents) -> Result<Contents, Failure> {
     if ops.is_empty() || ops.len() > generate::MAX_OPS {
         return Err(invalid_output(&format!(
-            "it proposed {} edits; 1 to {} are allowed",
+            "Its answer had {} edits; GUIJam takes 1 to {}.",
             ops.len(),
             generate::MAX_OPS
         )));
@@ -372,9 +509,11 @@ fn apply_variant(ops: &[EditOp], editable: &Contents) -> Result<Contents, Failur
         .map(generate::op_file)
         .find(|op_file| !editable.contains_key(*op_file))
     {
-        return Err(invalid_output(&format!(
-            "it edits {other}, which it was not shown"
-        )));
+        return Err(Failure::new(
+            ErrorCode::ProviderInvalidOutput,
+            format!("{NOT_SHOWN}{other}, which GUIJam didn't share with it."),
+        )
+        .with_action(RETRY));
     }
     let changed: Contents = patch::apply(editable, ops)
         .map_err(model_patch_failure)?
@@ -382,19 +521,18 @@ fn apply_variant(ops: &[EditOp], editable: &Contents) -> Result<Contents, Failur
         .filter(|(file, content)| editable.get(file) != Some(content))
         .collect();
     if changed.is_empty() {
-        return Err(invalid_output("it changed nothing"));
+        return Err(invalid_output("Its answer changed nothing."));
     }
     Ok(changed)
 }
 
 fn model_patch_failure(error: PatchError) -> Failure {
     match error {
-        PatchError::StaleBase { file, .. } => Failure::new(
-            ErrorCode::StaleBase,
-            format!("{file} changed since the AI read it."),
-        )
-        .with_action("Generate again."),
-        other => invalid_output(&other.to_string()),
+        PatchError::StaleBase { file, .. } => {
+            Failure::new(ErrorCode::StaleBase, format!("{file}{STALE}"))
+                .with_action("Generate again.")
+        }
+        other => invalid_output(&plain_reason(&other)),
     }
 }
 
@@ -434,6 +572,15 @@ struct Checks<'a> {
     taken: &'a [String],
     project: &'a Project,
     root: &'a Path,
+    shared: Option<Shared<'a>>,
+    whole: &'a BTreeSet<String>,
+}
+
+fn partial_rewrite<'o>(ops: &'o [EditOp], whole: &BTreeSet<String>) -> Option<&'o str> {
+    ops.iter().find_map(|op| match op {
+        EditOp::RewriteFile { file, .. } if !whole.contains(file.as_str()) => Some(file.as_str()),
+        _ => None,
+    })
 }
 
 fn edits_of(ops: &[EditOp], editable: &Contents) -> Vec<EditOp> {
@@ -519,10 +666,46 @@ fn files_for(variant: &Variant, checks: &Checks<'_>) -> Result<Vec<AssetFile>, S
     Ok(files)
 }
 
+const LOCAL_PREFIXES: [&str; 5] = ["./", "../", "@/", "~/", "$lib/"];
+const MODULE_EXTENSIONS: [&str; 9] = [
+    "ts", "tsx", "js", "jsx", "mjs", "mts", "vue", "svelte", "astro",
+];
+
+fn checkable_import(specifier: &str) -> bool {
+    let local = LOCAL_PREFIXES
+        .iter()
+        .any(|prefix| specifier.starts_with(prefix));
+    let path = specifier.split('?').next().unwrap_or(specifier);
+    let name = path.rsplit('/').next().unwrap_or(path);
+    let module = name
+        .rsplit_once('.')
+        .is_none_or(|(_, extension)| MODULE_EXTENSIONS.contains(&extension));
+    local && module
+}
+
+fn missing_import(
+    bases: &Contents,
+    contents: &Contents,
+    created: &[AssetFile],
+    existing: &[String],
+) -> Option<String> {
+    let mut known: BTreeSet<&str> = existing.iter().map(String::as_str).collect();
+    known.extend(created.iter().map(|asset| asset.path.as_str()));
+    contents.iter().find_map(|(file, content)| {
+        let before: BTreeSet<String> = bases.get(file).map_or_else(BTreeSet::new, |base| {
+            found_text::imports(file, base).into_iter().collect()
+        });
+        found_text::imports(file, content)
+            .into_iter()
+            .filter(|specifier| !before.contains(specifier) && checkable_import(specifier))
+            .find(|specifier| found_text::resolve(file, specifier, &known).is_none())
+            .map(|specifier| format!("It imports {specifier}, which doesn't exist."))
+    })
+}
+
 fn validate_variants(
     variants: Vec<Variant>,
     editable: &Contents,
-    file: &str,
     checks: &Checks<'_>,
 ) -> Result<Validated, Failure> {
     let mut valid: Vec<(Variant, Contents, Vec<AssetFile>)> = Vec::new();
@@ -531,20 +714,28 @@ fn validate_variants(
         let label = String::from(variant.label.clone());
         let edits = edits_of(&variant.ops, editable);
         let creates = variant.ops.len() - edits.len();
+        if let Some(file) = partial_rewrite(&edits, checks.whole) {
+            dropped.push(GenerateDoneDroppedItem {
+                label: Some(label),
+                reason: format!("{PARTIAL_REWRITE}{file}{PARTIAL_REWRITE_END}"),
+            });
+            continue;
+        }
         let reason = match apply_variant(&edits, editable) {
             Ok(content) if valid.iter().any(|(_, other, _)| *other == content) => {
                 "It is the same as another variant.".to_owned()
             }
             Ok(content) => match files_for(&variant, checks) {
-                Ok(files) => {
-                    valid.push((variant, content, files));
-                    continue;
-                }
+                Ok(files) => match missing_import(editable, &content, &files, checks.existing) {
+                    None => {
+                        valid.push((variant, content, files));
+                        continue;
+                    }
+                    Some(reason) => reason,
+                },
                 Err(reason) => reason,
             },
-            Err(_) if edits.is_empty() && creates > 0 => {
-                format!("It creates components but doesn't place them in {file}.")
-            }
+            Err(_) if edits.is_empty() && creates > 0 => UNPLACED.to_owned(),
             Err(failure) => failure.message,
         };
         dropped.push(GenerateDoneDroppedItem {
@@ -555,9 +746,8 @@ fn validate_variants(
     if valid.is_empty() {
         let reasons: Vec<&str> = dropped.iter().map(|item| item.reason.as_str()).collect();
         return Err(match reasons.as_slice() {
-            [] => invalid_output("it proposed no variant"),
-            _ => Failure::new(ErrorCode::ProviderInvalidOutput, reasons.join(" "))
-                .with_action("Retry, or simplify the prompt."),
+            [] => invalid_output("It sent no variant."),
+            _ => rejected(&reasons, checks.shared),
         });
     }
     Ok((valid, dropped))
@@ -614,6 +804,45 @@ fn also_edits(selected: &str, contents: &Contents) -> String {
     }
 }
 
+fn shown_whole(
+    request: &GenerateRequest,
+    source: &str,
+    related: &Related,
+    tier: &TierConfig,
+) -> BTreeSet<String> {
+    let total = generate::line_count(source);
+    let line = usize::try_from(request.line.get()).unwrap_or(usize::MAX);
+    let mut whole: BTreeSet<String> = related::shown_whole(&related.files)
+        .into_iter()
+        .map(str::to_owned)
+        .collect();
+    if generate::source_window(total, line, tier) == (1, total) {
+        whole.insert(request.file.clone());
+    }
+    whole
+}
+
+fn signature_of(style: &ElementStyle) -> components::rank::Signature {
+    components::rank::Signature {
+        tag: style.tag.clone(),
+        classes: style
+            .tokens
+            .iter()
+            .map(|token| token.token.clone())
+            .collect(),
+        role: None,
+        text: style
+            .content
+            .iter()
+            .filter_map(|part| match part {
+                ContentPart::Text { value, .. } => Some(value.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join(" "),
+    }
+}
+
 fn full_prompt(job: &Job<'_>, tier: &TierConfig, references: &str, linked: &str) -> String {
     let element = generate::user_prompt(
         job.style,
@@ -628,7 +857,21 @@ fn full_prompt(job: &Job<'_>, tier: &TierConfig, references: &str, linked: &str)
         .map(|picked| (&picked.style, picked.component.as_ref()))
         .collect();
     let also = generate::also_selected(&group);
-    format!("{element}{also}{references}{linked}")
+    let placed = job
+        .related
+        .files
+        .iter()
+        .find(|file| file.why.starts_with(PLACES_COPY_WHY));
+    let copies = match (job.request.instance.as_ref(), placed) {
+        (Some(instance), Some(file)) => generate::copies(
+            instance.count,
+            instance.index,
+            instance.text.as_deref().map(String::as_str),
+            &file.path,
+        ),
+        _ => String::new(),
+    };
+    format!("{element}{copies}{also}{references}{linked}")
 }
 
 fn group_files(request: &GenerateRequest, group: &[Picked]) -> Vec<RelatedFile> {
@@ -651,6 +894,52 @@ fn group_files(request: &GenerateRequest, group: &[Picked]) -> Vec<RelatedFile> 
         );
     }
     found
+}
+
+fn shared_of<'a>(job: &'a Job<'_>) -> Option<Shared<'a>> {
+    let instance = job.request.instance.as_ref()?;
+    Some(Shared {
+        count: instance.count,
+        placed: job
+            .related
+            .files
+            .iter()
+            .any(|file| file.why.starts_with(PLACES_COPY_WHY)),
+        name: job
+            .related
+            .component
+            .as_ref()
+            .filter(|component| component.root)
+            .map(|component| component.name.as_str()),
+    })
+}
+
+fn placed_copy_src(request: &GenerateRequest) -> Option<(String, u64)> {
+    let at = request.instance.as_ref()?.placed_at.as_ref()?;
+    let (file, line, _) = references::parse_src(at)?;
+    (file != request.file).then(|| (file.to_owned(), line))
+}
+
+fn placed_copy_file(
+    path: String,
+    content: String,
+    line: u64,
+    component: &Component,
+) -> Option<RelatedFile> {
+    let mut anchors = related::render_lines(&path, &content, &component.name);
+    if anchors.is_empty() {
+        return None;
+    }
+    anchors.push(line);
+    anchors.sort_unstable();
+    anchors.dedup();
+    Some(RelatedFile {
+        path,
+        content,
+        anchors,
+        why: format!("{PLACES_COPY_WHY} of {}", component.name),
+        selected: false,
+    })
 }
 
 fn rendered_by(site: RenderSite, name: &str) -> RelatedFile {
@@ -775,6 +1064,7 @@ enum Asked {
         dropped: Vec<GenerateDoneDroppedItem>,
         update: Option<UpdateResult>,
         first_ms: Option<u64>,
+        retried: bool,
     },
 }
 
@@ -785,6 +1075,22 @@ struct Collected {
     failures: Vec<Failure>,
     update: Option<UpdateResult>,
     first_ms: Option<u64>,
+    retried: bool,
+}
+
+enum Round {
+    Answer(String),
+    Collected(Collected),
+}
+
+fn should_repair(collected: &Collected) -> bool {
+    collected.held.is_empty()
+        && collected.failures.is_empty()
+        && !collected.dropped.is_empty()
+        && collected
+            .dropped
+            .iter()
+            .all(|item| !item.reason.ends_with(STALE))
 }
 
 enum Arrival {
@@ -831,6 +1137,8 @@ struct Job<'a> {
     group: &'a [Picked],
     related: &'a Related,
     editable: &'a Contents,
+    whole: &'a BTreeSet<String>,
+    reuse: bool,
     started: Instant,
     cancel: &'a CancellationToken,
 }
@@ -867,7 +1175,7 @@ impl RunLabels {
     fn variants_ready(
         &self,
         job: &Job<'_>,
-        effort: Effort,
+        (effort, retried): (Effort, bool),
         first_ms: Option<u64>,
         (variants, dropped): (usize, &[GenerateDoneDroppedItem]),
     ) {
@@ -880,6 +1188,7 @@ impl RunLabels {
             all_ms = job.elapsed_ms(),
             variants,
             dropped = dropped.len(),
+            retried,
             targets = job.group.len() + 1,
             "variants ready"
         );
@@ -1010,6 +1319,7 @@ fn dependency_needs(needs: &[Need], manager: PackageManager) -> Option<Dependenc
 pub struct Daemon {
     project: ProjectRoot,
     index: ProjectIndex,
+    components: Arc<ComponentIndex>,
     journal: Arc<Journal>,
     write_lock: tokio::sync::Mutex<()>,
     tailwind_roots: Mutex<Vec<PathBuf>>,
@@ -1033,6 +1343,7 @@ impl Daemon {
     pub fn new(project: ProjectRoot, journal: Journal) -> Self {
         Self {
             index: ProjectIndex::new(project.path()),
+            components: Arc::default(),
             project,
             journal: Arc::new(journal),
             write_lock: tokio::sync::Mutex::new(()),
@@ -1918,6 +2229,12 @@ impl Daemon {
                 .entry(file.path.clone())
                 .or_insert_with(|| file.content.clone());
         }
+        let tier_config = if decision.tier == Tier::R2 {
+            &generate::R2
+        } else {
+            &generate::R1
+        };
+        let whole = shown_whole(&request, &source, &related, tier_config);
         let job = Job {
             request: &request,
             prompt: &prompt,
@@ -1928,6 +2245,8 @@ impl Daemon {
             group: &group,
             related: &related,
             editable: &editable,
+            whole: &whole,
+            reuse: decision.reuse,
             started,
             cancel,
         };
@@ -2028,7 +2347,7 @@ impl Daemon {
         let provider_name = provider.id().display_name();
         let model_label = model.as_deref().unwrap_or("default model");
         let linked = self.read_links(job, &*provider, &mut progress).await?;
-        let references = self.references(job).await;
+        let references = self.references(job, tier).await;
         let mut images = request_images(job.request);
         images.extend(linked.images);
         let timeout = generate::budget(tier, images.len(), job.links.links.len());
@@ -2091,8 +2410,9 @@ impl Daemon {
                 dropped,
                 update,
                 first_ms,
+                retried,
             } => {
-                labels.variants_ready(job, effort, first_ms, (variants.len(), &dropped));
+                labels.variants_ready(job, (effort, retried), first_ms, (variants.len(), &dropped));
                 (variants, dropped, update)
             }
         };
@@ -2122,6 +2442,55 @@ impl Daemon {
         progress: &mut Progress,
         labels: &RunLabels,
     ) -> Result<Asked, Failure> {
+        let tool = (provider, discovery);
+        let first = self
+            .ask_round(tool, base, (question, Step::Ask), job, progress, labels)
+            .await?;
+        let collected = match first {
+            Round::Answer(answer) => return Ok(Asked::Answer(answer)),
+            Round::Collected(collected) => collected,
+        };
+        if question || job.cancel.is_cancelled() || !should_repair(&collected) {
+            return self.finish_variants(job, collected, progress).await;
+        }
+        let reasons: Vec<&str> = collected
+            .dropped
+            .iter()
+            .map(|item| item.reason.as_str())
+            .collect();
+        tracing::info!(
+            run = %labels.key,
+            reasons = reasons.len(),
+            "asking the AI tool to fix its edits"
+        );
+        let mut retry = base.clone();
+        retry.user_prompt = format!("{}{}", base.user_prompt, generate::repair_section(&reasons));
+        progress.repairing();
+        self.report(progress);
+        let second = self
+            .ask_round(tool, &retry, (false, Step::Repair), job, progress, labels)
+            .await?;
+        match second {
+            Round::Answer(answer) => Ok(Asked::Answer(answer)),
+            Round::Collected(collected) => {
+                let collected = Collected {
+                    retried: true,
+                    ..collected
+                };
+                self.finish_variants(job, collected, progress).await
+            }
+        }
+    }
+
+    async fn ask_round(
+        &self,
+        (provider, discovery): (&dyn ProviderAdapter, &Discovery),
+        base: &GenerationRequest,
+        (question, step): (bool, Step),
+        job: &Job<'_>,
+        progress: &mut Progress,
+        labels: &RunLabels,
+    ) -> Result<Round, Failure> {
         let name = provider.id().display_name();
         let directions: Vec<Option<&str>> = if question {
             vec![None]
@@ -2168,7 +2537,7 @@ impl Daemon {
         let mut remaining = directions.len();
         let mut started = 0;
         let free = self.slots.available_permits().min(directions.len());
-        progress.start(Step::Ask);
+        progress.start(step);
         progress.detail(generate::runs_detail(&latest, free, 0, name));
         self.report(progress);
         while remaining > 0 {
@@ -2182,7 +2551,7 @@ impl Daemon {
                         Arrival::More => {}
                         Arrival::Answer(answer) => {
                             tokens.iter().for_each(CancellationToken::cancel);
-                            return Ok(Asked::Answer(answer));
+                            return Ok(Round::Answer(answer));
                         }
                         Arrival::Settled => {
                             tokens.iter().for_each(CancellationToken::cancel);
@@ -2203,7 +2572,7 @@ impl Daemon {
                 }
             }
         }
-        self.finish_variants(job, collected, progress).await
+        Ok(Round::Collected(collected))
     }
 
     async fn take_arrival(
@@ -2279,10 +2648,9 @@ impl Daemon {
                 .map(|item| item.reason.as_str())
                 .collect();
             let fallback = if reasons.is_empty() {
-                invalid_output("it proposed no variant")
+                invalid_output("It sent no variant.")
             } else {
-                Failure::new(ErrorCode::ProviderInvalidOutput, reasons.join(" "))
-                    .with_action("Retry, or simplify the prompt.")
+                none_usable(reasons.len(), rejected(&reasons, shared_of(job)))
             };
             return Err(collected.failures.into_iter().next().unwrap_or(fallback));
         }
@@ -2293,6 +2661,7 @@ impl Daemon {
             dropped: collected.dropped,
             update: collected.update,
             first_ms: collected.first_ms,
+            retried: collected.retried,
         })
     }
 
@@ -2369,7 +2738,6 @@ impl Daemon {
         ),
         Failure,
     > {
-        let file = job.request.file.as_str();
         let existing = self.index.files().await;
         let assets_dir = assets::assets_dir(&existing);
         let taken = self.held_assets(&job.request.run_id);
@@ -2379,8 +2747,10 @@ impl Daemon {
             taken: &taken,
             project: job.project,
             root: self.project.path(),
+            shared: shared_of(job),
+            whole: job.whole,
         };
-        let (valid, dropped) = validate_variants(proposed, job.editable, file, &checks)?;
+        let (valid, dropped) = validate_variants(proposed, job.editable, &checks)?;
         if job.cancel.is_cancelled() {
             return Err(ProviderError::Cancelled.into());
         }
@@ -2432,10 +2802,7 @@ impl Daemon {
         }
         if held.is_empty() {
             let reasons: Vec<&str> = dropped.iter().map(|item| item.reason.as_str()).collect();
-            return Err(
-                Failure::new(ErrorCode::ProviderInvalidOutput, reasons.join(" "))
-                    .with_action("Retry, or simplify the prompt."),
-            );
+            return Err(rejected(&reasons, checks.shared));
         }
         held.sort_by_key(|(variant, _, _)| !variant.needs.is_empty());
         let (variants, first) = self.hold_variants(
@@ -2540,7 +2907,7 @@ impl Daemon {
         })
     }
 
-    async fn references(&self, job: &Job<'_>) -> String {
+    async fn references(&self, job: &Job<'_>, tier: &TierConfig) -> String {
         let files = self.index.files().await;
         let container = format!(
             "{}:{}:{}",
@@ -2566,9 +2933,91 @@ impl Daemon {
         );
         let place = job.related.place_file(&job.request.file);
         let folder = assets::prompt_note(place, &assets::assets_dir(&files));
-        let new_ui = project::new_ui_section(job.project, &files, place);
+        let snapshot = if tier.tier == RouteTier::R2 {
+            self.fresh_components(self.component_inputs(Arc::clone(&files), job.project))
+                .await
+        } else {
+            self.components.snapshot()
+        };
+        let reuse = if tier.tier == RouteTier::R2 {
+            self.components_section(job, &snapshot).await
+        } else {
+            String::new()
+        };
+        let existing: Vec<String> = if snapshot.is_empty() {
+            project::existing_components(job.project, &files)
+        } else {
+            snapshot
+                .reusable(place, project::EXISTING_SHOWN)
+                .into_iter()
+                .map(|entry| format!("{} ({})", entry.name, entry.file))
+                .collect()
+        };
+        let new_ui = project::new_ui_section(job.project, &existing, place);
         let libraries = libraries::prompt_section(job.project);
-        format!("{sketch}{inspiration}{found}{shown}{folder}{new_ui}{libraries}")
+        format!("{sketch}{inspiration}{found}{shown}{reuse}{folder}{new_ui}{libraries}")
+    }
+
+    fn component_inputs(&self, files: Arc<Vec<String>>, project: &Project) -> components::Inputs {
+        components::Inputs {
+            root: self.project.path().to_path_buf(),
+            files,
+            packages: components::workspace::packages(self.project.path(), &project.dependencies),
+            rules: components::registered::Rules::from_dependencies(&project.dependencies),
+        }
+    }
+
+    pub async fn warm_components(&self) {
+        let files = self.index.files().await;
+        let project = project::detect(self.project.path(), &files);
+        let inputs = self.component_inputs(files, &project);
+        self.components.refresh(inputs).await;
+    }
+
+    async fn fresh_components(&self, inputs: components::Inputs) -> Arc<components::Snapshot> {
+        let index = Arc::clone(&self.components);
+        let refresh = tokio::spawn(async move { index.refresh(inputs).await });
+        match tokio::time::timeout(components::WAIT, refresh).await {
+            Ok(Ok(snapshot)) => snapshot,
+            _ => self.components.snapshot(),
+        }
+    }
+
+    async fn components_section(&self, job: &Job<'_>, snapshot: &components::Snapshot) -> String {
+        let selected = job.request.file.as_str();
+        let signature = signature_of(job.style);
+        let matches = snapshot.matches(&components::Query {
+            selected,
+            signature: &signature,
+            prompt: job.prompt,
+            enclosing: job
+                .related
+                .component
+                .as_ref()
+                .map(|component| component.name.as_str()),
+            limit: components::section::limit(job.reuse),
+        });
+        let mut sources = Vec::new();
+        if job.reuse {
+            for found in matches.iter().take(components::section::SOURCES) {
+                let content = match found.entry.origin {
+                    components::Origin::Package(_) => {
+                        tokio::fs::read_to_string(&found.entry.path).await.ok()
+                    }
+                    _ => self.read_project_file(&found.entry.file).await.ok(),
+                };
+                if let Some(content) = content {
+                    sources.push((found.entry.file.clone(), content));
+                }
+            }
+        }
+        tracing::info!(
+            matches = matches.len(),
+            indexed = snapshot.len(),
+            hinted = job.reuse,
+            "matched existing components"
+        );
+        components::section::render(selected, &matches, &sources, job.reuse)
     }
 
     async fn related(
@@ -2585,6 +3034,13 @@ impl Daemon {
         let component =
             jsx::enclosing_component(selected, source, request.line.get(), request.column.get());
         let mut found = group_files(request, group);
+        if let Some(component) = component.as_ref()
+            && let Some((path, line)) = placed_copy_src(request)
+            && let Ok(content) = self.read_project_file(&path).await
+            && let Some(file) = placed_copy_file(path, content, line, component)
+        {
+            related::add(&mut found, file);
+        }
         let on_page = references::page_files(request.page.as_ref());
         let mentioned: Vec<String> =
             references::mentioned_sources(files, prompt, selected, &on_page)
@@ -3621,6 +4077,8 @@ mod tests {
         }
     }
 
+    static NONE_WHOLE: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+
     fn checks<'a>(project: &'a Project, existing: &'a [String], taken: &'a [String]) -> Checks<'a> {
         Checks {
             assets_dir: "src/assets/icons",
@@ -3628,6 +4086,8 @@ mod tests {
             taken,
             project,
             root: Path::new("/nonexistent-project"),
+            shared: None,
+            whole: &NONE_WHOLE,
         }
     }
 
@@ -3647,9 +4107,8 @@ mod tests {
             &[snippet(FILE, &other, "bg-brand", "bg-sea")],
         )];
 
-        let (valid, dropped) =
-            validate_variants(proposed, &only(), FILE, &checks(&react(), &[], &[]))
-                .expect("the variant applies");
+        let (valid, dropped) = validate_variants(proposed, &only(), &checks(&react(), &[], &[]))
+            .expect("the variant applies");
 
         assert!(dropped.is_empty(), "{dropped:?}");
         assert_eq!(valid[0].1[FILE], SOURCE.replace("bg-brand", "bg-sea"));
@@ -3664,9 +4123,8 @@ mod tests {
             variant("Fourth", &[snippet(FILE, SOURCE, "p-2", "p-4")]),
         ];
 
-        let (valid, dropped) =
-            validate_variants(proposed, &only(), FILE, &checks(&react(), &[], &[]))
-                .expect("one survives");
+        let (valid, dropped) = validate_variants(proposed, &only(), &checks(&react(), &[], &[]))
+            .expect("one survives");
 
         let kept: Vec<String> = valid
             .iter()
@@ -3683,7 +4141,11 @@ mod tests {
             "the fourth variant is past the limit: {reasons:?}"
         );
         assert_eq!(reasons[0].0, Some("Lost"));
-        assert!(reasons[0].1.contains("occurs 0 times"), "{}", reasons[0].1);
+        assert!(
+            reasons[0].1.contains("Its edit quoted code that isn't in"),
+            "{}",
+            reasons[0].1
+        );
         assert_eq!(
             reasons[1],
             (Some("Sea again"), "It is the same as another variant.")
@@ -3731,9 +4193,8 @@ mod tests {
         ];
         let project = react();
 
-        let (valid, dropped) =
-            validate_variants(proposed, &only(), FILE, &checks(&project, &[], &[]))
-                .expect("one survives");
+        let (valid, dropped) = validate_variants(proposed, &only(), &checks(&project, &[], &[]))
+            .expect("one survives");
 
         assert_eq!(valid.len(), 1);
         let (_, contents, files) = &valid[0];
@@ -3781,7 +4242,7 @@ mod tests {
             (
                 vec![create(path, ORGANISM)],
                 checks(&project, &[], &[]),
-                "It creates components but doesn't place them in src/B.tsx.",
+                "It made new components but didn't put them on the page.",
             ),
             (
                 vec![place(), create(path, ORGANISM)],
@@ -3815,8 +4276,8 @@ mod tests {
             ),
         ];
         for (ops, checks, reason) in cases {
-            let failure = validate_variants(vec![variant("Only", &ops)], &only(), FILE, &checks)
-                .expect_err(reason);
+            let failure =
+                validate_variants(vec![variant("Only", &ops)], &only(), &checks).expect_err(reason);
             assert!(
                 failure.message.contains(reason),
                 "{reason}: {}",
@@ -3890,7 +4351,7 @@ mod tests {
             "Lost",
             &[snippet(FILE, SOURCE, "bg-nowhere", "bg-sky")],
         )];
-        let failure = validate_variants(lost, &only(), FILE, &checks(&react(), &[], &[]))
+        let failure = validate_variants(lost, &only(), &checks(&react(), &[], &[]))
             .expect_err("none survive");
         assert_eq!(failure.code, ErrorCode::ProviderInvalidOutput);
     }
@@ -3903,8 +4364,268 @@ mod tests {
     const CARD_SOURCE: &str =
         "export function C() {\n  return <section className=\"p-4\">Menu</section>;\n}\n";
 
+    fn rewrite(file: &str, base: &str, content: &str) -> EditOp {
+        serde_json::from_value(json!({
+            "kind": "rewrite_file", "file": file,
+            "base_hash": content_hash(base.as_bytes()).as_str(), "content": content,
+        }))
+        .expect("valid op")
+    }
+
+    #[test]
+    fn a_rewrite_of_a_file_shown_whole_is_kept_and_writes_the_new_file() {
+        let whole = std::collections::BTreeSet::from([FILE.to_owned()]);
+        let project = react();
+        let checks = Checks {
+            whole: &whole,
+            ..checks(&project, &[], &[])
+        };
+        let redesigned = SOURCE.replace("bg-brand p-2", "rounded-xl bg-sea p-4 shadow");
+
+        let (valid, dropped) = validate_variants(
+            vec![variant("Redesigned", &[rewrite(FILE, SOURCE, &redesigned)])],
+            &only(),
+            &checks,
+        )
+        .expect("the rewrite applies");
+
+        assert!(dropped.is_empty(), "{dropped:?}");
+        assert_eq!(valid[0].1[FILE], redesigned);
+    }
+
+    #[test]
+    fn a_rewrite_of_a_file_shown_in_part_is_dropped_with_advice() {
+        let failure = validate_variants(
+            vec![variant(
+                "Everything",
+                &[rewrite(FILE, SOURCE, &SOURCE.replace("p-2", "p-8"))],
+            )],
+            &only(),
+            &checks(&react(), &[], &[]),
+        )
+        .expect_err("dropped");
+
+        assert_eq!(
+            failure.message,
+            "It rewrote all of src/B.tsx, but was shown only part of it."
+        );
+        assert_eq!(
+            failure.action.as_deref(),
+            Some("Select a smaller element, or ask for a smaller change, then retry.")
+        );
+    }
+
+    #[test]
+    fn every_patch_error_reads_as_a_plain_sentence() {
+        use gjd_core::jsx::JsxError;
+        use gjd_core::patch::PatchError;
+
+        let file = "src/StatsCards.tsx".to_owned();
+        let cases = [
+            (
+                PatchError::SnippetNotUnique {
+                    op: 0,
+                    file: file.clone(),
+                    count: 0,
+                },
+                "Its edit quoted code that isn't in src/StatsCards.tsx.",
+            ),
+            (
+                PatchError::SnippetNotUnique {
+                    op: 1,
+                    file: file.clone(),
+                    count: 4,
+                },
+                "Its edit quoted code that appears 4 times in src/StatsCards.tsx, so GUIJam can't tell which to change.",
+            ),
+            (
+                PatchError::Overlap {
+                    first: 0,
+                    second: 1,
+                    file: file.clone(),
+                },
+                "Two of its edits change the same lines of src/StatsCards.tsx.",
+            ),
+            (
+                PatchError::Syntax {
+                    file: file.clone(),
+                    source: JsxError::Syntax("Expected `}` but found `EOF`\n  at 12:3".to_owned()),
+                },
+                "Its change would leave src/StatsCards.tsx unable to compile (Expected `}` but found `EOF`).",
+            ),
+            (
+                PatchError::Element {
+                    op: 0,
+                    source: JsxError::ElementNotFound { line: 9, column: 5 },
+                },
+                "Its edit points at line 9, column 5, where no element starts.",
+            ),
+            (
+                PatchError::RewriteWithEdits { file: file.clone() },
+                "It rewrote src/StatsCards.tsx and also edited parts of it.",
+            ),
+            (
+                PatchError::TooLarge {
+                    op: 0,
+                    file: file.clone(),
+                    bytes: 300_000,
+                },
+                "Its rewrite of src/StatsCards.tsx is over 256 KB.",
+            ),
+            (
+                PatchError::Unsupported {
+                    op: 0,
+                    kind: "create_file",
+                },
+                "It used a create_file edit, which GUIJam can't apply there.",
+            ),
+            (
+                PatchError::UnknownFile {
+                    op: 0,
+                    file: file.clone(),
+                },
+                "It tried to change src/StatsCards.tsx, which GUIJam didn't share with it.",
+            ),
+        ];
+        for (error, sentence) in cases {
+            assert_eq!(super::plain_reason(&error), sentence);
+        }
+        for error in [
+            PatchError::NotEditable { op: 2 },
+            PatchError::StyleNotEditable { op: 2 },
+            PatchError::AttributeNotEditable {
+                op: 2,
+                name: "href".to_owned(),
+            },
+            PatchError::TextNotEditable { op: 2, run: 1 },
+            PatchError::NoTextAt {
+                op: 2,
+                file: file.clone(),
+                line: 3,
+                column: 4,
+            },
+            PatchError::StaleBase {
+                op: 2,
+                file: file.clone(),
+            },
+        ] {
+            let sentence = super::plain_reason(&error);
+            assert!(!sentence.contains("op 2"), "{sentence}");
+            assert!(sentence.ends_with('.'), "{sentence}");
+        }
+    }
+
+    #[test]
+    fn only_a_round_whose_every_variant_was_dropped_for_its_edits_is_retried() {
+        use super::{Collected, Failure, GenerateDoneDroppedItem, should_repair};
+
+        let dropped = |reason: &str| GenerateDoneDroppedItem {
+            label: None,
+            reason: reason.to_owned(),
+        };
+        let quoted = "Its edit quoted code that isn't in src/A.tsx.";
+        let failed = Collected {
+            dropped: vec![dropped(quoted), dropped(quoted), dropped(quoted)],
+            ..Collected::default()
+        };
+        let stale = Collected {
+            dropped: vec![
+                dropped(quoted),
+                dropped("src/A.tsx changed since the AI read it."),
+            ],
+            ..Collected::default()
+        };
+        let crashed = Collected {
+            dropped: vec![dropped("Claude Code stopped.")],
+            failures: vec![Failure::new(
+                ErrorCode::ProviderInvalidOutput,
+                "Claude Code stopped.",
+            )],
+            ..Collected::default()
+        };
+
+        assert!(should_repair(&failed));
+        assert!(!should_repair(&stale));
+        assert!(!should_repair(&crashed));
+        assert!(!should_repair(&Collected::default()));
+    }
+
     fn only() -> Contents {
         Contents::from([(FILE.to_owned(), SOURCE.to_owned())])
+    }
+
+    fn project_files() -> Vec<String> {
+        [
+            FILE,
+            APP,
+            CARD,
+            "src/components/ErrorMessage.tsx",
+            "src/logo.svg",
+        ]
+        .map(str::to_owned)
+        .to_vec()
+    }
+
+    #[test]
+    fn drops_a_variant_that_imports_a_component_that_does_not_exist() {
+        let existing = project_files();
+        let proposed = vec![
+            variant(
+                "Made up",
+                &[snippet(
+                    CARD,
+                    CARD_SOURCE,
+                    "export function C() {",
+                    "import { ErrorMsg } from './components/ErrorMsg';\n\nexport function C() {",
+                )],
+            ),
+            variant(
+                "Real",
+                &[snippet(
+                    CARD,
+                    CARD_SOURCE,
+                    "export function C() {",
+                    "import { ErrorMessage } from '@/components/ErrorMessage';\n\nexport function C() {",
+                )],
+            ),
+        ];
+
+        let (valid, dropped) =
+            validate_variants(proposed, &shown(), &checks(&react(), &existing, &[]))
+                .expect("one variant is valid");
+
+        assert_eq!(valid.len(), 1);
+        assert_eq!(String::from(valid[0].0.label.clone()), "Real");
+        assert_eq!(
+            dropped[0].reason,
+            "It imports ./components/ErrorMsg, which doesn't exist."
+        );
+    }
+
+    #[test]
+    fn leaves_packages_assets_new_files_and_old_imports_to_their_own_checks() {
+        let bases = shown();
+        let created = [super::AssetFile {
+            path: "src/components/organisms/Promo.tsx".to_owned(),
+            preview: "export function Promo() { return <p />; }".to_owned(),
+            content: Vec::new(),
+        }];
+        let contents = Contents::from([(
+            APP.to_owned(),
+            format!(
+                "import logo from './logo.svg';\nimport styles from './missing.module.css';\nimport {{ motion }} from 'motion/react';\nimport {{ Promo }} from './components/organisms/Promo';\n{APP_SOURCE}"
+            ),
+        )]);
+
+        assert_eq!(
+            super::missing_import(&bases, &contents, &created, &project_files()),
+            None
+        );
+        let without_new_file = super::missing_import(&bases, &contents, &[], &project_files());
+        assert_eq!(
+            without_new_file.as_deref(),
+            Some("It imports ./components/organisms/Promo, which doesn't exist.")
+        );
     }
 
     fn shown() -> Contents {
@@ -3925,9 +4646,8 @@ mod tests {
             ],
         )];
 
-        let (valid, dropped) =
-            validate_variants(proposed, &shown(), FILE, &checks(&react(), &[], &[]))
-                .expect("the removal applies");
+        let (valid, dropped) = validate_variants(proposed, &shown(), &checks(&react(), &[], &[]))
+            .expect("the removal applies");
 
         assert!(dropped.is_empty(), "{dropped:?}");
         let contents = &valid[0].1;
@@ -3953,7 +4673,8 @@ mod tests {
             ],
         )];
 
-        let (valid, _) = validate_variants(proposed, &shown(), FILE, &checks(&react(), &[], &[]))
+        let existing = project_files();
+        let (valid, _) = validate_variants(proposed, &shown(), &checks(&react(), &existing, &[]))
             .expect("the move applies");
 
         let contents = &valid[0].1;
@@ -3973,12 +4694,164 @@ mod tests {
             &[snippet("src/Hidden.tsx", SOURCE, "bg-brand", "bg-sea")],
         )];
 
-        let failure = validate_variants(proposed, &shown(), FILE, &checks(&react(), &[], &[]))
+        let failure = validate_variants(proposed, &shown(), &checks(&react(), &[], &[]))
             .expect_err("dropped");
 
         assert_eq!(
             failure.message,
-            "The model's answer wasn't valid edits: it edits src/Hidden.tsx, which it was not shown"
+            "It tried to change src/Hidden.tsx, which GUIJam didn't share with it."
+        );
+        assert_eq!(
+            failure.action.as_deref(),
+            Some("Name that file in your prompt so GUIJam shares it with the AI, then retry.")
+        );
+    }
+
+    #[test]
+    fn many_unusable_variants_give_one_error_that_names_each_reason_once() {
+        let unplaced = super::UNPLACED;
+        let failure = super::none_usable(3, super::rejected(&[unplaced, unplaced, unplaced], None));
+        assert_eq!(
+            failure.message,
+            "None of the 3 variants could be used. It made new components but didn't put them on the page."
+        );
+        assert_eq!(
+            failure.action.as_deref(),
+            Some(
+                "Retry, and say where the new part goes, for example \"replace what this section shows\"."
+            )
+        );
+
+        let mixed = super::rejected(
+            &[
+                "It imports ./Chart, which doesn't exist.",
+                unplaced,
+                "It imports ./Chart, which doesn't exist.",
+            ],
+            None,
+        );
+        assert_eq!(
+            mixed.message,
+            "It imports ./Chart, which doesn't exist. It made new components but didn't put them on the page."
+        );
+        assert!(
+            mixed
+                .action
+                .as_deref()
+                .is_some_and(|action| action.starts_with("Retry, and say where"))
+        );
+
+        let plain = super::none_usable(
+            1,
+            super::rejected(&["It is the same as another variant."], None),
+        );
+        assert_eq!(
+            plain.message,
+            "The variant couldn't be used. It is the same as another variant."
+        );
+        assert_eq!(plain.action.as_deref(), Some(super::RETRY));
+
+        let stale = super::rejected(&["src/B.tsx changed since the AI read it."], None);
+        assert_eq!(stale.action.as_deref(), Some("Generate again."));
+        assert_eq!(stale.code, ErrorCode::ProviderInvalidOutput);
+    }
+
+    #[test]
+    fn new_components_left_off_the_page_get_advice_that_fits_the_selection() {
+        use super::Shared;
+
+        let ops = [create("src/components/organisms/Chart.tsx", ORGANISM)];
+        let project = react();
+        let advice = |shared: Option<Shared<'_>>| {
+            let checks = Checks {
+                shared,
+                ..checks(&project, &[], &[])
+            };
+            let failure = validate_variants(vec![variant("Only", &ops)], &only(), &checks)
+                .expect_err("dropped");
+            assert_eq!(failure.message, super::UNPLACED);
+            failure.action.unwrap_or_default()
+        };
+
+        assert_eq!(
+            advice(Some(Shared {
+                count: 11,
+                placed: false,
+                name: Some("Card")
+            })),
+            "Card is used 11× on this page. Select something inside this Card instead, or Shift+click it to add it to the selection, then retry."
+        );
+        assert_eq!(
+            advice(Some(Shared {
+                count: 3,
+                placed: false,
+                name: None
+            })),
+            "This element is used 3× on this page. Select something inside it instead, or Shift+click it to add it to the selection, then retry."
+        );
+        let say_where = "Retry, and say where the new part goes, for example \"replace what this section shows\".";
+        assert_eq!(
+            advice(Some(Shared {
+                count: 11,
+                placed: true,
+                name: Some("Card")
+            })),
+            say_where
+        );
+        assert_eq!(advice(None), say_where);
+    }
+
+    #[test]
+    fn the_file_that_places_the_selected_copy_is_shared_with_its_render_lines() {
+        use gjd_core::contracts::GenerateRequest;
+
+        let request = |instance: serde_json::Value| -> GenerateRequest {
+            serde_json::from_value(json!({
+                "runId": "r1", "file": "src/components/ui/card.tsx", "line": 4, "column": 5,
+                "prompt": "change this analytic into the image", "instance": instance,
+            }))
+            .expect("request")
+        };
+        assert_eq!(
+            super::placed_copy_src(&request(
+                json!({ "count": 11, "placedAt": "src/Dashboard.tsx:42:11" })
+            )),
+            Some(("src/Dashboard.tsx".to_owned(), 42))
+        );
+        assert_eq!(
+            super::placed_copy_src(&request(
+                json!({ "count": 11, "placedAt": "src/components/ui/card.tsx:9:3" })
+            )),
+            None
+        );
+        assert_eq!(
+            super::placed_copy_src(&request(json!({ "count": 11, "placedAt": "nowhere" }))),
+            None
+        );
+        assert_eq!(
+            super::placed_copy_src(&request(json!({ "count": 11 }))),
+            None
+        );
+
+        let dashboard = "import { Card } from './components/ui/card';\n\nexport function Dashboard() {\n  return (\n    <div>\n      <Card>Revenue</Card>\n      <Card>\n        <p>Analytics</p>\n      </Card>\n    </div>\n  );\n}\n";
+        let card = gjd_core::jsx::Component {
+            name: "Card".to_owned(),
+            root: true,
+        };
+        let file = super::placed_copy_file(
+            "src/Dashboard.tsx".to_owned(),
+            dashboard.to_owned(),
+            8,
+            &card,
+        )
+        .expect("Dashboard renders Card");
+        assert_eq!(file.why, "places this copy of Card");
+        assert_eq!(file.anchors, vec![6, 7, 8]);
+        assert!(!file.selected);
+        let nested = "export function PlanFlag() {\n  return <svg />;\n}\n";
+        assert_eq!(
+            super::placed_copy_file("src/PlanFlag.tsx".to_owned(), nested.to_owned(), 2, &card),
+            None
         );
     }
 
@@ -4020,9 +4893,8 @@ mod tests {
             variant("Blue", &[snippet(FILE, SOURCE, "bg-brand", "bg-sea")]),
         ];
 
-        let (valid, dropped) =
-            validate_variants(proposed, &shown(), FILE, &checks(&react(), &[], &[]))
-                .expect("two survive");
+        let (valid, dropped) = validate_variants(proposed, &shown(), &checks(&react(), &[], &[]))
+            .expect("two survive");
 
         assert_eq!(valid.len(), 2);
         assert_eq!(dropped[0].reason, "It is the same as another variant.");
@@ -4045,11 +4917,11 @@ mod tests {
             )],
         )];
 
-        let failure = validate_variants(proposed, &editable, FILE, &checks(&react(), &[], &[]))
+        let failure = validate_variants(proposed, &editable, &checks(&react(), &[], &[]))
             .expect_err("dropped");
 
         assert!(
-            failure.message.contains("would no longer parse"),
+            failure.message.contains("unable to compile"),
             "{}",
             failure.message
         );
@@ -4262,11 +5134,11 @@ mod tests {
                 )
                 .await
                 .unwrap_or_else(|error| panic!("{request}: {error}"));
+            let existing = crate::index::walk(&fixture);
             let (valid, _) = validate_variants(
                 output.variant_set.variants,
                 &editable,
-                button,
-                &checks(&react(), &[], &[]),
+                &checks(&react(), &existing, &[]),
             )
             .unwrap_or_else(|failure| panic!("{request}: {}", failure.message));
             let (variant, contents, _) = &valid[0];
@@ -4279,6 +5151,230 @@ mod tests {
                 contents.keys().collect::<Vec<_>>()
             );
             assert_live_result(request, contents, &read);
+        }
+    }
+
+    #[tokio::test]
+    #[ignore = "runs the real Claude Code CLI and spends tokens"]
+    async fn live_redesign_of_a_whole_card_file_validates() {
+        use std::num::NonZeroU64;
+        use std::time::{Duration, Instant};
+
+        use gjd_core::srcloc::LineIndex;
+        use gjd_core::theme::Theme;
+        use gjd_providers::{Effort, GenerationRequest, ProviderId, ToolPolicy, adapter};
+        use tokio_util::sync::CancellationToken;
+
+        use crate::generate;
+
+        let fixture =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/small-react-tailwind4");
+        let card = "src/components/MenuCard.tsx";
+        let source = std::fs::read_to_string(fixture.join(card)).expect("fixture file");
+        let offset = source.find("<article").expect("the card");
+        let (line, column) = LineIndex::new(&source).position(offset);
+        let theme = Theme::from_css([std::fs::read_to_string(fixture.join("src/index.css"))
+            .expect("theme")
+            .as_str()]);
+        let at = |value| NonZeroU64::new(value).expect("positions are 1-based");
+        let style =
+            gjd_core::style::inspect(card, &source, at(line), at(column), &theme).expect("element");
+        let request = "redesign this card like a dashboard tile: a small bar chart of the last seven days of orders under the price, and a trend badge next to the name";
+        let user_prompt = format!(
+            "{}\n{}\n",
+            generate::user_prompt(&style, &source, request, &generate::R2, None),
+            generate::DIRECTIONS[0]
+        );
+        let provider = adapter(ProviderId::ClaudeCode).expect("adapter");
+        let discovery = provider.discover().await.expect("Claude Code is installed");
+        let model = std::env::var("GUIJAM_LIVE_MODEL").unwrap_or_else(|_| "sonnet".to_owned());
+        let cwd = tempfile::tempdir().expect("tempdir");
+        let started = Instant::now();
+        let output = provider
+            .generate(
+                &discovery,
+                GenerationRequest {
+                    model: Some(model.clone()),
+                    effort: Some(Effort::Medium),
+                    system_prompt: generate::SYSTEM_PROMPT.to_owned(),
+                    user_prompt,
+                    images: Vec::new(),
+                    tools: ToolPolicy::None,
+                    timeout: Duration::from_mins(3),
+                    cwd: cwd.path().to_path_buf(),
+                    events: None,
+                },
+                CancellationToken::new(),
+            )
+            .await
+            .expect("an answer");
+        let whole = std::collections::BTreeSet::from([card.to_owned()]);
+        let project = react();
+        let files = crate::index::walk(&fixture);
+        let checks = Checks {
+            whole: &whole,
+            ..checks(&project, &files, &[])
+        };
+        let kinds: Vec<&str> = output
+            .variant_set
+            .variants
+            .iter()
+            .flat_map(|variant| variant.ops.iter().map(op_kind))
+            .collect();
+        let editable = Contents::from([(card.to_owned(), source.clone())]);
+        let (valid, dropped) = validate_variants(output.variant_set.variants, &editable, &checks)
+            .unwrap_or_else(|failure| panic!("{}", failure.message));
+        println!(
+            "redesign ({model}, {} ms, ${:.3}): ops {kinds:?}, dropped {dropped:?}",
+            started.elapsed().as_millis(),
+            output.cost_usd.unwrap_or_default(),
+        );
+        assert!(!valid.is_empty());
+        assert_ne!(valid[0].1[card], source);
+    }
+
+    fn op_kind(op: &EditOp) -> &'static str {
+        match op {
+            EditOp::ReplaceSnippet { .. } => "replace_snippet",
+            EditOp::RewriteFile { .. } => "rewrite_file",
+            EditOp::CreateFile { .. } => "create_file",
+            _ => "other",
+        }
+    }
+
+    fn live_reuse_prompt(
+        snapshot: &crate::components::Snapshot,
+        style: &gjd_core::contracts::ElementStyle,
+        source: &str,
+        component: Option<&gjd_core::jsx::Component>,
+        (request, hinted): (&str, bool),
+        read: &dyn Fn(&str) -> String,
+    ) -> String {
+        use crate::components;
+        use crate::generate;
+
+        let signup = style.file.as_str();
+        let signature = super::signature_of(style);
+        let matches = snapshot.matches(&components::Query {
+            selected: signup,
+            signature: &signature,
+            prompt: request,
+            enclosing: component.map(|component| component.name.as_str()),
+            limit: components::section::limit(hinted),
+        });
+        let sources: Vec<(String, String)> = if hinted {
+            matches
+                .iter()
+                .take(components::section::SOURCES)
+                .map(|found| (found.entry.file.clone(), read(&found.entry.file)))
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let section = components::section::render(signup, &matches, &sources, hinted);
+        format!(
+            "{}{section}\n{}\n",
+            generate::user_prompt(style, source, request, &generate::R2, component),
+            generate::DIRECTIONS[0]
+        )
+    }
+
+    #[tokio::test]
+    #[ignore = "runs the real Claude Code CLI and spends tokens"]
+    async fn live_reuse_swaps_the_inline_error_for_the_existing_component() {
+        use std::num::NonZeroU64;
+        use std::sync::Arc;
+        use std::time::{Duration, Instant};
+
+        use gjd_core::jsx;
+        use gjd_core::srcloc::LineIndex;
+        use gjd_core::theme::Theme;
+        use gjd_providers::{Effort, GenerationRequest, ProviderId, ToolPolicy, adapter};
+        use tokio_util::sync::CancellationToken;
+
+        use crate::components::{self, ComponentIndex};
+        use crate::generate;
+
+        let fixture =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/small-react-tailwind4");
+        let read = |path: &str| std::fs::read_to_string(fixture.join(path)).expect("fixture file");
+        let signup = "src/features/rewards/RewardsSignup.tsx";
+        let source = read(signup);
+        let offset = source
+            .find("<p className=\"mt-2 text-xs text-red-500\">")
+            .expect("the inline error");
+        let (line, column) = LineIndex::new(&source).position(offset);
+        let theme = Theme::from_css([read("src/index.css").as_str()]);
+        let at = |value| NonZeroU64::new(value).expect("positions are 1-based");
+        let style = gjd_core::style::inspect(signup, &source, at(line), at(column), &theme)
+            .expect("element");
+        let component = jsx::enclosing_component(signup, &source, line, column);
+        let files = Arc::new(crate::index::walk(&fixture));
+        let snapshot = ComponentIndex::default()
+            .refresh(components::Inputs {
+                root: fixture.clone(),
+                files: Arc::clone(&files),
+                packages: Vec::new(),
+                rules: components::registered::Rules::default(),
+            })
+            .await;
+        let provider = adapter(ProviderId::ClaudeCode).expect("adapter");
+        let discovery = provider.discover().await.expect("Claude Code is installed");
+        let model = std::env::var("GUIJAM_LIVE_MODEL").unwrap_or_else(|_| "sonnet".to_owned());
+        let cwd = tempfile::tempdir().expect("tempdir");
+        for (request, hinted) in [
+            (
+                "I think there's already an existing component, I want you to search it across the codebase",
+                true,
+            ),
+            ("make this match the rest of the app", false),
+        ] {
+            let user_prompt = live_reuse_prompt(
+                &snapshot,
+                &style,
+                &source,
+                component.as_ref(),
+                (request, hinted),
+                &read,
+            );
+            let started = Instant::now();
+            let output = provider
+                .generate(
+                    &discovery,
+                    GenerationRequest {
+                        model: Some(model.clone()),
+                        effort: Some(Effort::Medium),
+                        system_prompt: generate::SYSTEM_PROMPT.to_owned(),
+                        user_prompt,
+                        images: Vec::new(),
+                        tools: ToolPolicy::None,
+                        timeout: Duration::from_mins(3),
+                        cwd: cwd.path().to_path_buf(),
+                        events: None,
+                    },
+                    CancellationToken::new(),
+                )
+                .await
+                .unwrap_or_else(|error| panic!("{request}: {error}"));
+            let editable = Contents::from([(signup.to_owned(), source.clone())]);
+            let (valid, _) = validate_variants(
+                output.variant_set.variants,
+                &editable,
+                &checks(&react(), &files, &[]),
+            )
+            .unwrap_or_else(|failure| panic!("{request}: {}", failure.message));
+            let (variant, contents, _) = &valid[0];
+            println!(
+                "{request} ({model}, {} ms, ${:.3}): {} | {}",
+                started.elapsed().as_millis(),
+                output.cost_usd.unwrap_or_default(),
+                String::from(variant.label.clone()),
+                String::from(variant.rationale.clone()),
+            );
+            assert_eq!(contents.keys().collect::<Vec<_>>(), [signup], "{request}");
+            let written = &contents[signup];
+            assert!(written.contains("<ErrorMessage"), "{request}: {written}");
+            assert!(!written.contains("text-red-500"), "{request}: {written}");
         }
     }
 }
