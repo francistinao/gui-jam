@@ -1,8 +1,8 @@
+import { useSyncExternalStore } from 'react';
 import type { Controller, Job, WidgetState } from './controller';
-import { type BadgeState, jobBadge } from './model';
+import { type BadgeState, badgeSpot, jobBadge, pagePath, sketchingOver } from './model';
 import { type Store, useStore } from './store';
-
-const EDGE = 12;
+import { pageUrl } from './tracker';
 
 const TONE: Record<BadgeState, string> = {
   draft: 'bg-white-1000 text-black-800 ring-1 ring-black-100',
@@ -11,6 +11,21 @@ const TONE: Record<BadgeState, string> = {
   answer: 'bg-blue-700 text-white-1000',
   error: 'bg-red-600 text-white-1000',
 };
+
+const URL_CHECK_MS = 500;
+
+function onUrlChange(notify: () => void): () => void {
+  const timer = setInterval(notify, URL_CHECK_MS);
+  window.addEventListener('popstate', notify);
+  return () => {
+    clearInterval(timer);
+    window.removeEventListener('popstate', notify);
+  };
+}
+
+function currentPage(): string {
+  return pageUrl(window.location);
+}
 
 function badgeOf(job: Job) {
   const { generation } = job;
@@ -31,24 +46,28 @@ export function JobBadges({
 }) {
   const jobs = useStore(store, (state) => state.jobs);
   const focus = useStore(store, (state) => state.focus);
+  const mode = useStore(store, (state) => state.mode);
+  const here = useSyncExternalStore(onUrlChange, currentPage);
   return (
     <>
       {jobs.map((job) => {
         const badge = badgeOf(job);
-        const left = Math.min(
-          Math.max(job.anchor.left + job.anchor.width, EDGE),
-          window.innerWidth - EDGE,
-        );
-        const top = Math.min(Math.max(job.anchor.top, EDGE), window.innerHeight - EDGE);
+        const sketching = job.id === focus && sketchingOver(mode, job);
+        const spot = badgeSpot(job.anchor, {
+          width: window.innerWidth,
+          height: window.innerHeight,
+        });
+        const away = job.page !== null && job.page !== here ? `Opens ${pagePath(job.page)}` : null;
         return (
           <button
             key={job.id}
             type="button"
-            data-interactive=""
-            aria-label={`Drawing ${job.number}: ${badge.text}`}
+            data-interactive={sketching ? undefined : ''}
+            aria-label={`Drawing ${job.number}: ${badge.text}${away ? `. ${away}` : ''}`}
             aria-pressed={job.id === focus}
-            className={`typography-body-small fixed flex h-6 -translate-x-1/2 -translate-y-1/2 cursor-pointer items-center gap-1 rounded-full border-0 px-2 font-[600] shadow-500 ${TONE[badge.state]} ${job.id === focus ? 'outline-2 outline-offset-1 outline-blue-500' : ''}`}
-            style={{ left, top }}
+            title={away ?? undefined}
+            className={`typography-body-small fixed flex h-6 -translate-x-full cursor-pointer items-center gap-1 rounded-full border-0 px-2 font-[600] shadow-500 ${TONE[badge.state]} ${job.id === focus ? 'outline-2 outline-offset-1 outline-blue-500' : ''}`}
+            style={{ left: spot.right, top: spot.top }}
             onClick={() => void controller.focus(job.id)}
           >
             {badge.state === 'running' ? (
@@ -59,6 +78,7 @@ export function JobBadges({
             ) : null}
             <span>{job.number}</span>
             <span className="font-[450]">{badge.text}</span>
+            {away ? <span aria-hidden="true">↗</span> : null}
           </button>
         );
       })}

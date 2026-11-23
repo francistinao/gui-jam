@@ -70,6 +70,7 @@ export function parseSaved(text: string | null): Saved | null {
     installing: false,
     installError: typeof job.installError === 'string' ? job.installError : null,
     ticket: isRecord(job.ticket) && isRecord(job.ticket.ref) ? job.ticket : null,
+    page: typeof job.page === 'string' ? job.page : null,
   }));
   if (jobs.length === 0) return null;
   const focus =

@@ -38,6 +38,7 @@ const job = (id: string, status: 'idle' | 'running' | 'ready' = 'ready'): Job =>
     installing: true,
     installError: null,
     ticket: null,
+    page: 'http://localhost:5173/menu',
   }) as Job;
 
 describe('persisted jobs', () => {
@@ -71,6 +72,15 @@ describe('persisted jobs', () => {
     const older = JSON.parse(serialize([job('j2')], null, true));
     delete older.jobs[0].ticket;
     expect(parseSaved(JSON.stringify(older))?.jobs[0]?.ticket).toBeNull();
+  });
+
+  it('keeps the page a drawing was made on, and gives an older save none', () => {
+    expect(parseSaved(serialize([job('j1')], null, true))?.jobs[0]?.page).toBe(
+      'http://localhost:5173/menu',
+    );
+    const older = JSON.parse(serialize([job('j2')], null, true));
+    delete older.jobs[0].page;
+    expect(parseSaved(JSON.stringify(older))?.jobs[0]?.page).toBeNull();
   });
 
   it('can leave the images out when storage is short', () => {

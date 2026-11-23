@@ -250,6 +250,40 @@ test('a drawn prompt previews a variant in a route component and Use writes it',
   expect(await readFile(ORDER_BUTTON, 'utf8')).toBe(before.replace('bg-brand', 'bg-[#2563EB]'));
 });
 
+test('a drawing pill on another route loads the page it was drawn on and opens it', async ({
+  page,
+}) => {
+  await openFixture(page, fixture.url);
+  const draw = page.getByRole('toolbar', { name: 'GUIJam' }).getByRole('button', { name: 'Draw' });
+  await draw.click();
+  await circle(page, page.getByRole('button', { name: 'Order now' }));
+  const prompt = page.getByRole('dialog', { name: 'Ask AI app/components/OrderButton.tsx' });
+  await prompt
+    .getByRole('textbox', { name: 'Describe the change' })
+    .fill('Make it feel more premium');
+  await prompt.getByRole('button', { name: 'Generate' }).click();
+  await expect(prompt.getByRole('group', { name: 'Pick a variant' })).toBeVisible();
+  await draw.click();
+  await expect(draw).toHaveAttribute('aria-pressed', 'false');
+
+  await page.evaluate(() => {
+    (window as { gjMarker?: boolean }).gjMarker = true;
+  });
+  await page.getByRole('link', { name: 'Menu' }).click();
+  await expect(page).toHaveURL(/\/menu$/);
+  const away = page.getByRole('button', { name: /^Drawing 1: \d+ variants?\. Opens \/$/ });
+  await expect(away).toHaveAttribute('title', 'Opens /');
+  await away.click();
+
+  await expect(page).toHaveURL(fixture.url);
+  await expect(prompt).toBeVisible();
+  expect(await page.evaluate(() => (window as { gjMarker?: boolean }).gjMarker)).toBeUndefined();
+  const here = page.getByRole('button', { name: /^Drawing 1: \d+ variants?$/ });
+  await expect(here).not.toHaveAttribute('title');
+  await prompt.getByRole('button', { name: 'Discard' }).click();
+  await expect(here).toHaveCount(0);
+});
+
 test('a sketch in the empty part of a layout lands in the routed page, not the layout', async ({
   page,
 }) => {
