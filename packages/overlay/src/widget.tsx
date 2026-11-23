@@ -3,7 +3,7 @@ import { App } from './App';
 import { createController, initialState, type WidgetState } from './controller';
 import { createDrawLayer } from './draw-layer';
 import type { Widget, WidgetHost } from './host';
-import { activeLayers, type Layers, sketchingOver, strokeShortcut } from './model';
+import { activeLayers, closesOnEscape, type Layers, sketchingOver, strokeShortcut } from './model';
 import { load, save } from './persist';
 import { createSelectLayer } from './select-layer';
 import { createStore } from './store';
@@ -105,7 +105,7 @@ export function mount(host: WidgetHost): Widget {
       if (done) event.preventDefault();
       return;
     }
-    if (event.key !== 'Escape') return;
+    if (!closesOnEscape(event)) return;
     const inPicker = event
       .composedPath()
       .some((node) => node instanceof HTMLElement && node.hasAttribute('data-color-picker'));

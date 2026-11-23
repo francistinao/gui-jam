@@ -1,6 +1,7 @@
 import { readFile, writeFile } from 'node:fs/promises';
 import { expect, type Locator, type Page } from '@playwright/test';
 import { callsOf, pairWith, startBridge, unpair } from './jira-bridge.js';
+import { along, covered, type Point } from './strokes.js';
 
 export interface Component {
   element: Locator;
@@ -83,14 +84,19 @@ export async function drawAndRewind(page: Page, prompt: Locator, element: Locato
   await expect(page.locator('canvas.guijam-draw')).toBeVisible();
   const box = await element.boundingBox();
   if (!box) throw new Error('the component is not visible');
-  const at = (across: number, down: number) =>
-    [box.x + box.width * across, box.y + box.height * down] as const;
-  await stroke(page, [at(0.15, 0.5), at(0.85, 0.5)]);
+  const at = (across: number, down: number): Point => [
+    box.x + box.width * across,
+    box.y + box.height * down,
+  ];
+  const first = [at(0.15, 0.5), at(0.85, 0.5)];
+  const second = [at(0.2, 0.15), at(0.8, 0.85)];
+  await stroke(page, first);
   await expect.poll(() => inked(page)).toBeGreaterThan(0);
   const one = await inked(page);
-  await stroke(page, [at(0.2, 0.15), at(0.8, 0.85)]);
+  await stroke(page, second);
   await expect.poll(() => inked(page)).toBeGreaterThan(one);
   const both = await inked(page);
+  await expect.poll(() => covered(page, [...along(first), ...along(second)])).toEqual([]);
 
   await prompt.getByRole('button', { name: 'Undo stroke' }).click();
   await expect.poll(() => inked(page)).toBe(one);

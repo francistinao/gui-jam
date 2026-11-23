@@ -133,6 +133,7 @@ async function sketchOver(page: Page, element: Locator, file: string): Promise<L
   const prompt = page.getByRole('dialog', { name: `Ask AI ${file}` });
   await expect(sketchNote(prompt)).toBeVisible();
   await expect(canvas(page)).toBeVisible();
+  await expect(canvas(page)).toHaveCSS('pointer-events', 'auto');
   return prompt;
 }
 
@@ -279,7 +280,9 @@ test('a sketch over a selected component goes with the prompt and changes only t
       hasText: 'Reading your sketch',
     }),
   ).toHaveCount(1);
-  await expect(canvas(page)).toBeHidden();
+  await expect(canvas(page)).toBeVisible();
+  await expect(canvas(page)).toHaveCSS('pointer-events', 'none');
+  expect(await inked(page)).toBeGreaterThan(0);
   await expect(tiles(prompt)).toHaveText(['V1Pill', 'V2Ring', 'V3Plain'], { timeout: READY_MS });
   await expect(page.locator('[data-sketched="V1"]')).toBeVisible();
   await tiles(prompt).nth(1).click();
@@ -750,7 +753,9 @@ test('Edit prompt after the variants goes back to sketching, with the strokes', 
   const ink = await inked(page);
   await generate(prompt, 'make it look like my sketch');
   await expect(tiles(prompt)).toHaveCount(3, { timeout: READY_MS });
-  await expect(canvas(page)).toBeHidden();
+  await expect(canvas(page)).toBeVisible();
+  await expect(canvas(page)).toHaveCSS('pointer-events', 'none');
+  await expect.poll(() => inked(page)).toBe(ink);
 
   await prompt.getByRole('button', { name: 'Edit prompt' }).click();
 
@@ -844,13 +849,13 @@ test.describe('stress', () => {
     await scribbleOver(page, order);
     await generate(first, 'make it look like my sketch, slow');
     await expect(page.getByRole('button', { name: 'Drawing 1: Generating' })).toBeVisible();
-    await expect(canvas(page)).toBeHidden();
+    await expect(canvas(page)).toHaveCSS('pointer-events', 'none');
 
     const second = await sketchOver(page, heading, 'src/App.tsx');
     await scribbleOver(page, heading);
     await generate(second, 'make it look like my sketch, slow');
     await expect(page.getByRole('button', { name: 'Drawing 2: Generating' })).toBeVisible();
-    await expect(canvas(page)).toBeHidden();
+    await expect(canvas(page)).toHaveCSS('pointer-events', 'none');
 
     await add.scrollIntoViewIfNeeded();
     const third = await sketchOver(page, add, 'src/components/MenuCard.tsx');
@@ -859,10 +864,10 @@ test.describe('stress', () => {
     await expect(third.locator('[data-step-detail]')).toHaveText(
       'Waiting for another drawing to finish…',
     );
-    await expect(canvas(page)).toBeHidden();
+    await expect(canvas(page)).toHaveCSS('pointer-events', 'none');
 
     await page.getByRole('button', { name: /^Drawing 1/ }).click();
-    await expect(canvas(page)).toBeHidden();
+    await expect(canvas(page)).toHaveCSS('pointer-events', 'none');
     await first.getByRole('button', { name: 'Cancel' }).click();
 
     await expect(page.getByRole('button', { name: 'Drawing 1: Draft' })).toBeVisible();
@@ -874,7 +879,7 @@ test.describe('stress', () => {
     });
 
     await page.getByRole('button', { name: /^Drawing 2/ }).click();
-    await expect(canvas(page)).toBeHidden();
+    await expect(canvas(page)).toHaveCSS('pointer-events', 'none');
     await page.getByRole('button', { name: /^Drawing 3/ }).click();
     await expect(tiles(third)).toHaveText(['V1Pill', 'V2Ring', 'V3Plain']);
     await expect(page.locator('[data-sketched="V1"]')).toHaveCount(3);
@@ -945,4 +950,52 @@ test.describe('stress', () => {
     expect((await cliRuns()).length).toBe(start);
     expect(errors).toEqual([]);
   });
+});
+
+test('a generating drawing keeps its strokes after Escape turns Draw off, and the page stays clickable', async ({
+  page,
+}) => {
+  await openFixture(page, fixture.url);
+  await drawTool(page).click();
+  const anchor = await boxOf(page.getByRole('button', { name: 'Order now' }));
+  const left = anchor.x + 440;
+  const top = anchor.y - 12;
+  await stroke(page, [
+    [left, top],
+    [left + 120, top + 40],
+    [left + 240, top],
+  ]);
+  const prompt = page.getByRole('dialog', { name: 'Ask AI src/App.tsx' });
+  await expect(prompt.getByText('Sketch', { exact: true })).toBeVisible();
+  await expect.poll(() => inked(page)).toBeGreaterThan(0);
+  const ink = await inked(page);
+  await expect(canvas(page)).toHaveCSS('pointer-events', 'auto');
+  await generate(prompt, 'a card like this, linger');
+  const generating = page.getByRole('button', { name: 'Drawing 1: Generating' });
+  await expect(generating).toBeVisible();
+
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await page.keyboard.press('Escape');
+  await expect(drawTool(page)).toHaveAttribute('aria-pressed', 'false');
+
+  await expect(canvas(page)).toBeVisible();
+  await expect(canvas(page)).toHaveCSS('pointer-events', 'none');
+  await expect.poll(() => inked(page)).toBe(ink);
+  await expect(generating).toBeVisible();
+  const cups = page.getByRole('button', { name: /^Cups ordered:/ });
+  await cups.click();
+  await expect(cups).toHaveText('Cups ordered: 1');
+
+  await page.reload();
+  await expect.poll(() => inked(page)).toBe(ink);
+  const ready = page.getByRole('button', { name: /^Drawing 1: \d variants?$/ });
+  await expect(ready).toBeVisible({ timeout: READY_MS });
+  expect(await inked(page)).toBe(ink);
+  await expect(canvas(page)).toHaveCSS('pointer-events', 'none');
+
+  await ready.click();
+  await discard(page.getByRole('dialog', { name: 'Ask AI src/App.tsx' }));
+  await expect(badges(page)).toHaveCount(0);
+  await expect(canvas(page)).toBeHidden();
 });

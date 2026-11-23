@@ -1,4 +1,5 @@
 import { boundsOf, type Point, type Rect } from './model';
+import { IDLE_RECORDING, type PointerInput, record } from './stroke-recorder';
 
 export const STROKE_COLOR = '#0d99ff';
 export const STROKE_WIDTH = 3;
@@ -30,8 +31,9 @@ export function createDrawLayer({ parent, onStroke }: DrawLayerOptions) {
   const context = canvas.getContext('2d');
 
   let finished: Point[][] = [];
-  let points: Point[] = [];
+  let recording = IDLE_RECORDING;
   let frame = 0;
+  let drawing = false;
 
   function resize(): void {
     const ratio = window.devicePixelRatio || 1;
@@ -46,66 +48,89 @@ export function createDrawLayer({ parent, onStroke }: DrawLayerOptions) {
     if (!context) return;
     context.clearRect(0, 0, canvas.width, canvas.height);
     for (const stroke of finished) strokePath(context, stroke);
-    strokePath(context, points);
+    strokePath(context, recording.points);
   }
 
   function schedule(): void {
     if (frame === 0) frame = requestAnimationFrame(paint);
   }
 
-  function onPointerDown(event: PointerEvent): void {
-    if (event.button !== 0) return;
-    canvas.setPointerCapture(event.pointerId);
-    points = [{ x: event.clientX, y: event.clientY }];
-    schedule();
-  }
-
-  function onPointerMove(event: PointerEvent): void {
-    if (!canvas.hasPointerCapture(event.pointerId)) return;
-    for (const sample of event.getCoalescedEvents?.() ?? [event]) {
-      points.push({ x: sample.clientX, y: sample.clientY });
+  function feed(input: PointerInput): void {
+    const next = record(recording, input);
+    if (next.recording === recording && next.strokes.length === 0) return;
+    recording = next.recording;
+    for (const stroke of next.strokes) {
+      finished = [...finished, stroke];
+      onStroke(stroke, boundsOf(stroke));
     }
     schedule();
   }
 
-  function onPointerUp(event: PointerEvent): void {
-    if (!canvas.hasPointerCapture(event.pointerId)) return;
-    canvas.releasePointerCapture(event.pointerId);
-    const stroke = points;
-    points = [];
-    if (stroke.length === 0) return;
-    finished = [...finished, stroke];
-    schedule();
-    onStroke(stroke, boundsOf(stroke));
+  function pointOf(event: PointerEvent): Point {
+    return { x: event.clientX, y: event.clientY };
   }
 
-  canvas.addEventListener('pointerdown', onPointerDown);
-  canvas.addEventListener('pointermove', onPointerMove);
-  canvas.addEventListener('pointerup', onPointerUp);
-  canvas.addEventListener('pointercancel', () => {
-    points = [];
-    schedule();
+  canvas.addEventListener('pointerdown', (event) => {
+    feed({
+      kind: 'down',
+      pointerId: event.pointerId,
+      isPrimary: event.isPrimary,
+      button: event.button,
+      point: pointOf(event),
+    });
+    if (recording.pointerId === event.pointerId) canvas.setPointerCapture(event.pointerId);
   });
+  canvas.addEventListener('pointermove', (event) => {
+    feed({
+      kind: 'move',
+      pointerId: event.pointerId,
+      pressed: (event.buttons & 1) === 1,
+      points: (event.getCoalescedEvents?.() ?? [event]).map(pointOf),
+    });
+  });
+  canvas.addEventListener('pointerup', (event) => {
+    feed({ kind: 'up', pointerId: event.pointerId, point: pointOf(event) });
+    if (canvas.hasPointerCapture(event.pointerId)) canvas.releasePointerCapture(event.pointerId);
+  });
+  canvas.addEventListener('pointercancel', (event) => {
+    feed({ kind: 'cancel', pointerId: event.pointerId });
+  });
+
+  function show(visible: boolean): void {
+    if (visible === !canvas.hidden) return;
+    canvas.hidden = !visible;
+    if (visible) {
+      resize();
+      window.addEventListener('resize', resize);
+    } else {
+      window.removeEventListener('resize', resize);
+    }
+  }
 
   function clear(): void {
     finished = [];
-    points = [];
+    recording = IDLE_RECORDING;
+    show(drawing);
     schedule();
   }
 
   return {
     enable(): void {
-      resize();
-      canvas.hidden = false;
-      window.addEventListener('resize', resize);
+      drawing = true;
+      canvas.dataset.drawing = '';
+      show(true);
+      schedule();
     },
     disable(): void {
-      canvas.hidden = true;
-      window.removeEventListener('resize', resize);
-      clear();
+      drawing = false;
+      delete canvas.dataset.drawing;
+      recording = IDLE_RECORDING;
+      show(finished.length > 0);
+      schedule();
     },
     keepOnly(strokes: readonly Point[][]): void {
       finished = [...strokes];
+      show(drawing || finished.length > 0);
       schedule();
     },
     clear,
