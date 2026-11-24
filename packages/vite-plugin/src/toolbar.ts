@@ -2,6 +2,8 @@ import type { GuijamMessage } from '@guijam/contracts-ts';
 import type { Tool, Widget, WidgetHost, WidgetModule } from '@guijam/overlay/host';
 import { createElement, type IconNode, MousePointer, Pencil } from 'lucide';
 import { LOGO_DATA_URL } from './logo.js';
+import type { Shield } from './shield.js';
+import { followTopLayer } from './top-layer.js';
 
 export interface ToolbarChannel {
   send(event: 'gj:request', data: unknown): void;
@@ -18,18 +20,38 @@ const INSTALL_TIMEOUT_MS = 275_000;
 export interface ToolSpec {
   tool: Tool;
   label: string;
+  keys: string;
   icon: IconNode;
 }
 
 export const TOOLS: readonly ToolSpec[] = [
-  { tool: 'select', label: 'Select object', icon: MousePointer },
-  { tool: 'draw', label: 'Draw', icon: Pencil },
+  { tool: 'select', label: 'Select object', keys: 'Alt+Shift+S', icon: MousePointer },
+  { tool: 'draw', label: 'Draw', keys: 'Alt+Shift+D', icon: Pencil },
 ];
 
 export const EXIT_HINT = 'Press Esc to exit';
 
 export function tooltipFor(spec: ToolSpec, active: Tool | null): string {
-  return active === spec.tool ? EXIT_HINT : spec.label;
+  return active === spec.tool ? EXIT_HINT : `${spec.label} (${spec.keys})`;
+}
+
+const SHORTCUTS: Readonly<Record<string, Tool | 'toolbar'>> = {
+  KeyS: 'select',
+  KeyD: 'draw',
+  KeyM: 'toolbar',
+};
+
+export interface ShortcutKeys {
+  altKey: boolean;
+  shiftKey: boolean;
+  ctrlKey: boolean;
+  metaKey: boolean;
+  code: string;
+}
+
+export function shortcutOf(keys: ShortcutKeys): Tool | 'toolbar' | null {
+  if (!keys.altKey || !keys.shiftKey || keys.ctrlKey || keys.metaKey) return null;
+  return SHORTCUTS[keys.code] ?? null;
 }
 
 const TOOLBAR_CSS = `
@@ -149,11 +171,13 @@ function createRequester(hot: ToolbarChannel): WidgetHost['request'] {
     });
 }
 
-export function bootToolbar(hot: ToolbarChannel, widgetUrl = WIDGET_URL): void {
+export function bootToolbar(hot: ToolbarChannel, shield: Shield, widgetUrl = WIDGET_URL): void {
   const hostElement = document.createElement('div');
   hostElement.id = 'guijam-root';
   document.documentElement.append(hostElement);
   const shadowRoot = hostElement.attachShadow({ mode: 'open' });
+  shield.protect(hostElement, [new URL(widgetUrl, window.location.href).href]);
+  followTopLayer(hostElement, shield.listen);
   const sheet = new CSSStyleSheet();
   sheet.replaceSync(TOOLBAR_CSS);
   shadowRoot.adoptedStyleSheets = [sheet];
@@ -174,6 +198,7 @@ export function bootToolbar(hot: ToolbarChannel, widgetUrl = WIDGET_URL): void {
     button.className = 'tool';
     button.setAttribute('aria-label', spec.label);
     button.setAttribute('aria-pressed', 'false');
+    button.setAttribute('aria-keyshortcuts', spec.keys);
     const icon = document.createElement('span');
     icon.className = 'icon';
     icon.append(createElement(spec.icon, { 'aria-hidden': 'true' }));
@@ -211,8 +236,7 @@ export function bootToolbar(hot: ToolbarChannel, widgetUrl = WIDGET_URL): void {
     for (const { spec, button, tip } of buttons) {
       const pressed = spec.tool === tool;
       button.setAttribute('aria-pressed', String(pressed));
-      if (pressed) button.setAttribute('aria-keyshortcuts', 'Escape');
-      else button.removeAttribute('aria-keyshortcuts');
+      button.setAttribute('aria-keyshortcuts', pressed ? 'Escape' : spec.keys);
       tip.textContent = tooltipFor(spec, tool);
     }
   };
@@ -222,26 +246,33 @@ export function bootToolbar(hot: ToolbarChannel, widgetUrl = WIDGET_URL): void {
       /* @vite-ignore */ /* webpackIgnore: true */ /* turbopackIgnore: true */ widgetUrl
     ).then((module: unknown) => {
       if (!isWidgetModule(module)) throw new Error(`${widgetUrl} is not the GUIJam widget`);
-      return module.mount({ shadowRoot, hostElement, request, onEvent, onToolChange: show });
+      return module.mount({
+        shadowRoot,
+        hostElement,
+        request,
+        onEvent,
+        onToolChange: show,
+        intercept: shield.intercept,
+      });
     });
     return widget;
   };
 
-  for (const { tool, button } of buttons) {
-    button.addEventListener('click', () => {
-      const next = active === tool ? null : tool;
-      loadWidget().then(
-        (loaded) => {
-          loaded.setTool(next);
-          show(next);
-        },
-        (error: unknown) => {
-          widget = undefined;
-          console.error('[guijam] the widget failed to load', error);
-        },
-      );
-    });
-  }
+  const toggle = (tool: Tool) => {
+    const next = active === tool ? null : tool;
+    loadWidget().then(
+      (loaded) => {
+        loaded.setTool(next);
+        show(next);
+      },
+      (error: unknown) => {
+        widget = undefined;
+        console.error('[guijam] the widget failed to load', error);
+      },
+    );
+  };
+
+  for (const { tool, button } of buttons) button.addEventListener('click', () => toggle(tool));
 
   if (hasSavedJobs() || linksTicket()) {
     loadWidget().catch((error: unknown) => {
@@ -254,9 +285,17 @@ export function bootToolbar(hot: ToolbarChannel, widgetUrl = WIDGET_URL): void {
     target instanceof HTMLElement &&
     (target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName));
 
-  document.addEventListener('keydown', (event) => {
-    const chord = event.altKey && event.shiftKey && !event.ctrlKey && !event.metaKey;
-    if (!chord || event.code !== 'KeyM' || typing(event.composedPath()[0] ?? null)) return;
+  shield.intercept('keydown', (event) => {
+    if (!(event instanceof KeyboardEvent)) return;
+    const shortcut = shortcutOf(event);
+    if (!shortcut || typing(event.composedPath()[0] ?? null)) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    if (shortcut !== 'toolbar') {
+      hostElement.hidden = false;
+      toggle(shortcut);
+      return;
+    }
     hostElement.hidden = !hostElement.hidden;
     if (!hostElement.hidden || active === null || !widget) return;
     void widget.then((loaded) => {

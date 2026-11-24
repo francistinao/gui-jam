@@ -8,6 +8,7 @@ export interface WidgetHost {
   request(message: { type: string; payload: object }): Promise<GuijamMessage>;
   onEvent(listener: (message: GuijamMessage) => void): () => void;
   onToolChange(tool: Tool | null): void;
+  intercept(type: string, handler: (event: Event) => void): () => void;
 }
 
 export interface Widget {

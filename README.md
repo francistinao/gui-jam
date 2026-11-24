@@ -47,6 +47,8 @@ Then start your dev server as usual, for example `npm run dev`. The GUIJam toolb
 
 Every applied change shows an **Undo** for 10 seconds, and `Alt+Shift+M` hides the toolbar.
 
+Modals, popovers, menus and tooltips stay open while you use GUIJam on them, including the browser's own `<dialog>` and `popover`: open one, then pick a tool. A tooltip you hover can't wait for a click on the toolbar, so hover it and press `Alt+Shift+S` or `Alt+Shift+D` instead. While a panel is open, the page stops reacting to the mouse hovering, so a tooltip you picked stays open. A tooltip made only with CSS `:hover` still closes when the pointer leaves it; select its trigger instead.
+
 See [Commands](#commands) for everything else, including how to switch the AI tool.
 
 ## Commands
@@ -81,7 +83,9 @@ The AI tool you pick is saved for your user in `~/.config/guijam/config.toml`, a
 
 | Key | What it does |
 |---|---|
-| `Esc` | Leaves the active tool |
+| `Esc` | Closes the open panel, then leaves the active tool. The page doesn't see it while GUIJam uses it. |
+| `Alt+Shift+S` | Starts or leaves Select |
+| `Alt+Shift+D` | Starts or leaves Draw |
 | `Alt+Shift+M` | Hides or shows the toolbar |
 
 ### Settings

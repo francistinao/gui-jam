@@ -1,4 +1,5 @@
 import type { GuijamMessage } from '@guijam/contracts-ts';
+import { installShield } from './shield.js';
 import { bootToolbar, type ToolbarChannel } from './toolbar.js';
 
 declare const process: { env: { GUIJAM_RELAY_URL?: string; GUIJAM_WIDGET_URL?: string } };
@@ -56,8 +57,9 @@ const widgetUrl = process.env.GUIJAM_WIDGET_URL;
 
 if (typeof window !== 'undefined' && !scope[BOOTED] && url && widgetUrl) {
   scope[BOOTED] = true;
+  const shield = installShield();
   const channel = connect(url);
-  const boot = () => bootToolbar(channel, widgetUrl);
+  const boot = () => bootToolbar(channel, shield, widgetUrl);
   if (document.readyState === 'complete') boot();
   else window.addEventListener('load', boot, { once: true });
 }

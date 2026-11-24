@@ -33,7 +33,7 @@ test('each tool shows its name on hover and on keyboard focus', async ({ page })
 
   await draw.focus();
   await expect(tooltip(page, 'Draw')).toBeVisible();
-  await expect(draw).toHaveAccessibleDescription('Draw');
+  await expect(draw).toHaveAccessibleDescription('Draw (Alt+Shift+D)');
   await expect(select.locator('svg')).toBeVisible();
 });
 
@@ -54,9 +54,9 @@ test('the active tool turns into an Esc key that leaves it, as does the Escape k
   await page.keyboard.press('Escape');
 
   await expect(draw).toHaveAttribute('aria-pressed', 'false');
-  await expect(draw).not.toHaveAttribute('aria-keyshortcuts', /.*/);
+  await expect(draw).toHaveAttribute('aria-keyshortcuts', 'Alt+Shift+D');
   await expect(draw.locator('svg')).toBeVisible();
-  await expect(draw).toHaveAccessibleDescription('Draw');
+  await expect(draw).toHaveAccessibleDescription('Draw (Alt+Shift+D)');
 
   await draw.click();
   await expect(draw).toHaveAttribute('aria-pressed', 'true');
@@ -76,7 +76,7 @@ test('switching tools moves the Esc key to the new tool', async ({ page }) => {
   await expect(draw.getByText('Esc', { exact: true })).toBeVisible();
   await expect(select).toHaveAttribute('aria-pressed', 'false');
   await expect(select.getByText('Esc', { exact: true })).toBeHidden();
-  await expect(select).toHaveAccessibleDescription('Select object');
+  await expect(select).toHaveAccessibleDescription('Select object (Alt+Shift+S)');
 });
 
 test('hiding the toolbar with Alt+Shift+M also lets go of the Select tool', async ({ page }) => {
@@ -95,5 +95,26 @@ test('hiding the toolbar with Alt+Shift+M also lets go of the Select tool', asyn
   await page.keyboard.press('Alt+Shift+KeyM');
 
   await expect(toolbar(page)).toBeVisible();
+  await expect(select).toHaveAttribute('aria-pressed', 'false');
+});
+
+test('Alt+Shift+S and Alt+Shift+D choose a tool, and the same keys let go of it', async ({
+  page,
+}) => {
+  await openFixture(page, fixture.url);
+  const select = toolbar(page).getByRole('button', { name: 'Select object' });
+  const draw = toolbar(page).getByRole('button', { name: 'Draw' });
+  await expect(select).toHaveAttribute('aria-keyshortcuts', 'Alt+Shift+S');
+
+  await page.keyboard.press('Alt+Shift+KeyS');
+  await expect(select).toHaveAttribute('aria-pressed', 'true');
+  await page.keyboard.press('Alt+Shift+KeyD');
+  await expect(draw).toHaveAttribute('aria-pressed', 'true');
+  await expect(select).toHaveAttribute('aria-pressed', 'false');
+  await page.keyboard.press('Alt+Shift+KeyD');
+  await expect(draw).toHaveAttribute('aria-pressed', 'false');
+
+  await page.locator('input[name="email"]').focus();
+  await page.keyboard.press('Alt+Shift+KeyS');
   await expect(select).toHaveAttribute('aria-pressed', 'false');
 });

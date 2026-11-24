@@ -5,6 +5,8 @@
     "src/next-client.ts",
     "src/toolbar.ts",
     "src/logo.ts",
+    "src/shield.ts",
+    "src/top-layer.ts",
     "src/**/*.test.ts"
   ]
 }

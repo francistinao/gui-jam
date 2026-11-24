@@ -1,6 +1,7 @@
 import type { UpdateError, UpdateResult } from '@guijam/contracts-ts';
 import type { ErrorPayload } from 'vite';
 import type { UpdateStart } from './events.js';
+import { installShield } from './shield.js';
 import { bootToolbar } from './toolbar.js';
 
 interface PendingUpdate extends UpdateStart {
@@ -30,6 +31,7 @@ const hot = scope[BOOTED] ? undefined : import.meta.hot;
 
 if (hot) {
   scope[BOOTED] = true;
+  const shield = installShield();
   let pending: PendingUpdate | null = null;
 
   const report = (status: UpdateResult['status'], errors: UpdateError[]) => {
@@ -60,7 +62,7 @@ if (hot) {
 
   hot.on('vite:beforeFullReload', () => report('full_reload', []));
 
-  const boot = () => bootToolbar(hot);
+  const boot = () => bootToolbar(hot, shield);
   if (document.readyState === 'complete') boot();
   else window.addEventListener('load', boot, { once: true });
 }

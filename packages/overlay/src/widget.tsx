@@ -13,6 +13,18 @@ import { takeTicketParam } from './tracker';
 export type { Widget, WidgetHost, WidgetModule } from './host';
 
 const PROPERTY_RULE = /@property\s+[^{]+\{[^}]*\}/g;
+const HOVER = [
+  'pointerover',
+  'pointerout',
+  'pointerenter',
+  'pointerleave',
+  'pointermove',
+  'mouseover',
+  'mouseout',
+  'mouseenter',
+  'mouseleave',
+  'mousemove',
+] as const;
 
 function adoptStyles(shadowRoot: ShadowRoot): void {
   const properties = css.match(PROPERTY_RULE) ?? [];
@@ -45,6 +57,7 @@ export function mount(host: WidgetHost): Widget {
   const controller = createController(host, store);
   const selectLayer = createSelectLayer({
     hostElement: host.hostElement,
+    intercept: host.intercept,
     onHover: controller.hover,
     onPick: (element, additive) => void controller.select(element, additive),
   });
@@ -97,6 +110,41 @@ export function mount(host: WidgetHost): Widget {
     store.set({ tool });
   }
 
+  function leaveOnEscape(): boolean {
+    const { selection, tool } = store.get();
+    if (selection) {
+      void controller.close();
+      return true;
+    }
+    if (!tool) return false;
+    setTool(null);
+    host.onToolChange(null);
+    return true;
+  }
+
+  const inside = (event: Event) => event.composedPath().includes(host.hostElement);
+
+  host.intercept('keydown', (event) => {
+    if (!(event instanceof KeyboardEvent) || !closesOnEscape(event)) return;
+    if (inside(event)) {
+      event.preventDefault();
+    } else if (leaveOnEscape()) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+    }
+  });
+
+  const holding = () => {
+    const { selection, focus } = store.get();
+    return selection !== null || focus !== null;
+  };
+  for (const type of HOVER) {
+    host.intercept(type, (event) => {
+      const dragging = event instanceof MouseEvent && event.buttons !== 0;
+      if (holding() && !dragging && !inside(event)) event.stopImmediatePropagation();
+    });
+  }
+
   document.addEventListener('keydown', (event) => {
     const shortcut = strokeShortcut(event);
     if (shortcut) {
@@ -109,14 +157,7 @@ export function mount(host: WidgetHost): Widget {
     const inPicker = event
       .composedPath()
       .some((node) => node instanceof HTMLElement && node.hasAttribute('data-color-picker'));
-    if (inPicker) return;
-    const { selection, tool } = store.get();
-    if (selection) {
-      void controller.close();
-    } else if (tool) {
-      setTool(null);
-      host.onToolChange(null);
-    }
+    if (!inPicker) leaveOnEscape();
   });
   window.addEventListener('scroll', controller.reanchor, { capture: true, passive: true });
   window.addEventListener('resize', controller.reanchor, { passive: true });
