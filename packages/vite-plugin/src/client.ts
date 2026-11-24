@@ -60,7 +60,10 @@ if (hot) {
     if (pending) report('compile_error', [toUpdateError(err, pending.urls)]);
   });
 
-  hot.on('vite:beforeFullReload', () => report('full_reload', []));
+  hot.on('vite:beforeFullReload', () => {
+    hot.send('gj:reloading', {});
+    report('full_reload', []);
+  });
 
   const boot = () => bootToolbar(hot, shield);
   if (document.readyState === 'complete') boot();

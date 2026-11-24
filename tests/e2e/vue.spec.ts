@@ -12,8 +12,10 @@ import {
 } from './support/daemon.js';
 import { type FixtureServer, openFixture, startFixtureServer } from './support/fixture.js';
 import {
+  dragPanel,
   editFoundText,
   editText,
+  hideAndShowSketch,
   jiraLoop,
   pickThemeColor,
   promptForTwo,
@@ -218,6 +220,26 @@ test('Shift+click puts two components in one prompt, and Use and Undo cover both
 test('a sketch over a component undoes and redoes strokes, then generates', async ({ page }) => {
   await select(page);
   await sketchWithUndo(page, {
+    element: page.getByRole('button', { name: 'Order now' }),
+    file: 'src/components/OrderButton.vue',
+    path: ORDER_BUTTON,
+  });
+});
+
+test('the eye beside Close hides and shows a sketch over its variants, through a reload', async ({
+  page,
+}) => {
+  await select(page);
+  await hideAndShowSketch(page, {
+    element: page.getByRole('button', { name: 'Order now' }),
+    file: 'src/components/OrderButton.vue',
+    path: ORDER_BUTTON,
+  });
+});
+
+test('a panel is dragged by its header, hands its spot to Ask AI and resets', async ({ page }) => {
+  await select(page);
+  await dragPanel(page, {
     element: page.getByRole('button', { name: 'Order now' }),
     file: 'src/components/OrderButton.vue',
     path: ORDER_BUTTON,

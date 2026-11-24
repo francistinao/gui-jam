@@ -304,13 +304,19 @@ export function FinetunePanel({ store, controller }: PanelProps) {
   const preview = useStore(store, (state) => state.preview);
   const busy = useStore(store, (state) => state.busy);
   const ticket = useStore(store, (state) => state.ticket);
+  const panelAt = useStore(store, (state) => state.panelAt);
 
   if (!selection || !anchor) return null;
   const unsaved = preview !== null || Object.keys(draft).length > 0;
   const sections = style ? panelSections(style) : [];
 
   return (
-    <Popover label={`Fine-tune ${selection.file}`} anchor={anchor}>
+    <Popover
+      label={`Fine-tune ${selection.file}`}
+      anchor={anchor}
+      at={panelAt}
+      onMove={controller.movePanel}
+    >
       <PopoverHeader
         tag={style?.tag}
         badge="Fine-tune"

@@ -39,6 +39,8 @@ const job = (id: string, status: 'idle' | 'running' | 'ready' = 'ready'): Job =>
     installError: null,
     ticket: null,
     page: 'http://localhost:5173/menu',
+    sketchHidden: false,
+    panelAt: null,
   }) as Job;
 
 describe('persisted jobs', () => {
@@ -81,6 +83,39 @@ describe('persisted jobs', () => {
     const older = JSON.parse(serialize([job('j2')], null, true));
     delete older.jobs[0].page;
     expect(parseSaved(JSON.stringify(older))?.jobs[0]?.page).toBeNull();
+  });
+
+  it('keeps a hidden sketch and a moved panel through a reload', () => {
+    const moved = { ...job('j1'), sketchHidden: true, panelAt: { left: 40, top: 220 } };
+    const saved = parseSaved(serialize([moved], 'j1', true));
+    expect(saved?.jobs[0]?.sketchHidden).toBe(true);
+    expect(saved?.jobs[0]?.panelAt).toEqual({ left: 40, top: 220 });
+  });
+
+  it('shows the sketch and places the panel beside its drawing for a save made before either existed', () => {
+    const older = JSON.parse(serialize([job('j1')], null, true));
+    delete older.jobs[0].sketchHidden;
+    delete older.jobs[0].panelAt;
+    const saved = parseSaved(JSON.stringify(older));
+    expect(saved?.jobs[0]?.sketchHidden).toBe(false);
+    expect(saved?.jobs[0]?.panelAt).toBeNull();
+  });
+
+  it.each([
+    ['a string', 'left'],
+    ['missing top', { left: 4 }],
+    ['text numbers', { left: '4', top: '5' }],
+    ['infinite', { left: 4, top: Number.POSITIVE_INFINITY }],
+    ['null', null],
+  ])('drops a panel spot that is %s', (_label, panelAt) => {
+    const text = JSON.stringify({
+      version: 1,
+      focus: null,
+      jobs: [{ ...job('j1'), panelAt, sketchHidden: 'yes' }],
+    });
+    const saved = parseSaved(text);
+    expect(saved?.jobs[0]?.panelAt).toBeNull();
+    expect(saved?.jobs[0]?.sketchHidden).toBe(false);
   });
 
   it('can leave the images out when storage is short', () => {

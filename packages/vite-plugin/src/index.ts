@@ -272,6 +272,7 @@ export function guijam(options: GuijamOptions = {}): Plugin<GuijamApi> {
     const onDisk = !ASSET_FILE.test(id) && existsSync(id) ? await readFile(id, 'utf8') : undefined;
     const previous = overlays.get(id);
     const unchanged = content === undefined && previous !== undefined && previous === onDisk;
+    const reshown = content !== undefined && content === previous;
     if (content === undefined) overlays.delete(id);
     else overlays.set(id, content);
     if (unchanged) settled.set(id, previous);
@@ -290,7 +291,12 @@ export function guijam(options: GuijamOptions = {}): Plugin<GuijamApi> {
       );
     }
 
-    if (ASSET_FILE.test(id) || (content === undefined && onDisk === undefined) || unchanged) {
+    if (
+      ASSET_FILE.test(id) ||
+      (content === undefined && onDisk === undefined) ||
+      unchanged ||
+      reshown
+    ) {
       for (const mod of modules) client.moduleGraph.invalidateModule(mod);
       await syncCandidates(id, content);
       return { updateId, status: 'ok', latencyMs: 0, errors: [] };
@@ -398,6 +404,7 @@ export function guijam(options: GuijamOptions = {}): Plugin<GuijamApi> {
           response.end(body);
         }, next);
       });
+      server.environments.client.hot.on('gj:reloading', () => pages.reloading());
       server.environments.client.hot.on('vite:client:disconnect', (_data, client) => {
         pages.left(client);
       });

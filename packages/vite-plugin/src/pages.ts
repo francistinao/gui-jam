@@ -3,6 +3,7 @@ import type { GuijamMessage } from '@guijam/contracts-ts';
 export const GRACE_MS = 20_000;
 export const KEEP_FINISHED_MS = 120_000;
 export const RELOAD_WINDOW_MS = 10_000;
+export const RETURN_MS = 10_000;
 
 export interface Timers {
   set: (run: () => void, ms: number) => unknown;
@@ -20,24 +21,32 @@ export class Pages<Client> {
   private readonly runsOf = new Map<string, Set<string>>();
   private readonly ownerOf = new Map<string, string>();
   private readonly leaving = new Map<string, unknown>();
+  private readonly releasing = new Map<string, unknown>();
   private readonly pending = new Map<string, Promise<GuijamMessage>>();
   private readonly finished = new Map<string, { reply: GuijamMessage; timer: unknown }>();
   private reloadTimer: unknown;
 
   constructor(
     private readonly drop: (runId: string) => void,
-    private readonly release: (runId: string) => void,
+    private readonly release: (runId: string) => unknown,
     private readonly timers: Timers = REAL_TIMERS,
   ) {}
 
-  seen(client: Client, pageId: string): void {
+  async seen(client: Client, pageId: string, reloaded = false): Promise<void> {
     const timer = this.leaving.get(pageId);
     if (timer !== undefined) {
       this.timers.clear(timer);
       this.leaving.delete(pageId);
     }
+    const releases: Promise<void>[] = [];
+    for (const [away, waiting] of [...this.releasing]) {
+      this.timers.clear(waiting);
+      if (away === pageId && reloaded) this.releasing.delete(away);
+      else releases.push(this.releaseRuns(away));
+    }
     this.pageOf.set(client, pageId);
     this.clientOf.set(pageId, client);
+    await Promise.all(releases);
   }
 
   client(runId: string): Client | undefined {
@@ -82,12 +91,20 @@ export class Pages<Client> {
     if (pageId === undefined || this.clientOf.get(pageId) !== client) return;
     this.clientOf.delete(pageId);
     if (this.reloadTimer === undefined) {
-      for (const runId of this.runsOf.get(pageId) ?? []) this.release(runId);
+      this.releasing.set(
+        pageId,
+        this.timers.set(() => void this.releaseRuns(pageId), RETURN_MS),
+      );
     }
     this.leaving.set(
       pageId,
       this.timers.set(() => this.forget(pageId), GRACE_MS),
     );
+  }
+
+  private async releaseRuns(pageId: string): Promise<void> {
+    this.releasing.delete(pageId);
+    await Promise.all([...(this.runsOf.get(pageId) ?? [])].map((runId) => this.release(runId)));
   }
 
   private finish(runId: string, reply: GuijamMessage): void {
@@ -108,6 +125,11 @@ export class Pages<Client> {
 
   private forget(pageId: string): void {
     this.leaving.delete(pageId);
+    const release = this.releasing.get(pageId);
+    if (release !== undefined) {
+      this.timers.clear(release);
+      this.releasing.delete(pageId);
+    }
     const runs = this.runsOf.get(pageId);
     this.runsOf.delete(pageId);
     for (const runId of runs ?? []) {

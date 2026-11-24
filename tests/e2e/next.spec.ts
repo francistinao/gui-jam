@@ -5,8 +5,10 @@ import { fileURLToPath } from 'node:url';
 import { expect, type Locator, type Page, test } from '@playwright/test';
 import { GJD_BINARY, requireDaemonBinary, stopDaemon } from './support/daemon.js';
 import {
+  dragPanel,
   editFoundText,
   editText,
+  hideAndShowSketch,
   jiraLoop,
   pickThemeColor,
   promptForTwo,
@@ -230,6 +232,76 @@ for (const bundler of BUNDLERS) {
         file: 'app/components/OrderButton.tsx',
         path: ORDER_BUTTON,
       });
+    });
+
+    test('the eye beside Close hides and shows a sketch over its variants, through a reload', async ({
+      page,
+    }) => {
+      await open(page, next.url);
+      await chooseTool(page, 'Select');
+      await hideAndShowSketch(page, {
+        element: page.getByRole('button', { name: 'Order now' }),
+        file: 'app/components/OrderButton.tsx',
+        path: ORDER_BUTTON,
+      });
+    });
+
+    test('a panel is dragged by its header, hands its spot to Ask AI and resets', async ({
+      page,
+    }) => {
+      await open(page, next.url);
+      await chooseTool(page, 'Select');
+      await dragPanel(page, {
+        element: page.getByRole('button', { name: 'Order now' }),
+        file: 'app/components/OrderButton.tsx',
+        path: ORDER_BUTTON,
+      });
+    });
+
+    test('a variant hot reload cannot swap, reopened from another page, loads the page once and settles', async ({
+      page,
+    }) => {
+      const original = originals.get(ORDER_BUTTON) ?? '';
+      await writeFile(ORDER_BUTTON, `${original}\nexport const ORDER_SAMPLES = ['Order now'];\n`);
+      await open(page, next.url);
+      await chooseTool(page, 'Draw');
+      await circle(page, page.getByRole('button', { name: 'Order now' }));
+      const prompt = page.getByRole('dialog', { name: 'Ask AI app/components/OrderButton.tsx' });
+      await prompt
+        .getByRole('textbox', { name: 'Describe the change' })
+        .fill('Make it feel more premium');
+      await prompt.getByRole('button', { name: 'Generate' }).click();
+      let settling = 0;
+      page.on('load', () => {
+        settling += 1;
+      });
+      await expect(prompt.getByRole('group', { name: 'Pick a variant' })).toBeVisible({
+        timeout: 60_000,
+      });
+      await page.waitForTimeout(5_000);
+      expect(settling).toBeLessThanOrEqual(1);
+      await expect(prompt.getByRole('group', { name: 'Pick a variant' })).toBeVisible();
+      await page.goto(new URL('menu', next.url).href);
+      const away = page.getByRole('button', { name: /^Drawing 1: \d variants?\. Opens \/$/ });
+      await expect(away).toBeVisible({ timeout: 60_000 });
+      let loads = 0;
+      page.on('load', () => {
+        loads += 1;
+      });
+
+      await away.click();
+
+      await expect(prompt.getByRole('group', { name: 'Pick a variant' })).toBeVisible({
+        timeout: 60_000,
+      });
+      await page.waitForTimeout(10_000);
+      expect(loads).toBeLessThanOrEqual(3);
+      await expect(prompt.getByRole('group', { name: 'Pick a variant' })).toBeVisible();
+      await expect(page.getByRole('button', { name: 'Order now' })).toHaveCSS(
+        'background-color',
+        LIGHT_BLUE_RGB,
+      );
+      await prompt.getByRole('button', { name: 'Discard' }).click();
     });
 
     test('the h1 text is edited without AI, previewed, applied and undone', async ({ page }) => {

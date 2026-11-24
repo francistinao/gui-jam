@@ -9,6 +9,7 @@ import {
   changesIn,
   chooseDrawTarget,
   clamp,
+  clampPanel,
   classifyGesture,
   closesOnEscape,
   closeUpRect,
@@ -22,19 +23,25 @@ import {
   formatElapsed,
   hexOfComputedColor,
   invertChanges,
+  isPanelSpot,
   keyedParts,
   linksIn,
   MAX_LINKS,
   MAX_TARGETS,
   nearestIndex,
   needsLine,
+  nudgePanel,
   OPACITY_RANGE,
+  PANEL_EDGE,
+  PANEL_MIN_ROOM,
   type Placement,
   type Point,
   pagePath,
   panelSections,
   parseHex,
+  pastDragThreshold,
   placedCopy,
+  placeHeldPanel,
   placePopover,
   RADIUS_RANGE,
   type Rect,
@@ -43,8 +50,10 @@ import {
   type Size,
   type SketchOwner,
   type SketchState,
+  type SketchToggleOwner,
   shiftedLine,
   shownText,
+  showsSketchToggle,
   sketchAnchor,
   sketchingOver,
   sketchOver,
@@ -1123,5 +1132,189 @@ describe('keyedParts', () => {
     const keys = keyedParts(parts).map(({ key }) => key);
     expect(new Set(keys).size).toBe(3);
     expect(keyedParts(parts).map(({ key }) => key)).toEqual(keys);
+  });
+});
+
+describe('clampPanel', () => {
+  const panel = { width: 300, height: 400 };
+  const viewport = { width: 1280, height: 800 };
+
+  it('leaves a panel that fits where it was dropped', () => {
+    expect(clampPanel({ left: 500, top: 200 }, panel, viewport)).toEqual({ left: 500, top: 200 });
+  });
+
+  it('pulls a panel dragged past the right or bottom edge back inside, with the edge gap', () => {
+    expect(clampPanel({ left: 1200, top: 700 }, panel, viewport)).toEqual({
+      left: 1280 - 300 - PANEL_EDGE,
+      top: 800 - 400 - PANEL_EDGE,
+    });
+  });
+
+  it('pulls a panel dragged past the left or top edge back inside', () => {
+    expect(clampPanel({ left: -250, top: -90 }, panel, viewport)).toEqual({
+      left: PANEL_EDGE,
+      top: PANEL_EDGE,
+    });
+  });
+
+  it('pins the top at the edge when the panel is taller than the window, so the header stays reachable', () => {
+    expect(clampPanel({ left: 40, top: 300 }, { width: 300, height: 900 }, viewport)).toEqual({
+      left: 40,
+      top: PANEL_EDGE,
+    });
+  });
+
+  it('pins a panel at the top left edge of a window narrower and shorter than it', () => {
+    expect(clampPanel({ left: 90, top: 90 }, panel, { width: 200, height: 150 })).toEqual({
+      left: PANEL_EDGE,
+      top: PANEL_EDGE,
+    });
+  });
+
+  it('rounds to whole pixels', () => {
+    expect(clampPanel({ left: 100.4, top: 99.6 }, panel, viewport)).toEqual({
+      left: 100,
+      top: 100,
+    });
+  });
+});
+
+describe('placeHeldPanel', () => {
+  const viewport = { width: 1280, height: 800 };
+
+  it('keeps a moved panel where it was dropped and lets it use the room below', () => {
+    expect(placeHeldPanel({ left: 400, top: 100 }, { width: 300, height: 300 }, viewport)).toEqual({
+      left: 400,
+      top: 100,
+      maxHeight: 800 - 100 - PANEL_EDGE,
+    });
+  });
+
+  it('does not move a dropped panel when it grows, it scrolls inside the room it has', () => {
+    const dropped = { left: 400, top: 450 };
+    const small = placeHeldPanel(dropped, { width: 300, height: 200 }, viewport);
+    const grown = placeHeldPanel(dropped, { width: 300, height: 700 }, viewport);
+    expect(grown).toEqual(small);
+    expect(grown.maxHeight).toBe(800 - 450 - PANEL_EDGE);
+  });
+
+  it('lifts a panel parked too low so it keeps at least the minimum room', () => {
+    const placed = placeHeldPanel({ left: 400, top: 760 }, { width: 300, height: 500 }, viewport);
+    expect(placed.top).toBe(800 - PANEL_MIN_ROOM - PANEL_EDGE);
+    expect(placed.maxHeight).toBe(PANEL_MIN_ROOM);
+  });
+
+  it('keeps a short panel fully on screen', () => {
+    const placed = placeHeldPanel({ left: 400, top: 760 }, { width: 300, height: 120 }, viewport);
+    expect(placed.top).toBe(800 - 120 - PANEL_EDGE);
+  });
+
+  it('pulls a moved panel back inside when the window shrinks', () => {
+    const placed = placeHeldPanel(
+      { left: 1100, top: 600 },
+      { width: 300, height: 400 },
+      {
+        width: 900,
+        height: 700,
+      },
+    );
+    expect(placed).toEqual({
+      left: 900 - 300 - PANEL_EDGE,
+      top: 700 - PANEL_MIN_ROOM - PANEL_EDGE,
+      maxHeight: PANEL_MIN_ROOM,
+    });
+  });
+});
+
+describe('pastDragThreshold', () => {
+  const from = { x: 100, y: 100 };
+
+  it.each([
+    [{ x: 100, y: 100 }, false],
+    [{ x: 102, y: 100 }, false],
+    [{ x: 101, y: 102 }, false],
+    [{ x: 103, y: 100 }, true],
+    [{ x: 100, y: 97 }, true],
+    [{ x: 102.2, y: 102.2 }, true],
+  ])('moving to %o is a drag: %s', (to, dragged) => {
+    expect(pastDragThreshold(from, to)).toBe(dragged);
+  });
+});
+
+describe('nudgePanel', () => {
+  const spot = { left: 200, top: 150 };
+
+  it.each([
+    ['ArrowLeft', false, { left: 190, top: 150 }],
+    ['ArrowRight', false, { left: 210, top: 150 }],
+    ['ArrowUp', false, { left: 200, top: 140 }],
+    ['ArrowDown', false, { left: 200, top: 160 }],
+    ['ArrowLeft', true, { left: 150, top: 150 }],
+    ['ArrowRight', true, { left: 250, top: 150 }],
+    ['ArrowUp', true, { left: 200, top: 100 }],
+    ['ArrowDown', true, { left: 200, top: 200 }],
+  ])('%s with Shift %s moves the panel to %o', (key, big, moved) => {
+    expect(nudgePanel(spot, key, big)).toEqual(moved);
+  });
+
+  it('puts the panel back beside its drawing on Home', () => {
+    expect(nudgePanel(spot, 'Home', false)).toBe('reset');
+    expect(nudgePanel(spot, 'Home', true)).toBe('reset');
+  });
+
+  it.each(['Enter', ' ', 'Escape', 'Tab', 'a', 'End'])('ignores %j', (key) => {
+    expect(nudgePanel(spot, key, false)).toBeNull();
+  });
+});
+
+describe('isPanelSpot', () => {
+  it.each([
+    [{ left: 0, top: 0 }, true],
+    [{ left: -4.5, top: 30 }, true],
+    [{ left: 4 }, false],
+    [{ left: '4', top: 5 }, false],
+    [{ left: Number.NaN, top: 5 }, false],
+    [{ left: 4, top: Number.POSITIVE_INFINITY }, false],
+    [null, false],
+    ['4,5', false],
+  ])('%o is a panel spot: %s', (value, valid) => {
+    expect(isPanelSpot(value)).toBe(valid);
+  });
+});
+
+describe('showsSketchToggle', () => {
+  const stroke = [
+    { x: 1, y: 2 },
+    { x: 3, y: 4 },
+  ];
+  const owner = (
+    status: SketchToggleOwner['generation']['status'],
+    variants: number,
+    strokes: unknown[] = [stroke],
+  ): SketchToggleOwner => ({
+    strokes,
+    generation: { status, variants: Array.from({ length: variants }, (_, index) => index) },
+  });
+
+  it('shows once variants are shown for a drawing with strokes', () => {
+    expect(showsSketchToggle(owner('ready', 3))).toBe(true);
+  });
+
+  it('shows as soon as the first variant arrives while the others are still generating', () => {
+    expect(showsSketchToggle(owner('running', 1))).toBe(true);
+  });
+
+  it('stays away while sketching, before anything came back, and for an answer without variants', () => {
+    expect(showsSketchToggle(owner('idle', 0))).toBe(false);
+    expect(showsSketchToggle(owner('running', 0))).toBe(false);
+    expect(showsSketchToggle(owner('ready', 0))).toBe(false);
+  });
+
+  it('stays away for an Ask AI drawing with no strokes', () => {
+    expect(showsSketchToggle(owner('ready', 3, []))).toBe(false);
+  });
+
+  it('stays away for variants left over on a drawing that went back to sketching', () => {
+    expect(showsSketchToggle(owner('idle', 3))).toBe(false);
   });
 });

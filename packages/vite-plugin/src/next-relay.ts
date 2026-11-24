@@ -159,7 +159,12 @@ async function serve(options: NextRelayOptions): Promise<NextRelay> {
 
   async function applyOverlay(file: string, content: string | undefined): Promise<UpdateResult> {
     const projectPath = toPosix(file);
-    await writeFile(overlayFileOf(root, projectPath), content ?? '');
+    const overlayFile = overlayFileOf(root, projectPath);
+    const shown = await readFile(overlayFile, 'utf8').catch(() => undefined);
+    if (content !== undefined && content !== '' && shown === content) {
+      return { updateId: randomUUID(), status: 'ok', latencyMs: 0, errors: [] };
+    }
+    await writeFile(overlayFile, content ?? '');
     const candidates = join(candidatesDirOf(root), projectPath.replaceAll('/', '__'));
     await writeFile(candidates, content ?? '');
     return { updateId: randomUUID(), status: 'ok', latencyMs: 0, errors: [] };

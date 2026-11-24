@@ -1,6 +1,8 @@
 import {
   Circle,
   CircleCheck,
+  Eye,
+  EyeOff,
   ImagePlus,
   Link2,
   LoaderCircle,
@@ -14,10 +16,11 @@ import { AnswerPanel } from './AnswerPanel';
 import { ACCEPTED_TYPES, type Attachment, imageFiles, MAX_ATTACHMENTS } from './attachments';
 import { ContentEditor, hasTextContent } from './ContentEditor';
 import type { Controller, ProgressStep, Selection, WidgetState } from './controller';
+import { DelayedTip } from './DelayedTip';
 import { Button } from './figui/button';
 import { cn } from './figui/cn';
 import { INPUT_BASE_CLASS } from './figui/text-input';
-import { formatElapsed, linksIn, MAX_LINKS, stillWorking } from './model';
+import { formatElapsed, linksIn, MAX_LINKS, showsSketchToggle, stillWorking } from './model';
 import { Popover, PopoverHeader, SKETCH_LABEL } from './Popover';
 import { type Store, useStore } from './store';
 import { TicketField } from './TicketField';
@@ -243,6 +246,7 @@ export function PromptPanel({ store, controller }: PanelProps) {
   const answered =
     status === 'ready' && generation.answer !== null && generation.variants.length === 0;
   const arriving = status === 'running' && generation.variants.length > 0;
+  const sketchToggleLabel = job.sketchHidden ? 'Show sketch' : 'Hide sketch';
   const badge = answered
     ? 'Answer'
     : status === 'ready'
@@ -254,14 +258,32 @@ export function PromptPanel({ store, controller }: PanelProps) {
           : 'Ask AI';
 
   return (
-    <Popover label={`Ask AI ${selection.file}`} anchor={anchor}>
+    <Popover
+      label={`Ask AI ${selection.file}`}
+      anchor={anchor}
+      at={job.panelAt}
+      onMove={controller.movePanel}
+    >
       <PopoverHeader
         tag={style?.tag}
         badge={badge}
         number={job.number}
         selection={selection}
         controller={controller}
-      />
+      >
+        {showsSketchToggle(job) ? (
+          <DelayedTip text={sketchToggleLabel}>
+            <Button
+              variant="ghost"
+              size="icon"
+              aria-label={sketchToggleLabel}
+              onClick={controller.toggleSketch}
+            >
+              {job.sketchHidden ? <EyeOff aria-hidden="true" /> : <Eye aria-hidden="true" />}
+            </Button>
+          </DelayedTip>
+        ) : null}
+      </PopoverHeader>
       {grouped ? (
         <TargetList
           targets={targets}

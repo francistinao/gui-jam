@@ -5,7 +5,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { expect, type Locator, type Page, test } from '@playwright/test';
 import { GJD_BINARY, requireDaemonBinary, stopDaemon } from '../e2e/support/daemon.js';
-import { drawAndRewind } from '../e2e/support/new-features.js';
+import { dragPanel, drawAndRewind } from '../e2e/support/new-features.js';
 
 const PLAYGROUND =
   process.env.GUIJAM_PLAYGROUND ?? join(homedir(), 'Documents/personal/guijam-playground');
@@ -56,6 +56,7 @@ const APPS: readonly App[] = [
   { name: 'react-router', port: 4405 },
   { name: 'next', port: 4406 },
   { name: 'solidstart', port: 4407, node24: true },
+  { name: 'preact', port: 4408 },
 ];
 
 function sourceHash(dir: string): string {
@@ -398,6 +399,30 @@ for (const app of APPS) {
       await drawAndRewind(page, prompt, first);
       await page.keyboard.press('Escape');
       await expect(page.getByRole('dialog')).toHaveCount(0);
+      expect(sourceHash(dir)).toBe(before);
+    });
+
+    test('a panel is dragged by its header, hands its spot to Ask AI and resets', async ({
+      page,
+    }) => {
+      const before = sourceHash(dir);
+      await page.goto(url);
+      await expect(page.getByRole('toolbar', { name: 'GUIJam' })).toBeVisible({ timeout: 60_000 });
+      const candidates = await targets(page, 8);
+      let element: Locator | undefined;
+      for (const candidate of candidates) {
+        if (await reachableSpot(candidate)) {
+          element = candidate;
+          break;
+        }
+      }
+      if (!element) throw new Error('no element from project source can be clicked');
+      const src = (await element.getAttribute('data-gj-src')) ?? '';
+      const file = src.replace(/:\d+:\d+$/, '');
+      await selectTool(page);
+
+      await dragPanel(page, { element, file, path: join(dir, file) });
+
       expect(sourceHash(dir)).toBe(before);
     });
   });

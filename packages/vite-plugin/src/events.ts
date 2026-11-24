@@ -13,5 +13,6 @@ declare module 'vite/types/customEvent.d.ts' {
     'gj:request': unknown;
     'gj:response': GuijamMessage;
     'gj:event': GuijamMessage;
+    'gj:reloading': Record<string, never>;
   }
 }

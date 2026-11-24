@@ -179,18 +179,38 @@ describe('splitPage', () => {
   it('takes the page id off the request and falls back to the socket', () => {
     expect(splitPage({ type: 'x', id: 'w1', pageId: 'page-1' }, 'socket-1')).toEqual({
       pageId: 'page-1',
+      reloaded: false,
       data: { type: 'x', id: 'w1' },
     });
     expect(splitPage({ type: 'x' }, 'socket-1')).toEqual({
       pageId: 'socket-1',
+      reloaded: false,
       data: { type: 'x' },
     });
     expect(splitPage({ type: 'x', pageId: 'bad id!' }, 'socket-1')).toEqual({
       pageId: 'socket-1',
+      reloaded: false,
       data: { type: 'x' },
     });
     expect(splitPage({ type: 'x', pageId: 7 }, 'socket-1').pageId).toBe('socket-1');
-    expect(splitPage('text', 'socket-1')).toEqual({ pageId: 'socket-1', data: 'text' });
+    expect(splitPage('text', 'socket-1')).toEqual({
+      pageId: 'socket-1',
+      reloaded: false,
+      data: 'text',
+    });
+  });
+
+  it('takes the reload flag off the request, and only a real true counts', () => {
+    expect(splitPage({ type: 'x', pageId: 'page-1', reloaded: true }, 'socket-1')).toEqual({
+      pageId: 'page-1',
+      reloaded: true,
+      data: { type: 'x' },
+    });
+    expect(splitPage({ type: 'x', pageId: 'page-1', reloaded: 'yes' }, 'socket-1')).toEqual({
+      pageId: 'page-1',
+      reloaded: false,
+      data: { type: 'x' },
+    });
     expect(requestId({ id: 'w3' })).toBe('w3');
     expect(requestId({ id: 3 })).toBeUndefined();
   });

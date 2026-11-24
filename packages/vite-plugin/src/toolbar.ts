@@ -121,6 +121,15 @@ function pageId(): string {
   }
 }
 
+function pageReloaded(): boolean {
+  try {
+    const [entry] = performance.getEntriesByType('navigation');
+    return entry instanceof PerformanceNavigationTiming && entry.type === 'reload';
+  } catch {
+    return false;
+  }
+}
+
 function hasSavedJobs(): boolean {
   try {
     return Boolean(sessionStorage.getItem(JOBS_KEY));
@@ -139,6 +148,7 @@ function linksTicket(): boolean {
 
 function createRequester(hot: ToolbarChannel): WidgetHost['request'] {
   const page = pageId();
+  const reloaded = pageReloaded();
   let next = 1;
   const waiting = new Map<string, (reply: GuijamMessage) => void>();
   hot.on('gj:response', (reply) => {
@@ -167,7 +177,7 @@ function createRequester(hot: ToolbarChannel): WidgetHost['request'] {
         clearTimeout(timer);
         resolve(reply);
       });
-      hot.send('gj:request', { ...message, id, pageId: page });
+      hot.send('gj:request', { ...message, id, pageId: page, reloaded });
     });
 }
 

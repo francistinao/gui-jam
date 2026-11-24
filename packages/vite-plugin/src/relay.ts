@@ -121,13 +121,20 @@ export function requestId(data: unknown): string | undefined {
 
 const PAGE_ID = /^[\w-]{1,100}$/;
 
-export function splitPage(raw: unknown, fallback: string): { pageId: string; data: unknown } {
+export interface PageRequest {
+  pageId: string;
+  reloaded: boolean;
+  data: unknown;
+}
+
+export function splitPage(raw: unknown, fallback: string): PageRequest {
   if (typeof raw !== 'object' || raw === null || !('pageId' in raw)) {
-    return { pageId: fallback, data: raw };
+    return { pageId: fallback, reloaded: false, data: raw };
   }
-  const { pageId, ...data } = raw as { pageId: unknown };
+  const { pageId, reloaded, ...data } = raw as { pageId: unknown; reloaded?: unknown };
   return {
     pageId: typeof pageId === 'string' && PAGE_ID.test(pageId) ? pageId : fallback,
+    reloaded: reloaded === true,
     data,
   };
 }

@@ -218,6 +218,87 @@ export interface Point {
   y: number;
 }
 
+export interface PanelSpot {
+  left: number;
+  top: number;
+}
+
+export const PANEL_EDGE = 12;
+export const DRAG_THRESHOLD = 3;
+const NUDGE = 10;
+const BIG_NUDGE = 50;
+
+export function clampPanel(
+  spot: PanelSpot,
+  panel: Size,
+  viewport: Size,
+  edge = PANEL_EDGE,
+): PanelSpot {
+  const maxLeft = Math.max(edge, viewport.width - panel.width - edge);
+  const maxTop = Math.max(edge, viewport.height - panel.height - edge);
+  return {
+    left: Math.round(Math.min(Math.max(spot.left, edge), maxLeft)),
+    top: Math.round(Math.min(Math.max(spot.top, edge), maxTop)),
+  };
+}
+
+export const PANEL_MIN_ROOM = 240;
+
+export interface HeldPanel extends PanelSpot {
+  maxHeight: number;
+}
+
+export function placeHeldPanel(spot: PanelSpot, panel: Size, viewport: Size): HeldPanel {
+  const room = { width: panel.width, height: Math.min(panel.height, PANEL_MIN_ROOM) };
+  const placed = clampPanel(spot, room, viewport);
+  return { ...placed, maxHeight: Math.max(0, viewport.height - placed.top - PANEL_EDGE) };
+}
+
+export function pastDragThreshold(from: Point, to: Point): boolean {
+  return Math.hypot(to.x - from.x, to.y - from.y) >= DRAG_THRESHOLD;
+}
+
+export function nudgePanel(spot: PanelSpot, key: string, big: boolean): PanelSpot | 'reset' | null {
+  const step = big ? BIG_NUDGE : NUDGE;
+  switch (key) {
+    case 'ArrowLeft':
+      return { left: spot.left - step, top: spot.top };
+    case 'ArrowRight':
+      return { left: spot.left + step, top: spot.top };
+    case 'ArrowUp':
+      return { left: spot.left, top: spot.top - step };
+    case 'ArrowDown':
+      return { left: spot.left, top: spot.top + step };
+    case 'Home':
+      return 'reset';
+    default:
+      return null;
+  }
+}
+
+export function isPanelSpot(value: unknown): value is PanelSpot {
+  if (typeof value !== 'object' || value === null) return false;
+  const { left, top } = value as Record<string, unknown>;
+  return (
+    typeof left === 'number' &&
+    typeof top === 'number' &&
+    Number.isFinite(left) &&
+    Number.isFinite(top)
+  );
+}
+
+export interface SketchToggleOwner {
+  strokes: readonly unknown[];
+  generation: {
+    status: 'idle' | 'running' | 'ready';
+    variants: readonly unknown[];
+  };
+}
+
+export function showsSketchToggle({ strokes, generation }: SketchToggleOwner): boolean {
+  return strokes.length > 0 && generation.status !== 'idle' && generation.variants.length > 0;
+}
+
 export function boundsOf(points: readonly Point[]): Rect {
   const xs = points.map((point) => point.x);
   const ys = points.map((point) => point.y);

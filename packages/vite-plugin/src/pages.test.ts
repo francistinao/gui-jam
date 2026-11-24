@@ -1,6 +1,6 @@
 import type { GuijamMessage } from '@guijam/contracts-ts';
 import { describe, expect, it } from 'vitest';
-import { GRACE_MS, KEEP_FINISHED_MS, Pages, RELOAD_WINDOW_MS } from './pages.js';
+import { GRACE_MS, KEEP_FINISHED_MS, Pages, RELOAD_WINDOW_MS, RETURN_MS } from './pages.js';
 
 function fakeTimers() {
   let now = 0;
@@ -57,8 +57,10 @@ describe('Pages', () => {
     pages.started('page-1', 'run-2', new Promise(() => {}));
 
     pages.left('socket-a');
+    expect(released).toEqual([]);
+    clock.advance(RETURN_MS);
     expect(released).toEqual(['run-1', 'run-2']);
-    clock.advance(GRACE_MS - 1);
+    clock.advance(GRACE_MS - RETURN_MS - 1);
     expect(dropped).toEqual([]);
     clock.advance(1);
 
@@ -174,8 +176,118 @@ describe('Pages', () => {
 
     clock.advance(RELOAD_WINDOW_MS);
     pages.left('socket-b');
+    expect(released).toEqual([]);
+    clock.advance(RETURN_MS);
     expect(released).toEqual(['run-1']);
     expect(dropped).toEqual([]);
+  });
+
+  it('keeps the preview of a page that comes back reloaded, so a reload never undoes it', () => {
+    const dropped: string[] = [];
+    const released: string[] = [];
+    const clock = fakeTimers();
+    const pages = new Pages<string>(
+      (runId) => dropped.push(runId),
+      (runId) => released.push(runId),
+      clock.timers,
+    );
+    pages.seen('socket-a', 'page-1');
+    pages.started('page-1', 'run-1', new Promise(() => {}));
+
+    for (const socket of ['socket-b', 'socket-c', 'socket-d']) {
+      pages.left(pages.client('run-1') ?? '');
+      clock.advance(RETURN_MS / 4);
+      pages.seen(socket, 'page-1', true);
+    }
+    clock.advance(GRACE_MS * 2);
+
+    expect(released).toEqual([]);
+    expect(dropped).toEqual([]);
+    expect(pages.client('run-1')).toBe('socket-d');
+  });
+
+  it('releases at once when the page comes back from a navigation, not a reload', () => {
+    const released: string[] = [];
+    const clock = fakeTimers();
+    const pages = new Pages<string>(
+      () => undefined,
+      (runId) => released.push(runId),
+      clock.timers,
+    );
+    pages.seen('socket-a', 'page-1');
+    pages.started('page-1', 'run-1', new Promise(() => {}));
+
+    pages.left('socket-a');
+    expect(released).toEqual([]);
+    pages.seen('socket-b', 'page-1', false);
+
+    expect(released).toEqual(['run-1']);
+    clock.advance(RETURN_MS * 2);
+    expect(released).toEqual(['run-1']);
+  });
+
+  it("releases a page that is away at once when another page asks for anything, so it never blocks that page's preview", () => {
+    const released: string[] = [];
+    const clock = fakeTimers();
+    const pages = new Pages<string>(
+      () => undefined,
+      (runId) => released.push(runId),
+      clock.timers,
+    );
+    pages.seen('socket-a', 'page-1');
+    pages.started('page-1', 'run-1', new Promise(() => {}));
+    pages.left('socket-a');
+
+    pages.seen('socket-b', 'page-2');
+
+    expect(released).toEqual(['run-1']);
+    pages.seen('socket-c', 'page-1', true);
+    clock.advance(RETURN_MS * 2);
+    expect(released).toEqual(['run-1']);
+  });
+
+  it('waits for the release to finish before the returning page goes on', async () => {
+    const order: string[] = [];
+    let finish!: () => void;
+    const pages = new Pages<string>(
+      () => undefined,
+      () =>
+        new Promise<void>((resolve) => {
+          finish = () => {
+            order.push('released');
+            resolve();
+          };
+        }),
+      fakeTimers().timers,
+    );
+    pages.seen('socket-a', 'page-1');
+    pages.started('page-1', 'run-1', new Promise(() => {}));
+    pages.left('socket-a');
+
+    const back = pages.seen('socket-b', 'page-1').then(() => order.push('relayed'));
+    await Promise.resolve();
+    expect(order).toEqual([]);
+    finish();
+    await back;
+
+    expect(order).toEqual(['released', 'relayed']);
+  });
+
+  it('releases the preview of a page that goes away, once, before its runs are dropped', () => {
+    const events: string[] = [];
+    const clock = fakeTimers();
+    const pages = new Pages<string>(
+      (runId) => events.push(`drop ${runId}`),
+      (runId) => events.push(`release ${runId}`),
+      clock.timers,
+    );
+    pages.seen('socket-a', 'page-1');
+    pages.started('page-1', 'run-1', new Promise(() => {}));
+
+    pages.left('socket-a');
+    clock.advance(GRACE_MS * 2);
+
+    expect(events).toEqual(['release run-1', 'drop run-1']);
   });
 
   it('still drops the runs of a reloaded page that never comes back', () => {

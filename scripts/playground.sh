@@ -34,6 +34,8 @@ scaffold() {
 scaffold sveltekit pnpm dlx sv@1.2.0 create sveltekit --template minimal --types ts \
   --add tailwindcss="plugins:none" --no-install
 scaffold solid pnpm dlx create-vite@9.3.3 solid --template solid-ts --no-interactive --no-immediate
+scaffold preact pnpm dlx create-vite@9.3.3 preact --template preact-ts --no-interactive \
+  --no-immediate
 scaffold nuxt pnpm dlx nuxi@4.0.3 init nuxt --template minimal --packageManager pnpm \
   --no-install --no-gitInit
 scaffold astro pnpm dlx create-astro@5.3.1 astro --template minimal --no-install --no-git \

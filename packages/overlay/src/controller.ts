@@ -42,6 +42,7 @@ import {
   MAX_TARGETS,
   nearestIndex,
   nextJobNumber,
+  type PanelSpot,
   type Point,
   placedCopy,
   type Rect,
@@ -50,6 +51,7 @@ import {
   samplePoints,
   shiftedLine,
   shownText,
+  showsSketchToggle,
   sketchAnchor,
   sketchOver,
   type Tool,
@@ -163,6 +165,8 @@ export interface Job {
   installError: string | null;
   ticket: LinkedTicket | null;
   page: string | null;
+  sketchHidden: boolean;
+  panelAt: PanelSpot | null;
 }
 
 export interface WidgetState {
@@ -173,6 +177,7 @@ export interface WidgetState {
   hovered: Rect | null;
   selection: Selection | null;
   anchor: Rect | null;
+  panelAt: PanelSpot | null;
   group: (Rect & { src: string })[];
   style: ElementStyle | null;
   current: { fill: HexColor | null; radiusPx: number | null } | null;
@@ -195,6 +200,7 @@ export const initialState: WidgetState = {
   hovered: null,
   selection: null,
   anchor: null,
+  panelAt: null,
   group: [],
   style: null,
   current: null,
@@ -429,7 +435,18 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
   }
 
   function updateJob(id: string, change: (job: Job) => Job): void {
-    store.set({ jobs: store.get().jobs.map((job) => (job.id === id ? change(job) : job)) });
+    const changed = (job: Job): Job => {
+      const next = change(job);
+      return next.sketchHidden && !showsSketchToggle(next)
+        ? { ...next, sketchHidden: false }
+        : next;
+    };
+    store.set({ jobs: store.get().jobs.map((job) => (job.id === id ? changed(job) : job)) });
+  }
+
+  function heldSpot(src: string): PanelSpot | null {
+    const { focus, selection, panelAt } = store.get();
+    return focus === null && selection?.src === src ? panelAt : null;
   }
 
   function setGeneration(id: string, generation: Generation): void {
@@ -458,6 +475,7 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
       ticket: null,
       selection: null,
       anchor: null,
+      panelAt: null,
       group: [],
       style: null,
       current: null,
@@ -1039,6 +1057,8 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
       installError: null,
       ticket: store.get().selection?.src === target.src ? store.get().ticket : null,
       page: pageUrl(window.location),
+      sketchHidden: false,
+      panelAt: heldSpot(target.src),
     };
     store.set({ jobs: [...jobs, job] });
     await focusJob(job.id);
@@ -1062,6 +1082,7 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
       selection,
       mode: 'finetune',
       anchor: rectOf(element),
+      panelAt: heldSpot(selection.src),
       group: [],
       style: null,
       current: readCurrent(element),
@@ -1282,6 +1303,18 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
 
     undoSketch: () => editSketch(undoStroke),
 
+    toggleSketch(): void {
+      const job = focused();
+      if (!job || !showsSketchToggle(job)) return;
+      updateJob(job.id, (entry) => ({ ...entry, sketchHidden: !entry.sketchHidden }));
+    },
+
+    movePanel(spot: PanelSpot | null): void {
+      const job = focused();
+      if (job) updateJob(job.id, (entry) => ({ ...entry, panelAt: spot }));
+      else store.set({ panelAt: spot });
+    },
+
     redoSketch: () => editSketch(redoStroke),
 
     setPrompt(prompt: string): void {
@@ -1384,7 +1417,7 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
           anchor: job.sketch ? sketchAnchor(job.sketch) : element ? rectOf(element) : job.anchor,
         };
       });
-      store.set({ jobs });
+      store.set({ jobs, focus: saved.focus });
       for (const job of jobs) {
         if (job.generation.status === 'running' && job.generation.runId) {
           void reattach(job.id, job.generation.runId);

@@ -1,4 +1,5 @@
 import type { Job } from './controller';
+import { isPanelSpot } from './model';
 import { storedTicket } from './tracker';
 
 export const JOBS_KEY = 'guijam:jobs';
@@ -71,6 +72,8 @@ export function parseSaved(text: string | null): Saved | null {
     installError: typeof job.installError === 'string' ? job.installError : null,
     ticket: isRecord(job.ticket) && isRecord(job.ticket.ref) ? job.ticket : null,
     page: typeof job.page === 'string' ? job.page : null,
+    sketchHidden: job.sketchHidden === true,
+    panelAt: isPanelSpot(job.panelAt) ? job.panelAt : null,
   }));
   if (jobs.length === 0) return null;
   const focus =

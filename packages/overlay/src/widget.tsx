@@ -69,7 +69,12 @@ export function mount(host: WidgetHost): Widget {
     },
   });
   function repaint(): void {
-    drawLayer.keepOnly(store.get().jobs.flatMap((job) => job.strokes));
+    drawLayer.keepOnly(
+      store
+        .get()
+        .jobs.filter((job) => !job.sketchHidden)
+        .flatMap((job) => job.strokes),
+    );
   }
   let painted = store.get().jobs;
   store.subscribe(() => {

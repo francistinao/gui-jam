@@ -45,7 +45,7 @@ Then start your dev server as usual, for example `npm run dev`. The GUIJam toolb
 | **Draw** (sketch) | Sketch a card, a section or an icon where you want it. GUIJam works out the component and where it goes. |
 | **Ask** | Ask a question about what you see, such as "what's the path of this image?" |
 
-Every applied change shows an **Undo** for 10 seconds, and `Alt+Shift+M` hides the toolbar.
+Every applied change shows an **Undo** for 10 seconds, and `Alt+Shift+M` hides the toolbar. Drag any panel by its header to move it out of the way (double-click the header to put it back), and once a drawing's variants show, the eye next to the close button hides your strokes so you can see the variant.
 
 Modals, popovers, menus and tooltips stay open while you use GUIJam on them, including the browser's own `<dialog>` and `popover`: open one, then pick a tool. A tooltip you hover can't wait for a click on the toolbar, so hover it and press `Alt+Shift+S` or `Alt+Shift+D` instead. While a panel is open, the page stops reacting to the mouse hovering, so a tooltip you picked stays open. A tooltip made only with CSS `:hover` still closes when the pointer leaves it; select its trigger instead.
 

@@ -6,8 +6,10 @@ import { expect, type Locator, type Page, test } from '@playwright/test';
 import { GJD_BINARY, requireDaemonBinary, stopDaemon } from './support/daemon.js';
 import { openFixture } from './support/fixture.js';
 import {
+  dragPanel,
   editFoundText,
   editText,
+  hideAndShowSketch,
   jiraLoop,
   pickThemeColor,
   promptForTwo,
@@ -167,6 +169,28 @@ test('a sketch over a component undoes and redoes strokes, then generates', asyn
   await openFixture(page, nuxt.url);
   await chooseTool(page, 'Select');
   await sketchWithUndo(page, {
+    element: page.getByRole('button', { name: 'Order now' }),
+    file: 'app/components/OrderButton.vue',
+    path: ORDER_BUTTON,
+  });
+});
+
+test('the eye beside Close hides and shows a sketch over its variants, through a reload', async ({
+  page,
+}) => {
+  await openFixture(page, nuxt.url);
+  await chooseTool(page, 'Select');
+  await hideAndShowSketch(page, {
+    element: page.getByRole('button', { name: 'Order now' }),
+    file: 'app/components/OrderButton.vue',
+    path: ORDER_BUTTON,
+  });
+});
+
+test('a panel is dragged by its header, hands its spot to Ask AI and resets', async ({ page }) => {
+  await openFixture(page, nuxt.url);
+  await chooseTool(page, 'Select');
+  await dragPanel(page, {
     element: page.getByRole('button', { name: 'Order now' }),
     file: 'app/components/OrderButton.vue',
     path: ORDER_BUTTON,

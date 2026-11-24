@@ -30,3 +30,35 @@
   cursor: crosshair;
   touch-action: none;
 }
+
+.guijam-tip {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 1;
+  white-space: nowrap;
+  padding: 5px 8px;
+  border-radius: 6px;
+  background: #1e1e1e;
+  color: #fff;
+  font:
+    500 11px / 1.2 Inter,
+    system-ui,
+    sans-serif;
+  box-shadow: 0 2px 8px #00000040;
+  visibility: hidden;
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    opacity 120ms ease,
+    visibility 0s linear 120ms;
+}
+
+[data-tip-host]:hover > .guijam-tip,
+[data-tip-host]:has(:focus-visible) > .guijam-tip {
+  visibility: visible;
+  opacity: 1;
+  transition:
+    opacity 120ms ease 1800ms,
+    visibility 0s linear 1800ms;
+}

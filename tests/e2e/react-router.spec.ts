@@ -12,8 +12,10 @@ import {
 } from './support/daemon.js';
 import { type FixtureServer, openFixture, startFixtureServer } from './support/fixture.js';
 import {
+  dragPanel,
   editFoundText,
   editText,
+  hideAndShowSketch,
   jiraLoop,
   pickThemeColor,
   promptForTwo,
@@ -284,6 +286,46 @@ test('a drawing pill on another route loads the page it was drawn on and opens i
   await expect(here).toHaveCount(0);
 });
 
+test('a pill clicked on another route while its drawing still generates loads the page once and settles', async ({
+  page,
+}) => {
+  test.setTimeout(60_000);
+  await openFixture(page, fixture.url);
+  const draw = page.getByRole('toolbar', { name: 'GUIJam' }).getByRole('button', { name: 'Draw' });
+  await draw.click();
+  await circle(page, page.getByRole('button', { name: 'Order now' }));
+  const prompt = page.getByRole('dialog', { name: 'Ask AI app/components/OrderButton.tsx' });
+  await prompt
+    .getByRole('textbox', { name: 'Describe the change' })
+    .fill('Make it feel more premium, linger');
+  await prompt.getByRole('button', { name: 'Generate' }).click();
+  await expect(page.getByRole('button', { name: /^Drawing 1: Generating/ })).toBeVisible();
+  await draw.click();
+
+  await page.getByRole('link', { name: 'Menu' }).click();
+  await expect(page).toHaveURL(/\/menu$/);
+  const away = page.getByRole('button', { name: /^Drawing 1: Generating\. Opens \/$/ });
+  await expect(away).toBeVisible();
+  let loads = 0;
+  page.on('load', () => {
+    loads += 1;
+  });
+  await away.click();
+
+  await expect(page).toHaveURL(fixture.url);
+  await expect(prompt.getByRole('group', { name: 'Pick a variant' })).toBeVisible({
+    timeout: 20_000,
+  });
+  await expect(page.getByRole('button', { name: 'Order now' })).toHaveCSS(
+    'background-color',
+    LIGHT_BLUE_RGB,
+  );
+  await page.waitForTimeout(8_000);
+  expect(loads).toBe(1);
+  await expect(prompt.getByRole('group', { name: 'Pick a variant' })).toBeVisible();
+  await prompt.getByRole('button', { name: 'Discard' }).click();
+});
+
 test('a sketch in the empty part of a layout lands in the routed page, not the layout', async ({
   page,
 }) => {
@@ -366,6 +408,26 @@ test('Shift+click puts two components in one prompt, and Use and Undo cover both
 test('a sketch over a component undoes and redoes strokes, then generates', async ({ page }) => {
   await select(page);
   await sketchWithUndo(page, {
+    element: page.getByRole('button', { name: 'Order now' }),
+    file: 'app/components/OrderButton.tsx',
+    path: ORDER_BUTTON,
+  });
+});
+
+test('the eye beside Close hides and shows a sketch over its variants, through a reload', async ({
+  page,
+}) => {
+  await select(page);
+  await hideAndShowSketch(page, {
+    element: page.getByRole('button', { name: 'Order now' }),
+    file: 'app/components/OrderButton.tsx',
+    path: ORDER_BUTTON,
+  });
+});
+
+test('a panel is dragged by its header, hands its spot to Ask AI and resets', async ({ page }) => {
+  await select(page);
+  await dragPanel(page, {
     element: page.getByRole('button', { name: 'Order now' }),
     file: 'app/components/OrderButton.tsx',
     path: ORDER_BUTTON,

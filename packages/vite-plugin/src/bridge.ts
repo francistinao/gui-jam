@@ -69,11 +69,10 @@ export function createBridge(options: BridgeOptions): Bridge {
           .catch(reportFailure(`could not drop run ${runId} of a closed page`));
       }
     },
-    (runId) => {
+    (runId) =>
       daemon
         ?.request({ type: 'preview.release', payload: { runId } })
-        .catch(reportFailure(`could not release the preview of run ${runId}`));
-    },
+        .catch(reportFailure(`could not release the preview of run ${runId}`)),
   );
 
   function socketId(client: PageClient): string {
@@ -141,8 +140,8 @@ export function createBridge(options: BridgeOptions): Bridge {
   }
 
   async function handle(raw: unknown, client: PageClient): Promise<void> {
-    const { pageId, data } = splitPage(raw, socketId(client));
-    pages.seen(client, pageId);
+    const { pageId, reloaded, data } = splitPage(raw, socketId(client));
+    await pages.seen(client, pageId, reloaded);
     const attaching = requestRunId(data, 'generate.attach');
     if (attaching !== undefined) {
       const kept = await pages.attach(attaching);
