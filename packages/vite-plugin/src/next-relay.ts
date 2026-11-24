@@ -9,6 +9,7 @@ import type { UpdateResult } from '@guijam/contracts-ts';
 import { type WebSocket, WebSocketServer } from 'ws';
 import { createBridge, type PageClient } from './bridge.js';
 import { candidatesDirOf, overlayFileOf, runDir, TAILWIND_ROOT, toPosix } from './next-paths.js';
+import { noticeUpdate } from './update-check.js';
 
 export interface NextRelayOptions {
   root: string;
@@ -240,6 +241,7 @@ async function serve(options: NextRelayOptions): Promise<NextRelay> {
   };
   const stop = bridge.connect();
   process.once('exit', () => stop?.());
+  void noticeUpdate({ root, version: options.pluginVersion, log: (line) => console.log(line) });
   const record: RelayRecord = { ...relay, pid: process.pid };
   await writeFile(recordFile(root), JSON.stringify(record));
   return relay;

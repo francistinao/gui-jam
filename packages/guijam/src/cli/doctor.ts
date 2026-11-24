@@ -1,6 +1,13 @@
 import { intro, log, outro } from '@clack/prompts';
 import { supportsNext } from '@guijam/vite-plugin/next/version';
 import {
+  checksOff,
+  type FetchTags,
+  fetchDistTags,
+  newestFor,
+  updateMessage,
+} from '@guijam/vite-plugin/update-check';
+import {
   describeProject,
   detectProject,
   type Project,
@@ -15,6 +22,7 @@ export interface DoctorOptions {
   cwd: string;
   gjd: string | undefined;
   missingGjd: string;
+  version: string;
   probe?: boolean;
 }
 
@@ -23,6 +31,22 @@ type Level = 'ok' | 'warn' | 'fail';
 interface Check {
   level: Level;
   message: string;
+}
+
+export async function updateCheck(
+  version: string,
+  env: NodeJS.ProcessEnv,
+  fetchTags: FetchTags = fetchDistTags,
+): Promise<Check | undefined> {
+  if (checksOff(version, env)) return undefined;
+  try {
+    const newest = newestFor(version, await fetchTags());
+    return newest
+      ? { level: 'warn', message: updateMessage(version, newest) }
+      : { level: 'ok', message: `guijam ${version} is the newest version` };
+  } catch {
+    return { level: 'warn', message: "Couldn't check npm for a newer guijam" };
+  }
 }
 
 const SUPPORTED_VITE = new Set([6, 7, 8]);
@@ -155,6 +179,8 @@ async function toolChecks(options: DoctorOptions): Promise<Check[]> {
 export async function doctor(options: DoctorOptions): Promise<number> {
   intro('GUIJam doctor');
   const checks: Check[] = [nodeCheck()];
+  const latest = await updateCheck(options.version, process.env);
+  if (latest) checks.push(latest);
   try {
     checks.push(...(await projectChecks(detectProject(options.cwd))));
   } catch (error) {

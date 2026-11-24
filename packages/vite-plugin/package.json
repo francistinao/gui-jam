@@ -25,6 +25,10 @@
     "./next/version": {
       "types": "./dist/next-version.d.ts",
       "default": "./dist/next-version.js"
+    },
+    "./update-check": {
+      "types": "./dist/update-check.d.ts",
+      "default": "./dist/update-check.js"
     }
   },
   "files": [

@@ -6,6 +6,7 @@ import { colorDepth, highlighter, renderBanner } from './banner.js';
 import { doctor } from './doctor.js';
 import { runCommand } from './gjd.js';
 import { init } from './init.js';
+import { update } from './update.js';
 
 const HELP = `Usage: guijam <command> [options]
 
@@ -14,6 +15,7 @@ Commands
   doctor               Check the setup
   doctor --probe       Also send one short test request to the AI tool
                        (spends a few tokens)
+  update               Install the newest guijam
   provider list        List the AI coding CLIs GUIJam can drive
   provider use <id>    Choose the CLI GUIJam drives; add --model <id> to pick its
                        model, or --effort low|medium|high to fix how hard it thinks
@@ -125,8 +127,11 @@ export async function main(argv: string[]): Promise<number> {
         cwd,
         gjd: findDaemonBinary(),
         missingGjd: missingGjd(),
+        version,
         probe: values.probe === true,
       });
+    case 'update':
+      return update({ cwd, version });
     case undefined:
     case 'help':
       banner();

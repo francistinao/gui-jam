@@ -58,6 +58,7 @@ Run these in your app's folder.
 | `npx guijam init` | Sets up GUIJam: adds the package, wires your framework's config, and picks your AI tool and logs it in. Safe to run again. |
 | `npx guijam doctor` | Checks Node, your framework, the config wiring, the `gjd` daemon and your AI tool's login. |
 | `npx guijam doctor --probe` | Also sends one short test request to your AI tool, to show it answers. Spends a few tokens. |
+| `npx guijam update` | Installs the newest guijam with your package manager. Restart the dev server afterwards. |
 | `npx guijam provider list` | Lists the AI coding CLIs GUIJam can drive, and whether each is installed and logged in. |
 | `npx guijam provider use <id>` | Switches the AI tool: `claude-code`, `codex`, `opencode`, `qwen-code` or `gemini-cli`. |
 | `npx guijam provider use opencode --model <id>` | With OpenCode, also picks the model, such as `deepseek/deepseek-chat`. |
@@ -90,8 +91,11 @@ The AI tool you pick is saved for your user in `~/.config/guijam/config.toml`, a
 | `GUIJAM_GJD_BIN` | Path to a `gjd` binary to use instead of the one installed from npm |
 | `GUIJAM_BROWSER` | Path to the Chromium-based browser that takes screenshots of links in your prompts. By default GUIJam finds Chrome, Brave, Edge or Chromium. |
 | `XDG_CONFIG_HOME` | Moves the saved AI tool choice to `$XDG_CONFIG_HOME/guijam/config.toml`. Without it, the choice is saved in `~/.config/guijam/` on macOS and Linux and in `%APPDATA%\guijam\` on Windows. |
+| `GUIJAM_NO_UPDATE_CHECK` | Set to `1` to stop the daily check for a newer guijam. The check is also off in CI. |
 
 GUIJam keeps its run state, logs and undo journal in `.guijam/` in your project. `init` adds that folder to `.gitignore`.
+
+Once a day, when the dev server starts, GUIJam asks npm for the newest guijam version number and prints one line if yours is older. It sends nothing about your project, and keeps the answer in `.guijam/update-check.json`.
 
 ## Supported frameworks
 
@@ -152,7 +156,7 @@ npx guijam jira pair <code>   # the code comes from Pair GUIJam in any ticket's 
 - **Report to Jira.** QA and designers running the app can file a ticket from any element. The screenshot, file and line, and page address are added for them.
 - **For the team in Jira.** The GUIJam panel on each ticket shows the result without running GUIJam, and `guijamStatus = queued` finds tickets waiting for a developer.
 
-Privacy: with Jira paired, GUIJam itself sends something for the first time: the screenshots and diffs of changes you link, only to your own Jira site, through the app your admin installed. Your Atlassian password and API tokens are never on your machine; GUIJam keeps only a pairing token, revocable from Jira, in `~/.config/guijam/trackers.toml` (readable only by you). The Jira app makes no AI calls.
+Privacy: with Jira paired, GUIJam sends the screenshots and diffs of changes you link, only to your own Jira site, through the app your admin installed. Your Atlassian password and API tokens are never on your machine; GUIJam keeps only a pairing token, revocable from Jira, in `~/.config/guijam/trackers.toml` (readable only by you). The Jira app makes no AI calls.
 
 ## Architecture
 

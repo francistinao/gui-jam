@@ -46,7 +46,7 @@ function answered<T extends string | boolean>(value: T | symbol): T {
   return value;
 }
 
-function messageOf(error: unknown): string {
+export function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
@@ -94,7 +94,10 @@ async function installStep(project: Project, options: InitOptions): Promise<void
     log.info('Skipped adding guijam to package.json');
     return;
   }
-  const spec = `guijam@${options.version}`;
+  await installGuijam(project, `guijam@${options.version}`);
+}
+
+export async function installGuijam(project: Project, spec: string): Promise<void> {
   const args = installArgs(project, spec);
   const progress = spinner();
   progress.start(`Installing ${spec} with ${project.packageManager}`);

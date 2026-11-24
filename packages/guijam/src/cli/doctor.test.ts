@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { detectProject } from './detect.js';
-import { nodeSupported, projectChecks } from './doctor.js';
+import { nodeSupported, projectChecks, updateCheck } from './doctor.js';
 
 const dirs: string[] = [];
 
@@ -63,5 +63,39 @@ describe('projectChecks', () => {
       level: 'fail',
       message: 'astro.config does not load guijam. Run npx guijam init.',
     });
+  });
+});
+
+describe('updateCheck', () => {
+  it('names the newer guijam and the command to install it', async () => {
+    expect(await updateCheck('0.3.0', {}, async () => ({ latest: '0.3.1' }))).toEqual({
+      level: 'warn',
+      message: 'guijam 0.3.1 is available (you have 0.3.0). Run npx guijam update to install it.',
+    });
+  });
+
+  it('says the install is the newest', async () => {
+    expect(await updateCheck('0.3.1', {}, async () => ({ latest: '0.3.1' }))).toEqual({
+      level: 'ok',
+      message: 'guijam 0.3.1 is the newest version',
+    });
+  });
+
+  it('warns without failing when npm cannot be reached', async () => {
+    const offline = async () => {
+      throw new Error('getaddrinfo ENOTFOUND registry.npmjs.org');
+    };
+
+    expect(await updateCheck('0.3.0', {}, offline)).toEqual({
+      level: 'warn',
+      message: "Couldn't check npm for a newer guijam",
+    });
+  });
+
+  it('adds no line when the check is off', async () => {
+    const fetchTags = async () => ({ latest: '0.3.1' });
+
+    expect(await updateCheck('0.3.0', { GUIJAM_NO_UPDATE_CHECK: '1' }, fetchTags)).toBeUndefined();
+    expect(await updateCheck('0.0.0', {}, fetchTags)).toBeUndefined();
   });
 });

@@ -23,6 +23,7 @@ import { type AstroCompiler, injectAstroSourceLocations } from './transform-astr
 import { injectSourceLocations } from './transform-srcloc.js';
 import { injectSvelteSourceLocations, type SvelteCompiler } from './transform-svelte-srcloc.js';
 import { injectVueSourceLocations, type VueSfcCompiler } from './transform-vue-srcloc.js';
+import { noticeUpdate } from './update-check.js';
 import { createUpdateTracker, isUpdateResult } from './update-tracker.js';
 
 export type { GuijamMessage, UpdateResult } from '@guijam/contracts-ts';
@@ -403,6 +404,11 @@ export function guijam(options: GuijamOptions = {}): Plugin<GuijamApi> {
       server.environments.client.hot.on('gj:request', (raw, client) => bridge.handle(raw, client));
       const stop = bridge.connect();
       if (stop) server.httpServer?.once('close', stop);
+      void noticeUpdate({
+        root,
+        version: PLUGIN_VERSION,
+        log: (line) => server.config.logger.info(line, { timestamp: true }),
+      });
     },
 
     resolveId(source, importer) {
