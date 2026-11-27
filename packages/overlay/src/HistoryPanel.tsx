@@ -1,5 +1,5 @@
 import type { HistoryEntry } from '@guijam/contracts-ts';
-import { useCallback, useEffect, useState, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import type { Controller, WidgetState } from './controller';
 import { Button } from './figui/button';
 import { Tab, Tabs, TabsList } from './figui/tabs';
@@ -87,10 +87,14 @@ export function HistoryPanel({
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [at, setAt] = useState<PanelSpot | null>(null);
+  const latest = useRef(0);
 
   const load = useCallback(
     async (before: string | null) => {
+      latest.current += 1;
+      const sequence = latest.current;
       const found = await controller.listHistory(filter === 'page' ? here : null, before);
+      if (sequence !== latest.current) return;
       if ('error' in found) {
         setError(found.error.message);
         return;

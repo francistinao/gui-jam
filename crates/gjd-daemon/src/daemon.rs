@@ -209,7 +209,7 @@ impl From<CommitError> for Failure {
                     if start == end {
                         format!("line {start}")
                     } else {
-                        format!("lines {start}\u{2013}{end}")
+                        format!("lines {start} to {end}")
                     }
                 });
                 let action = if blockers.is_empty() {
@@ -1475,15 +1475,12 @@ impl Daemon {
             ),
             GuijamMessage::ChangesetCommit { id, payload } => reply(
                 id,
-                self.commit(
-                    &payload.changeset_id,
-                    payload.page_url.as_ref().map(|url| url.as_str()),
-                )
-                .await
-                .map(|done| GuijamMessage::CommitDone {
-                    id: None,
-                    payload: done,
-                }),
+                self.commit(&payload.changeset_id, payload.page_url.as_deref())
+                    .await
+                    .map(|done| GuijamMessage::CommitDone {
+                        id: None,
+                        payload: done,
+                    }),
             ),
             GuijamMessage::ChangesetDiscard { id, payload } => reply(
                 id,
@@ -3742,7 +3739,7 @@ impl Daemon {
     async fn history(&self, request: &JournalList) -> Result<JournalEntries, Failure> {
         let _write = self.write_lock.lock().await;
         let journal = Arc::clone(&self.journal);
-        let page = request.page_url.as_ref().map(|url| url.to_string());
+        let page = request.page_url.clone();
         let before = request.before.clone();
         let limit = request
             .limit

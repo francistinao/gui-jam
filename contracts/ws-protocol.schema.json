@@ -1115,7 +1115,7 @@
       "additionalProperties": false,
       "properties": {
         "changesetId": { "type": "string" },
-        "pageUrl": { "type": "string", "maxLength": 2048 }
+        "pageUrl": { "type": "string" }
       }
     },
     "RedoDone": {
@@ -1132,7 +1132,7 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "pageUrl": { "type": "string", "maxLength": 2048 },
+        "pageUrl": { "type": "string" },
         "before": { "type": "string" },
         "limit": { "type": "integer", "minimum": 1, "maximum": 100 }
       }

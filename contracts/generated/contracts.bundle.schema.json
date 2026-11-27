@@ -2618,8 +2618,7 @@
           "type": "string"
         },
         "pageUrl": {
-          "type": "string",
-          "maxLength": 2048
+          "type": "string"
         }
       }
     },
@@ -2645,8 +2644,7 @@
       "additionalProperties": false,
       "properties": {
         "pageUrl": {
-          "type": "string",
-          "maxLength": 2048
+          "type": "string"
         },
         "before": {
           "type": "string"

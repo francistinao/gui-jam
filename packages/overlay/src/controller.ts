@@ -542,6 +542,11 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
     }
   }
 
+  function rebaseDraft(): void {
+    const { draft, selection } = store.get();
+    if (selection && Object.keys(draft).length > 0) setDraft(draft);
+  }
+
   function changedHistory(): void {
     store.set({ historyVersion: store.get().historyVersion + 1 });
   }
@@ -1743,12 +1748,12 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
 
     async undo(journalId: string): Promise<void> {
       const reply = await host.request({ type: 'journal.undo', payload: { journalId } });
+      changedHistory();
       if (reply.type !== 'undo.done') {
         notify(failure(reply), UNDO_WINDOW_MS);
         return;
       }
       notify({ kind: 'info', message: 'Change undone.' });
-      changedHistory();
       const { selection, style } = store.get();
       if (!selection) return;
       if (style?.content?.some((part) => part.kind === 'found')) {
@@ -1765,6 +1770,7 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
       store.set({ selection: moved });
       await inspect(moved, true);
       refreshCurrent(moved);
+      rebaseDraft();
     },
 
     async close(): Promise<void> {
@@ -1804,6 +1810,7 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
 
     async redo(journalId: string): Promise<void> {
       const reply = await host.request({ type: 'journal.redo', payload: { journalId } });
+      changedHistory();
       if (reply.type !== 'redo.done') {
         notify(failure(reply), UNDO_WINDOW_MS);
         return;
@@ -1812,9 +1819,9 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
         { kind: 'info', message: 'Change reapplied.', undoJournalId: reply.payload.redoOf },
         UNDO_WINDOW_MS,
       );
-      changedHistory();
       const { selection } = store.get();
       if (selection) await inspect(selection, true);
+      rebaseDraft();
     },
 
     outline(src: string | null): void {
