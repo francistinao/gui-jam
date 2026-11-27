@@ -58,6 +58,8 @@ import {
   type SketchState,
   samplePoints,
   shiftedLine,
+  shiftSketch,
+  shiftStrokes,
   shownText,
   showsSketchToggle,
   sketchAnchor,
@@ -162,6 +164,7 @@ export interface Job {
   also: Selection[];
   anchor: Rect;
   strokes: Point[][];
+  scroll: Point;
   sketch: SketchState | null;
   generation: Generation;
   previewed: boolean;
@@ -441,6 +444,19 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
 
   function focused(): Job | undefined {
     return jobById(store.get().focus);
+  }
+
+  function pageScroll(): Point {
+    return { x: window.scrollX, y: window.scrollY };
+  }
+
+  function scrolledTo(job: Job, scroll: Point): Job {
+    const dx = job.scroll.x - scroll.x;
+    const dy = job.scroll.y - scroll.y;
+    if (dx === 0 && dy === 0) return job;
+    if (!job.sketch) return { ...job, scroll, strokes: shiftStrokes(job.strokes, dx, dy) };
+    const sketch = shiftSketch(job.sketch, dx, dy);
+    return { ...job, scroll, sketch, strokes: sketch.strokes, anchor: sketchAnchor(sketch) };
   }
 
   function updateJob(id: string, change: (job: Job) => Job): void {
@@ -1060,6 +1076,7 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
       also,
       anchor,
       strokes,
+      scroll: pageScroll(),
       sketch,
       generation: IDLE_GENERATION,
       previewed: false,
@@ -1474,13 +1491,17 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
 
     async restore(saved: Saved): Promise<void> {
       if (store.get().jobs.length > 0) return;
+      const scroll = pageScroll();
       const jobs = saved.jobs.map((job) => {
         const element = elementsAt(job.target.src)[0];
-        return {
-          ...job,
-          generation: { ...IDLE_GENERATION, ...job.generation },
-          anchor: job.sketch ? sketchAnchor(job.sketch) : element ? rectOf(element) : job.anchor,
-        };
+        return scrolledTo(
+          {
+            ...job,
+            generation: { ...IDLE_GENERATION, ...job.generation },
+            anchor: job.sketch ? sketchAnchor(job.sketch) : element ? rectOf(element) : job.anchor,
+          },
+          scroll,
+        );
       });
       store.set({ jobs, focus: saved.focus });
       for (const job of jobs) {
@@ -1881,7 +1902,9 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
 
     reanchor(): void {
       const { jobs, selection } = store.get();
-      const moved = jobs.map((job) => {
+      const scroll = pageScroll();
+      const moved = jobs.map((entry) => {
+        const job = scrolledTo(entry, scroll);
         const element = job.sketch ? undefined : elementsAt(job.target.src)[0];
         if (!element) return job;
         const anchor = rectOf(element);
@@ -1891,7 +1914,10 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
       if (moved.some((job, index) => job !== jobs[index])) store.set({ jobs: moved });
       const job = focused();
       if (job && job.also.length > 0) store.set({ group: groupRects(job.also) });
-      if (job?.sketch) return;
+      if (job?.sketch) {
+        store.set({ anchor: job.anchor });
+        return;
+      }
       const element = selection ? elementsAt(selection.src)[0] : undefined;
       if (element) store.set({ anchor: rectOf(element) });
     },

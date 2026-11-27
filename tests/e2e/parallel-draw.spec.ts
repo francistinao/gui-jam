@@ -18,6 +18,7 @@ import {
   startFixtureServer,
 } from './support/fixture.js';
 import { searchPath } from './support/process.js';
+import { along, unpainted } from './support/strokes.js';
 
 const FAKE_CLI_DIR = fileURLToPath(new URL('../fake-cli/', import.meta.url));
 const APP = fixturePath('src/App.tsx');
@@ -114,6 +115,37 @@ test.afterAll(async () => {
   process.env.PATH = savedEnv.PATH;
   await fixture?.server.close();
   await stopDaemon(FIXTURE_DIR);
+});
+
+test('a drawing, its strokes and its badge stay with the page while it scrolls', async ({
+  page,
+}) => {
+  const scroll = 120;
+  const { left, top } = await startDrawing(page);
+  await box(page, left, top, 260, 72);
+  await generate(page.getByRole('dialog'), 'a card like this, pause');
+  await expect(badge(page, 'Drawing 1: Generating')).toBeVisible();
+  const pill = badge(page, /^Drawing 1: /);
+  const before = await pill.boundingBox();
+  if (!before) throw new Error('the badge is not visible');
+  const edge = along([
+    [left + 20, top],
+    [left + 240, top],
+  ]);
+  await expect.poll(() => unpainted(page, edge)).toEqual([]);
+
+  const scrolled = await page.evaluate((y) => {
+    window.scrollTo({ top: y, behavior: 'instant' });
+    return window.scrollY;
+  }, scroll);
+  expect(scrolled).toBe(scroll);
+
+  await expect.poll(async () => (await pill.boundingBox())?.y).toBeCloseTo(before.y - scroll, 0);
+  const moved = edge.map(([x, y]) => [x, y - scroll] as const);
+  await expect.poll(() => unpainted(page, moved)).toEqual([]);
+  await expect.poll(() => unpainted(page, edge)).toEqual(edge);
+  await expect(badge(page, 'Drawing 1: 1 variant')).toBeVisible({ timeout: READY_MS });
+  await discardAll(page);
 });
 
 test('a stray stroke while a drawing generates opens a draft that Escape removes', async ({

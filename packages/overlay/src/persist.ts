@@ -67,6 +67,7 @@ export function parseSaved(text: string | null): Saved | null {
     strokes:
       isRecord(job.sketch) && Array.isArray(job.sketch.strokes) ? job.sketch.strokes : job.strokes,
     also: Array.isArray(job.also) ? job.also : [],
+    scroll: isRecord(job.scroll) ? job.scroll : { x: 0, y: 0 },
     attachments: Array.isArray(job.attachments) ? job.attachments : [],
     attachError: null,
     installing: false,

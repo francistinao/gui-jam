@@ -10,6 +10,7 @@ const job = (id: string, status: 'idle' | 'running' | 'ready' = 'ready'): Job =>
     also: [],
     anchor: { left: 1, top: 2, width: 3, height: 4 },
     strokes: [],
+    scroll: { x: 0, y: 40 },
     sketch: null,
     generation: {
       prompt: 'make it pop',
@@ -90,15 +91,18 @@ describe('persisted jobs', () => {
     const saved = parseSaved(serialize([moved], 'j1', true));
     expect(saved?.jobs[0]?.sketchHidden).toBe(true);
     expect(saved?.jobs[0]?.panelAt).toEqual({ left: 40, top: 220 });
+    expect(saved?.jobs[0]?.scroll).toEqual({ x: 0, y: 40 });
   });
 
   it('shows the sketch and places the panel beside its drawing for a save made before either existed', () => {
     const older = JSON.parse(serialize([job('j1')], null, true));
     delete older.jobs[0].sketchHidden;
     delete older.jobs[0].panelAt;
+    delete older.jobs[0].scroll;
     const saved = parseSaved(JSON.stringify(older));
     expect(saved?.jobs[0]?.sketchHidden).toBe(false);
     expect(saved?.jobs[0]?.panelAt).toBeNull();
+    expect(saved?.jobs[0]?.scroll).toEqual({ x: 0, y: 0 });
   });
 
   it.each([

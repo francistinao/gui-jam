@@ -617,6 +617,21 @@ export function sketchAnchor(sketch: SketchState): Rect {
   return strokes.length === 0 ? element : unionRect(element, bounds);
 }
 
+export function shiftStrokes(strokes: Point[][], dx: number, dy: number): Point[][] {
+  return strokes.map((stroke) => stroke.map(({ x, y }) => ({ x: x + dx, y: y + dy })));
+}
+
+export function shiftSketch(sketch: SketchState, dx: number, dy: number): SketchState {
+  const shift = (rect: Rect): Rect => ({ ...rect, left: rect.left + dx, top: rect.top + dy });
+  const moved = {
+    ...sketch,
+    strokes: shiftStrokes(sketch.strokes, dx, dy),
+    undone: shiftStrokes(sketch.undone, dx, dy),
+    bounds: shift(sketch.bounds),
+  };
+  return sketch.element ? { ...moved, element: shift(sketch.element) } : moved;
+}
+
 export interface SketchOwner {
   sketch: SketchState | null;
   generation: { status: 'idle' | 'running' | 'ready' };

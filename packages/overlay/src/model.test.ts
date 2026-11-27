@@ -66,6 +66,8 @@ import {
   type SketchToggleOwner,
   sectionSummary,
   shiftedLine,
+  shiftSketch,
+  shiftStrokes,
   shownText,
   showsSketchToggle,
   sketchAnchor,
@@ -883,6 +885,30 @@ describe('sketching over a selected element', () => {
     ];
     const space: SketchState = { strokes: [stroke], undone: [], bounds: boundsOf(stroke) };
     expect(sketchAnchor(space)).toEqual({ left: 10, top: 10, width: 40, height: 20 });
+  });
+
+  it('moves a sketch with the page: strokes, redo list, bounds and element', () => {
+    const stroke = [
+      { x: 120, y: 210 },
+      { x: 150, y: 230 },
+    ];
+    const sketch = addStroke(sketchOver(element), stroke, boundsOf(stroke));
+    const moved = shiftSketch({ ...sketch, undone: [stroke] }, 5, -120);
+    const up = [
+      { x: 125, y: 90 },
+      { x: 155, y: 110 },
+    ];
+    expect(moved).toEqual({
+      strokes: [up],
+      undone: [up],
+      bounds: { left: 125, top: 90, width: 30, height: 20 },
+      element: { ...element, left: element.left + 5, top: element.top - 120 },
+    });
+
+    const space = shiftSketch({ strokes: [stroke], undone: [], bounds: boundsOf(stroke) }, 0, 40);
+    expect(space).not.toHaveProperty('element');
+    expect(space.strokes).toEqual(shiftStrokes([stroke], 0, 40));
+    expect(space.bounds).toEqual({ left: 120, top: 250, width: 30, height: 20 });
   });
 
   describe('undo and redo', () => {
