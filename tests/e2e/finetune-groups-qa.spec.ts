@@ -1,4 +1,5 @@
 import { readFile, writeFile } from 'node:fs/promises';
+import { relative } from 'node:path';
 import { expect, type Locator, type Page, test } from '@playwright/test';
 import type { GuijamMessage } from 'guijam/vite';
 import {
@@ -39,6 +40,10 @@ function paddingTopToken(source: string): string {
 async function rewrite(file: string, find: string, replacement: string) {
   await writeFile(file, replaceOnce(originals.get(file) ?? '', find, replacement));
   const served = async (path: string) => (await fetch(new URL(path, fixture.url))).text();
+  const marker = replacement.match(/className="([^"]*)"/)?.[1] ?? replacement;
+  await expect
+    .poll(async () => (await served(relative(FIXTURE_DIR, file))).includes(marker))
+    .toBe(true);
   const classes = replacement.match(/className="([^"]*)"/)?.[1] ?? replacement;
   for (const name of classes.split(/\s+/).filter((word) => /^[a-z][a-z0-9-]*$/.test(word))) {
     await expect.poll(async () => (await served('src/index.css')).includes(`.${name}`)).toBe(true);
@@ -260,6 +265,7 @@ test('a container with no gap still offers a gap handle that opens it up', async
     const box = await boxOf(nav);
     return { x: box.x + 3, y: box.y + 3 };
   });
+  await expect(nav).toHaveCSS('padding-top', '8px');
   const gap = page.getByRole('slider', { name: 'Column gap' });
   await expect(gap).toHaveAttribute('aria-valuetext', '0 · gap-x-0');
   const size = await gap.boundingBox();
