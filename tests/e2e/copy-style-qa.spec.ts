@@ -7,6 +7,7 @@ import {
   waitForDaemon,
   widgetRequests,
 } from './support/daemon.js';
+import { openSection } from './support/finetune.js';
 import {
   FIXTURE_DIR,
   type FixtureServer,
@@ -186,7 +187,7 @@ test('copying an element with unsaved tweaks copies what is on screen', async ({
   await button.click();
   const source = page.getByRole('dialog', { name: 'Fine-tune src/components/OrderButton.tsx' });
   await expect(source.getByText('Reading the element…')).toHaveCount(0);
-  await source.getByRole('region', { name: 'Text' }).getByLabel('Font size').fill('22');
+  await (await openSection(source, 'Text')).getByLabel('Font size').fill('22');
   await expect(button).toHaveCSS('font-size', '22px');
 
   await source.getByRole('button', { name: 'Copy style' }).click();
@@ -202,7 +203,7 @@ test('Alt+Shift+C typed into a panel field does not start copying', async ({ pag
   const panel = page.getByRole('dialog', { name: 'Fine-tune src/components/OrderButton.tsx' });
   await expect(panel.getByText('Reading the element…')).toHaveCount(0);
 
-  await panel.getByRole('region', { name: 'Text' }).getByLabel('Font size').focus();
+  await (await openSection(panel, 'Text')).getByLabel('Font size').focus();
   await page.keyboard.press('Alt+Shift+C');
 
   await expect(page.getByRole('region', { name: 'Paste style' })).toHaveCount(0);

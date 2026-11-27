@@ -9,6 +9,7 @@ import {
   waitForDaemon,
   widgetRequests,
 } from './support/daemon.js';
+import { openSection } from './support/finetune.js';
 import {
   FIXTURE_DIR,
   type FixtureServer,
@@ -188,7 +189,7 @@ test('the widget keeps one preview in flight when replies are slow, and applies 
   const slow = slowPreviewReplies(page, 500);
   await slow.routed;
   const { panel } = await selectOrderButton(page);
-  const size = panel.getByRole('region', { name: 'Text' }).getByLabel('Font size');
+  const size = (await openSection(panel, 'Text')).getByLabel('Font size');
 
   await size.fill('15');
   await page.waitForTimeout(250);
@@ -210,7 +211,7 @@ test('a preview that answers after Revert does not come back, even after a reloa
   await slow.routed;
   const { button, panel } = await selectOrderButton(page);
 
-  await panel.getByRole('region', { name: 'Text' }).getByLabel('Font size').fill('30');
+  await (await openSection(panel, 'Text')).getByLabel('Font size').fill('30');
   await expect.poll(() => slow.seen.sent).toBe(1);
   await panel.getByRole('button', { name: 'Revert' }).click();
   await expect.poll(slow.settled).toBe(true);
@@ -286,8 +287,7 @@ test('changing the drop shadow keeps the inner shadow', async ({ page }) => {
   );
   const { panel } = await selectOrderButton(page);
 
-  await panel
-    .getByRole('region', { name: 'Effects' })
+  await (await openSection(panel, 'Effects'))
     .getByRole('button', { name: 'Drop shadow lg' })
     .click();
 
@@ -299,7 +299,7 @@ test('changing the drop shadow keeps the inner shadow', async ({ page }) => {
 
 test('typing several sizes fast and applying at once writes the last one', async ({ page }) => {
   const { panel } = await selectOrderButton(page);
-  const size = panel.getByRole('region', { name: 'Text' }).getByLabel('Font size');
+  const size = (await openSection(panel, 'Text')).getByLabel('Font size');
 
   await size.fill('15');
   await size.fill('22');
@@ -370,8 +370,7 @@ test('adding an inner shadow keeps an arbitrary drop shadow that uses a theme va
   await rewrite(ORDER_BUTTON, 'font-medium text-white', `font-medium text-white ${drop}`);
   const { panel } = await selectOrderButton(page);
 
-  await panel
-    .getByRole('region', { name: 'Effects' })
+  await (await openSection(panel, 'Effects'))
     .getByRole('button', { name: 'Add inner shadow' })
     .click();
   const written = await applied(page, panel, ORDER_BUTTON);
@@ -391,8 +390,7 @@ test('picking another drop shadow preset keeps the shadow colour', async ({ page
   const before = tint(await shadow());
   expect(before).not.toBe('rgba(0, 0, 0, 0.1)');
 
-  await panel
-    .getByRole('region', { name: 'Effects' })
+  await (await openSection(panel, 'Effects'))
     .getByRole('button', { name: 'Drop shadow lg' })
     .click();
   await panel.getByRole('button', { name: 'Apply' }).click();

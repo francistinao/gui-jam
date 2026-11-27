@@ -8,6 +8,7 @@ import {
   waitForDaemon,
   widgetRequests,
 } from './support/daemon.js';
+import { openSection } from './support/finetune.js';
 import {
   FIXTURE_DIR,
   type FixtureServer,
@@ -190,7 +191,7 @@ test('a tweak left open while undoing from History still applies on top', async 
   await button.click();
   const finetune = page.getByRole('dialog', { name: `Fine-tune ${BUTTON_FILE}` });
   await expect(finetune.getByText('Reading the element…')).toHaveCount(0);
-  await finetune.getByRole('region', { name: 'Opacity' }).getByLabel('Element opacity').fill('50');
+  await (await openSection(finetune, 'Opacity')).getByLabel('Element opacity').fill('50');
   await expect(button).toHaveCSS('opacity', '0.5');
 
   await page
@@ -220,7 +221,7 @@ test('a page with a very long URL can still Apply and list History', async ({ pa
   await page.getByRole('button', { name: 'Order now' }).click();
   const finetune = page.getByRole('dialog', { name: `Fine-tune ${BUTTON_FILE}` });
   await expect(finetune.getByText('Reading the element…')).toHaveCount(0);
-  await finetune.getByRole('region', { name: 'Opacity' }).getByLabel('Element opacity').fill('50');
+  await (await openSection(finetune, 'Opacity')).getByLabel('Element opacity').fill('50');
 
   await finetune.getByRole('button', { name: 'Apply' }).click();
 
