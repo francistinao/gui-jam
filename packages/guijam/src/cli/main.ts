@@ -1,10 +1,11 @@
 import { createRequire } from 'node:module';
 import { resolve } from 'node:path';
 import { parseArgs } from 'node:util';
+import { password } from '@clack/prompts';
 import { findDaemonBinary, platformKey } from '@guijam/vite-plugin/daemon-binary';
 import { colorDepth, highlighter, renderBanner } from './banner.js';
 import { doctor } from './doctor.js';
-import { runCommand } from './gjd.js';
+import { figmaLogin, runCommand } from './gjd.js';
 import { init } from './init.js';
 import { update } from './update.js';
 
@@ -24,6 +25,9 @@ Commands
   jira test            Check that the paired Jira site answers
   jira unpair [site]   Disconnect Jira and revoke this device
   jira create          Create a ticket with a screenshot (see guijam jira create --help)
+  figma login          Save a Figma personal access token so links to frames are read
+  figma status         Show whether a Figma token is saved and accepted
+  figma logout         Forget the saved Figma token
 
 Options
   -y, --yes            Use the defaults instead of asking
@@ -74,6 +78,22 @@ export async function main(argv: string[]): Promise<number> {
       return 1;
     }
     return runCommand(gjd, ['provider', ...(rest.length === 0 ? ['list'] : rest)], process.cwd());
+  }
+  if (first === 'figma') {
+    const gjd = findDaemonBinary();
+    if (gjd === undefined) {
+      process.stderr.write(`${missingGjd()}\n`);
+      return 1;
+    }
+    if (rest[0] === 'login' && process.stdin.isTTY) {
+      const token = await password({
+        message:
+          'Figma personal access token (Figma › Settings › Security › Personal access tokens)',
+      });
+      if (typeof token !== 'string' || token.trim() === '') return 1;
+      return figmaLogin(gjd, token.trim());
+    }
+    return runCommand(gjd, ['figma', ...(rest.length === 0 ? ['status'] : rest)], process.cwd());
   }
   if (first === 'jira') {
     const gjd = findDaemonBinary();

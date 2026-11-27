@@ -3,6 +3,7 @@ pub mod components;
 pub mod config;
 pub mod daemon;
 pub mod diff;
+pub mod figma;
 pub mod found_text;
 pub mod gateway;
 pub mod generate;

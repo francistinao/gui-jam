@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   defaultProvider,
+  parseFigmaStatus,
   parseJiraStatus,
   parseModelList,
   parseProviderList,
@@ -160,5 +161,21 @@ describe('parseJiraStatus', () => {
       },
     ]);
     expect(parseJiraStatus('{}')).toEqual([]);
+  });
+});
+
+describe('parseFigmaStatus', () => {
+  it('reads where the token is and whether Figma accepted it', () => {
+    expect(parseFigmaStatus('{"token":"keychain","accepted":true,"error":null}')).toEqual({
+      token: 'keychain',
+      accepted: true,
+      error: null,
+    });
+    expect(parseFigmaStatus('{"token":null,"accepted":null,"error":null}')).toEqual({
+      token: null,
+      accepted: null,
+      error: null,
+    });
+    expect(() => parseFigmaStatus('[]')).toThrow();
   });
 });

@@ -39,6 +39,7 @@ use crate::assets::{self, AssetFile, Format};
 use crate::components::{self, ComponentIndex};
 use crate::config;
 use crate::diff::code_changes;
+use crate::figma;
 use crate::found_text;
 use crate::generate::{self, Progress, Step, TierConfig};
 use crate::history;
@@ -1011,11 +1012,20 @@ fn inspiration_count(request: &GenerateRequest) -> usize {
         .map_or(0, |attachments| attachments.images.len())
 }
 
+fn figma_failure(error: &figma::FigmaError) -> Failure {
+    Failure::new(
+        ErrorCode::InvalidRequest,
+        format!("Couldn't read the Figma frame: {error}."),
+    )
+    .with_action(error.action())
+}
+
 fn extras(request: &GenerateRequest, links: &Found, group: usize) -> generate::Extras {
     generate::Extras {
         sketch: request.sketch.is_some(),
         inspiration: inspiration_count(request),
         links: links.links.len(),
+        figma: links.figma.len(),
         group,
     }
 }
@@ -2443,7 +2453,8 @@ impl Daemon {
         let references = self.references(job, tier).await;
         let mut images = request_images(job.request);
         images.extend(linked.images);
-        let timeout = generate::budget(tier, images.len(), job.links.links.len());
+        let read = job.links.links.len() + job.links.figma.len();
+        let timeout = generate::budget(tier, images.len(), read);
         let base = GenerationRequest {
             model: model.clone(),
             effort: Some(effort),
@@ -2793,6 +2804,7 @@ impl Daemon {
         };
         progress.start(Step::Links);
         self.report(progress);
+        let frames = self.read_frames(job, images, progress).await?;
         let (events, mut received) = mpsc::unbounded_channel();
         let reading = links::read_all(job.links, &options, &events, job.cancel);
         tokio::pin!(reading);
@@ -2808,14 +2820,59 @@ impl Daemon {
         let Some(reports) = reports else {
             return Err(ProviderError::Cancelled.into());
         };
+        let first_image = request_images(job.request).len() + 1;
+        let mut designs = figma::render(frames, first_image);
         let mut rendered = links::render(
             reports,
             job.links.skipped,
-            request_images(job.request).len() + 1,
+            first_image + designs.images.len(),
         );
+        if job.links.figma_skipped > 0 {
+            lines.push(format!(
+                "Only the first {} Figma frames were read.",
+                figma::MAX_FRAMES
+            ));
+        }
+        lines.append(&mut designs.notes);
         lines.append(&mut rendered.notes);
-        rendered.notes = lines;
-        Ok(rendered)
+        designs.section.push_str(&rendered.section);
+        designs.images.append(&mut rendered.images);
+        Ok(links::Rendered {
+            section: designs.section,
+            images: designs.images,
+            notes: lines,
+        })
+    }
+
+    async fn read_frames(
+        &self,
+        job: &Job<'_>,
+        images: bool,
+        progress: &mut Progress,
+    ) -> Result<Vec<figma::Frame>, Failure> {
+        if job.links.figma.is_empty() {
+            return Ok(Vec::new());
+        }
+        let targets = job
+            .links
+            .figma
+            .iter()
+            .map(figma::target)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| figma_failure(&error))?;
+        let (token, _) = figma::load().ok_or_else(|| figma_failure(&figma::FigmaError::NoToken))?;
+        let mut frames = Vec::with_capacity(targets.len());
+        for target in targets {
+            progress.detail(format!("Figma · {} · reading the frame", target.node));
+            self.report(progress);
+            let token = token.clone();
+            let frame = tokio::task::spawn_blocking(move || figma::read(&target, &token, images))
+                .await
+                .map_err(|error| Failure::new(ErrorCode::Internal, error.to_string()))?
+                .map_err(|error| figma_failure(&error))?;
+            frames.push(frame);
+        }
+        Ok(frames)
     }
 
     async fn check_and_hold(
@@ -3300,7 +3357,7 @@ impl Daemon {
             generate::budget(
                 tier,
                 request_images(job.request).len(),
-                job.links.links.len(),
+                job.links.links.len() + job.links.figma.len(),
             ),
         );
         progress.start(Step::Read);

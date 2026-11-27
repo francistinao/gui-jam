@@ -11,6 +11,10 @@ pub const VARIABLES: usize = 12;
 pub const FONTS: usize = 4;
 const VARIABLE_VALUE_CHARS: usize = 60;
 const STYLESHEETS: usize = 4;
+pub const CODE_BLOCKS: usize = 4;
+pub const CODE_CHARS: usize = 2500;
+const ANCHORS: usize = 80;
+const CHROME: [&str; 4] = ["nav", "header", "footer", "aside"];
 
 const SKIPPED: [&str; 7] = [
     "script", "noscript", "template", "svg", "iframe", "object", "textarea",
@@ -103,7 +107,7 @@ const ENTITIES: [(&str, &str); 26] = [
     ("cent", "¢"),
 ];
 
-#[derive(Debug, Default, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct Page {
     pub title: Option<String>,
     pub description: Option<String>,
@@ -115,6 +119,67 @@ pub struct Page {
     pub base: Option<String>,
     pub css: String,
     pub google_fonts: Vec<String>,
+    pub code: Vec<Code>,
+    pub anchors: Vec<Anchor>,
+    pub nofollow: bool,
+}
+
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct Code {
+    pub language: Option<String>,
+    pub text: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Anchor {
+    pub href: String,
+    pub content: bool,
+}
+
+fn language(tag: &Tag) -> Option<String> {
+    if let Some(language) = tag.attr("data-language").or_else(|| tag.attr("data-lang")) {
+        return Some(language.trim().to_ascii_lowercase()).filter(|language| !language.is_empty());
+    }
+    tag.attr("class")?.split_whitespace().find_map(|class| {
+        class
+            .strip_prefix("language-")
+            .or_else(|| class.strip_prefix("lang-"))
+            .map(str::to_ascii_lowercase)
+    })
+}
+
+fn code_block(html: &str, lower: &str, pre: &Tag, from: usize) -> (Code, usize) {
+    let (start, end) = closing_tag(lower, from, "pre");
+    let inner = &html[from..start];
+    let mut language = language(pre);
+    let mut text = String::new();
+    let mut pos = 0;
+    while pos < inner.len() {
+        let Some(offset) = inner[pos..].find('<') else {
+            text.push_str(&decode_entities(&inner[pos..]));
+            break;
+        };
+        text.push_str(&decode_entities(&inner[pos..pos + offset]));
+        let at = pos + offset;
+        if let Some(tag) = parse_tag(inner, at) {
+            if tag.name == "code" && !tag.closing && language.is_none() {
+                language = self::language(&tag);
+            }
+            if tag.name == "br" {
+                text.push('\n');
+            }
+            pos = tag.end;
+        } else {
+            text.push('<');
+            pos = at + 1;
+        }
+    }
+    let trimmed = text.trim_matches('\n');
+    let mut text: String = trimmed.chars().take(CODE_CHARS).collect();
+    if trimmed.chars().count() > CODE_CHARS {
+        text.push('…');
+    }
+    (Code { language, text }, end)
 }
 
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -122,6 +187,7 @@ pub struct Styles {
     pub colors: Vec<(String, usize)>,
     pub variables: Vec<String>,
     pub fonts: Vec<String>,
+    pub spacing: Vec<String>,
 }
 
 struct Tag {
@@ -394,6 +460,7 @@ fn read_meta(tag: &Tag, page: &mut Page) {
         "theme-color" => {
             page.theme_color.get_or_insert_with(|| content.to_owned());
         }
+        "robots" if content.to_ascii_lowercase().contains("nofollow") => page.nofollow = true,
         _ => {}
     }
 }
@@ -422,12 +489,48 @@ fn read_link(tag: &Tag, page: &mut Page) {
     }
 }
 
+fn read_pre(
+    html: &str,
+    lower: &str,
+    tag: &Tag,
+    from: usize,
+    page: &mut Page,
+    text: &mut Text,
+) -> usize {
+    let (code, end) = code_block(html, lower, tag, from);
+    if page.code.len() < CODE_BLOCKS && !code.text.trim().is_empty() {
+        page.code.push(code);
+        text.block();
+        text.push(&format!("[code {}]", page.code.len()));
+        text.block();
+    }
+    end
+}
+
+fn read_anchor(tag: &Tag, content: bool, page: &mut Page) {
+    if let Some(href) = tag
+        .attr("href")
+        .map(str::trim)
+        .filter(|href| !href.is_empty())
+        && page.anchors.len() < ANCHORS
+        && !tag
+            .attr("rel")
+            .is_some_and(|rel| rel.to_ascii_lowercase().contains("nofollow"))
+    {
+        page.anchors.push(Anchor {
+            href: href.to_owned(),
+            content,
+        });
+    }
+}
+
 #[must_use]
 pub fn scan(html: &str) -> Page {
     let lower = html.to_ascii_lowercase();
     let mut page = Page::default();
     let mut text = Text::new(TEXT_CHARS);
     let mut heading: Option<Text> = None;
+    let mut chrome = 0usize;
     let mut pos = 0;
     while pos < html.len() {
         let Some(offset) = html[pos..].find('<') else {
@@ -468,6 +571,13 @@ pub fn scan(html: &str) -> Page {
         if BLOCKS.contains(&tag.name.as_str()) {
             text.block();
         }
+        if CHROME.contains(&tag.name.as_str()) {
+            chrome = if tag.closing {
+                chrome.saturating_sub(1)
+            } else {
+                chrome + 1
+            };
+        }
         if tag.closing {
             if matches!(tag.name.as_str(), "h1" | "h2" | "h3")
                 && let Some(done) = heading.take().map(Text::finish).filter(|h| !h.is_empty())
@@ -494,6 +604,8 @@ pub fn scan(html: &str) -> Page {
                 }
                 pos = end;
             }
+            "pre" => pos = read_pre(html, &lower, &tag, pos, &mut page, &mut text),
+            "a" => read_anchor(&tag, chrome == 0, &mut page),
             "meta" => read_meta(&tag, &mut page),
             "link" => read_link(&tag, &mut page),
             "base" => {
@@ -706,6 +818,7 @@ pub fn styles(css: &str) -> Styles {
             .into_iter()
             .map(|(family, _)| family)
             .collect(),
+        spacing: Vec::new(),
     }
 }
 
@@ -714,7 +827,8 @@ mod tests {
     use std::fmt::Write as _;
 
     use super::{
-        HEADINGS, TEXT_CHARS, colors_in, decode_entities, google_font_families, scan, styles,
+        Anchor, Code, HEADINGS, TEXT_CHARS, colors_in, decode_entities, google_font_families, scan,
+        styles,
     };
 
     #[test]
@@ -919,5 +1033,43 @@ code { font-family: ui-monospace, monospace }
             google_font_families("https://fonts.googleapis.com/css2"),
             Vec::<String>::new()
         );
+    }
+
+    #[test]
+    fn keeps_code_blocks_with_their_language_and_marks_where_they_were() {
+        let page = scan(
+            "<p>Install it:</p><pre class=\"x\"><code class=\"language-tsx\">&lt;Button&gt;\n  <span class=\"k\">Go</span>\n&lt;/Button&gt;</code></pre><p>Done.</p>",
+        );
+
+        assert_eq!(
+            page.code,
+            [Code {
+                language: Some("tsx".to_owned()),
+                text: "<Button>\n  Go\n</Button>".to_owned()
+            }]
+        );
+        assert_eq!(page.text, "Install it:\n[code 1]\nDone.");
+    }
+
+    #[test]
+    fn lists_links_by_where_they_sit_and_honours_nofollow() {
+        let page = scan(
+            "<nav><a href=\"/pricing\">Pricing</a></nav><main><a href=\"/docs/button\">Button</a><a rel=\"nofollow\" href=\"/x\">x</a></main>",
+        );
+        assert_eq!(
+            page.anchors,
+            [
+                Anchor {
+                    href: "/pricing".to_owned(),
+                    content: false
+                },
+                Anchor {
+                    href: "/docs/button".to_owned(),
+                    content: true
+                }
+            ]
+        );
+        assert!(!page.nofollow);
+        assert!(scan("<meta name=\"robots\" content=\"index, nofollow\">").nofollow);
     }
 }

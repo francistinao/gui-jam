@@ -14,7 +14,7 @@ import {
   SUPPORTED_FRAMEWORKS,
   VITE_FRAMEWORKS,
 } from './detect.js';
-import { gjdVersion, jiraStatus, listProviders, probeProvider } from './gjd.js';
+import { figmaStatus, gjdVersion, jiraStatus, listProviders, probeProvider } from './gjd.js';
 import { PWA_HINT, projectRunsDevServiceWorker } from './pwa.js';
 import { isWired } from './wire.js';
 
@@ -164,6 +164,24 @@ async function toolChecks(options: DoctorOptions): Promise<Check[]> {
       level: 'warn',
       message: `Could not check the Jira pairing: ${messageOf(error)}`,
     });
+  }
+  try {
+    const figma = await figmaStatus(options.gjd);
+    if (figma.token === null) {
+      checks.push({
+        level: 'ok',
+        message: 'Figma links: no token saved. Run guijam figma login to read Figma frames.',
+      });
+    } else if (figma.accepted) {
+      checks.push({ level: 'ok', message: 'Figma token saved and accepted' });
+    } else {
+      checks.push({
+        level: 'warn',
+        message: `Figma refused the saved token (${figma.error ?? 'no details'}). Run guijam figma login.`,
+      });
+    }
+  } catch (error) {
+    checks.push({ level: 'warn', message: `Could not check Figma: ${messageOf(error)}` });
   }
   if (options.probe && provider?.installed) {
     const probe = await probeProvider(options.gjd, provider.id);

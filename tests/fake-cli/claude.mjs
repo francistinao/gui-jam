@@ -108,6 +108,24 @@ const links = [
   fonts: field(body, 'Fonts'),
   image: /^(Image \d+ is .*)$/m.exec(body)?.[1] ?? null,
   text: /^Text:\n([\s\S]*)$/.exec(body.slice(body.indexOf('Text:\n')))?.[1]?.trim() ?? null,
+  file: field(body, 'File'),
+  spacing: field(body, 'Spacing and radii'),
+  code: [
+    ...body.matchAll(/<code(?: lang="([^"]*)")? end="([^"]+)">\n([\s\S]*?)<\/code end="\2">/g),
+  ].map(([, lang, , code]) => ({ lang: lang ?? null, code })),
+  pages: [...body.matchAll(/<page url="([^"]*)">/g)].map((match) => match[1]),
+}));
+const figma = [
+  ...text.matchAll(
+    /<figma url="([^"]*)" file="([^"]*)" node="([^"]*)"[^>]*>\n([\s\S]*?)<\/figma>/g,
+  ),
+].map(([, url, file, node, body]) => ({
+  url,
+  file,
+  node,
+  frame: field(body, 'Frame'),
+  image: /^(Image \d+ is .*)$/m.exec(body)?.[1] ?? null,
+  layers: /Layers \(exact values\):\n([\s\S]*?)\nNot in the frame/.exec(body)?.[1] ?? null,
 }));
 log({
   pid: process.pid,
@@ -123,6 +141,7 @@ log({
   copies: /^Copies: (.*)$/m.exec(text)?.[1] ?? null,
   libraries: /<libraries installed="([^"]*)">/.exec(text)?.[1] ?? null,
   links,
+  figma,
   assets: [...text.matchAll(/ · asset (\S+)/g)].map((match) => match[1]),
   sketch,
   closeUp: text.includes('is a close-up of the element'),

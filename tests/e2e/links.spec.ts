@@ -40,6 +40,48 @@ const PAGE = `<!doctype html>
 <button class="btn">Order beans</button>
 </body></html>`;
 
+const DOCS = `<!doctype html><html><head><title>Button docs</title></head><body>
+<nav><a href="/login">Log in</a></nav>
+<main><h1>Button</h1><p>Install the button, then use it like this.</p>
+<pre><code class="language-tsx">&lt;Button variant="primary"&gt;Order&lt;/Button&gt;</code></pre>
+<a href="/docs/card">Card</a></main></body></html>`;
+const CARD_DOCS = `<!doctype html><html><head><title>Card docs</title></head><body>
+<h1>Card</h1><p>Cards group related content and actions in one place, with a title and a body.</p></body></html>`;
+const SHELL = `<!doctype html><html><head><title>Loading</title></head><body><div id="root"></div>
+<script>document.getElementById('root').innerHTML = '<h1>Rendered by JavaScript</h1><p style="padding: 24px">' + 'Fresh beans every week. '.repeat(20) + '</p>';</script>
+</body></html>`;
+const RAW_CARD =
+  'export function OrderCard() {\n  return <article className="rounded-2xl p-6">Card</article>;\n}\n';
+const NODES = JSON.stringify({
+  name: 'Shop',
+  nodes: {
+    '12:34': {
+      document: {
+        type: 'FRAME',
+        name: 'Pricing card',
+        absoluteBoundingBox: { width: 360, height: 480 },
+        layoutMode: 'VERTICAL',
+        itemSpacing: 16,
+        paddingTop: 24,
+        paddingRight: 24,
+        paddingBottom: 24,
+        paddingLeft: 24,
+        fills: [{ type: 'SOLID', color: { r: 1, g: 1, b: 1, a: 1 } }],
+        children: [
+          {
+            type: 'TEXT',
+            name: 'Title',
+            characters: 'Pro plan',
+            style: { fontFamily: 'Inter', fontWeight: 600, fontSize: 20 },
+          },
+        ],
+      },
+      components: {},
+      styles: {},
+    },
+  },
+});
+
 let fixture: FixtureServer;
 let site: Server;
 let origin: string;
@@ -49,6 +91,10 @@ let cliLog: string;
 const savedPath = process.env.PATH;
 
 interface LinkSeen {
+  file?: string | null;
+  spacing?: string | null;
+  code?: { lang: string | null; code: string }[];
+  pages?: string[];
   url: string;
   final: string | null;
   error: string | null;
@@ -60,7 +106,17 @@ interface LinkSeen {
   text: string | null;
 }
 
+interface FrameSeen {
+  url: string;
+  file: string;
+  node: string;
+  frame: string | null;
+  image: string | null;
+  layers: string | null;
+}
+
 interface CliRun {
+  figma?: FrameSeen[];
   request?: string;
   images?: string[];
   imageSizes?: ([number, number] | null)[];
@@ -94,8 +150,27 @@ function startSite(): Promise<Server> {
       response
         .writeHead(200, { 'content-type': 'text/css' })
         .end('.btn { background: #b45309; border: 1px solid #e7e5e4 }');
-    } else if (path === '/hero.png') {
+    } else if (path === '/hero.png' || path === '/render.png') {
       response.writeHead(200, { 'content-type': 'image/png' }).end(png(64, 48));
+    } else if (path === '/docs') {
+      response.writeHead(200, { 'content-type': 'text/html' }).end(DOCS);
+    } else if (path === '/docs/card') {
+      response.writeHead(200, { 'content-type': 'text/html' }).end(CARD_DOCS);
+    } else if (path === '/app') {
+      response.writeHead(200, { 'content-type': 'text/html' }).end(SHELL);
+    } else if (path === '/raw/OrderCard.tsx') {
+      response.writeHead(200, { 'content-type': 'text/plain; charset=utf-8' }).end(RAW_CARD);
+    } else if (path.startsWith('/figma-api/v1/files/KEY/nodes')) {
+      const token = request.headers['x-figma-token'] === 'figd_test';
+      setTimeout(
+        () =>
+          response.writeHead(token ? 200 : 403, { 'content-type': 'application/json' }).end(NODES),
+        1500,
+      );
+    } else if (path.startsWith('/figma-api/v1/images/KEY')) {
+      response
+        .writeHead(200, { 'content-type': 'application/json' })
+        .end(JSON.stringify({ images: { '12:34': `${origin}/render.png` } }));
     } else {
       response.writeHead(404).end('not here');
     }
@@ -143,6 +218,8 @@ test.beforeAll(async () => {
   process.env.GUIJAM_TEST_CHROMIUM = chromium.executablePath();
   process.env.GUIJAM_BROWSER = join(FAKE_CLI_DIR, 'chromium');
   process.env.PATH = searchPath(FAKE_CLI_DIR, savedPath);
+  process.env.GUIJAM_FIGMA_API = `${origin}/figma-api`;
+  process.env.GUIJAM_FIGMA_TOKEN = 'figd_test';
   fixture = await startFixtureServer();
   original = await readFile(ORDER_BUTTON, 'utf8');
   await waitForDaemon(widgetRequests(fixture.api), ORDER_BUTTON_REF);
@@ -161,6 +238,8 @@ test.afterAll(async () => {
     'GUIJAM_FAKE_CLAUDE_LOG',
     'GUIJAM_TEST_CHROMIUM',
     'GUIJAM_BROWSER',
+    'GUIJAM_FIGMA_API',
+    'GUIJAM_FIGMA_TOKEN',
   ]) {
     delete process.env[name];
   }
@@ -234,18 +313,18 @@ test('an image link is attached as an image and a broken link becomes a note', a
   await variants.getByRole('button', { name: 'Discard' }).click();
 });
 
-test('only the first three links are read, and the panel says so before and after', async ({
+test('only the first five links are read, and the panel says so before and after', async ({
   page,
 }) => {
-  const urls = [1, 2, 3, 4].map((n) => `${origin}/page?n=${n}`);
+  const urls = [1, 2, 3, 4, 5, 6].map((n) => `${origin}/page?n=${n}`);
   const request = `Blend ${urls.join(' ')}`;
   const prompt = await openPrompt(page);
   await prompt.getByRole('textbox', { name: 'Describe the change' }).fill(request);
 
   await expect(
     prompt.getByRole('list', { name: 'Links GUIJam will read' }).getByRole('listitem'),
-  ).toHaveCount(3);
-  await expect(prompt.getByRole('note')).toHaveText('Only the first 3 links are read.');
+  ).toHaveCount(5);
+  await expect(prompt.getByRole('note')).toHaveText('Only the first 5 links are read.');
 
   await prompt.getByRole('button', { name: 'Generate' }).click();
 
@@ -254,10 +333,104 @@ test('only the first three links are read, and the panel says so before and afte
     timeout: 30_000,
   });
   await expect(prompt.getByRole('list', { name: 'Notes' })).toContainText(
-    'Only the first 3 links were read; 1 more was left out.',
+    'Only the first 5 links were read; 1 more was left out.',
   );
   const run = await runFor(request);
-  expect(run.links?.map((link) => link.url)).toEqual(urls.slice(0, 3));
-  expect(run.images).toEqual(['image/jpeg', 'image/jpeg', 'image/jpeg']);
+  expect(run.links?.map((link) => link.url)).toEqual(urls.slice(0, 5));
+  expect(run.images).toEqual(Array.from({ length: 5 }, () => 'image/jpeg'));
   await variants.getByRole('button', { name: 'Discard' }).click();
+});
+
+async function generateWith(
+  page: Page,
+  request: string,
+): Promise<{ prompt: Locator; run: CliRun }> {
+  const prompt = await openPrompt(page);
+  await prompt.getByRole('textbox', { name: 'Describe the change' }).fill(request);
+  await prompt.getByRole('button', { name: 'Generate' }).click();
+  const variants = prompt.getByRole('region', { name: 'Variants' });
+  await expect(variants.getByRole('group', { name: 'Pick a variant' })).toBeVisible({
+    timeout: 30_000,
+  });
+  const run = await runFor(request);
+  await variants.getByRole('button', { name: 'Discard' }).click();
+  return { prompt, run };
+}
+
+test('a link to a source file gives the AI the file itself', async ({ page }) => {
+  const { run } = await generateWith(page, `Use the card from ${origin}/raw/OrderCard.tsx here`);
+
+  const [link] = run.links ?? [];
+  expect(link?.file).toBe('raw/OrderCard.tsx (tsx, 3 lines)');
+  expect(link?.code).toEqual([{ lang: 'tsx', code: RAW_CARD }]);
+  expect(run.images).toEqual([]);
+});
+
+test('a docs page keeps its code examples and brings one more page of the site', async ({
+  page,
+}) => {
+  const { run } = await generateWith(page, `Use the button from ${origin}/docs`);
+
+  const [link] = run.links ?? [];
+  expect(link?.title).toBe('Button docs');
+  expect(link?.text).toContain('[code 1]');
+  expect(link?.code).toEqual([{ lang: 'tsx', code: '<Button variant="primary">Order</Button>\n' }]);
+  expect(link?.pages).toEqual([`${origin}/docs/card`]);
+});
+
+test('a page built with JavaScript is read from the browser', async ({ page }) => {
+  const { run } = await generateWith(page, `Match ${origin}/app`);
+
+  const [link] = run.links ?? [];
+  expect(link?.text).toContain('Rendered by JavaScript');
+  expect(link?.text).toContain('Fresh beans every week.');
+  expect(link?.spacing).toContain('24px');
+  expect(link?.image).toBe('Image 1 is a screenshot of this page.');
+});
+
+test('a Figma frame link is read as exact layers with a render', async ({ page }) => {
+  const request = 'Build this card from https://www.figma.com/design/KEY/Shop?node-id=12-34';
+  const prompt = await openPrompt(page);
+  await prompt.getByRole('textbox', { name: 'Describe the change' }).fill(request);
+  await expect(
+    prompt.getByRole('list', { name: 'Links GUIJam will read' }).getByRole('listitem'),
+  ).toHaveText(['Figma · Shop']);
+  await prompt.getByRole('button', { name: 'Generate' }).click();
+  const reading = prompt.getByRole('list', { name: 'Progress' }).locator('li[data-state="active"]');
+  await expect(reading.locator('[data-step-label]')).toHaveText('Reading your Figma frame');
+
+  const variants = prompt.getByRole('region', { name: 'Variants' });
+  await expect(variants.getByRole('group', { name: 'Pick a variant' })).toBeVisible({
+    timeout: 30_000,
+  });
+  const run = await runFor(request);
+  expect(run.figma).toEqual([
+    {
+      url: 'https://www.figma.com/design/KEY/Shop?node-id=12-34',
+      file: 'Shop',
+      node: '12:34',
+      frame: '"Pricing card", 360×480',
+      image: 'Image 1 is a render of this frame.',
+      layers: expect.stringContaining('auto layout column, gap 16, padding 24 24 24 24'),
+    },
+  ]);
+  expect(run.links).toEqual([]);
+  expect(run.images).toEqual(['image/png']);
+  await variants.getByRole('button', { name: 'Discard' }).click();
+});
+
+test('a Figma link to a whole file stops before the AI runs and says how to fix it', async ({
+  page,
+}) => {
+  const request = 'Build https://www.figma.com/design/KEY/Shop';
+  const prompt = await openPrompt(page);
+  await prompt.getByRole('textbox', { name: 'Describe the change' }).fill(request);
+  await expect(prompt.getByRole('note')).toContainText('Copy link to selection');
+
+  await prompt.getByRole('button', { name: 'Generate' }).click();
+
+  await expect(prompt.getByRole('alert')).toContainText(
+    "Couldn't read the Figma frame: this Figma link doesn't point at a frame.",
+  );
+  expect((await cliRuns()).some((run) => run.request === request)).toBe(false);
 });

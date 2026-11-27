@@ -801,7 +801,10 @@ export function formatElapsed(ms: number): string {
   return `${minutes} min ${String(seconds % 60).padStart(2, '0')} s`;
 }
 
-export const MAX_LINKS = 3;
+export const MAX_LINKS = 5;
+export const MAX_FRAMES = 2;
+const FIGMA_HOSTS = new Set(['figma.com', 'www.figma.com']);
+const FIGMA_READ = new Set(['design', 'file', 'proto']);
 const TRAILING = /[.,;:!?'"`*]+$/;
 const LEADING = /^[([<"'`]+/;
 const PAIRS: readonly (readonly [string, string])[] = [
@@ -815,11 +818,26 @@ const LABEL_CHARS = 40;
 export interface PromptLink {
   href: string;
   label: string;
+  problem?: string;
 }
 
 export interface PromptLinks {
   links: PromptLink[];
   skipped: number;
+  frames: PromptLink[];
+  framesSkipped: number;
+}
+
+function figmaLink(url: URL): PromptLink {
+  const [kind = '', , name = ''] = url.pathname.split('/').filter(Boolean);
+  const title = decodeURIComponent(name).replace(/-/g, ' ').trim() || 'frame';
+  const link: PromptLink = { href: url.href, label: `Figma · ${title}` };
+  if (!FIGMA_READ.has(kind)) {
+    link.problem = `${link.label}: FigJam boards, Make and Slides aren't read. Link a frame in a Design file.`;
+  } else if (!url.searchParams.get('node-id') && !url.searchParams.get('starting-point-node-id')) {
+    link.problem = `${link.label}: link a frame, not the whole file. In Figma, right-click the frame and choose Copy link to selection.`;
+  }
+  return link;
 }
 
 function count(text: string, char: string): number {
@@ -853,6 +871,7 @@ function linkLabel(url: URL): string {
 
 export function linksIn(prompt: string): PromptLinks {
   const links: PromptLink[] = [];
+  const frames: PromptLink[] = [];
   for (const token of prompt.split(/\s+/)) {
     const text = candidate(token);
     if (!text || !URL.canParse(text)) continue;
@@ -860,11 +879,18 @@ export function linksIn(prompt: string): PromptLinks {
     if ((url.protocol !== 'http:' && url.protocol !== 'https:') || !url.hostname) continue;
     if (url.hostname === 'www.') continue;
     url.hash = '';
-    if (!links.some((link) => link.href === url.href)) {
-      links.push({ href: url.href, label: linkLabel(url) });
+    const figma = FIGMA_HOSTS.has(url.hostname);
+    const list = figma ? frames : links;
+    if (!list.some((link) => link.href === url.href)) {
+      list.push(figma ? figmaLink(url) : { href: url.href, label: linkLabel(url) });
     }
   }
-  return { links: links.slice(0, MAX_LINKS), skipped: Math.max(0, links.length - MAX_LINKS) };
+  return {
+    links: links.slice(0, MAX_LINKS),
+    skipped: Math.max(0, links.length - MAX_LINKS),
+    frames: frames.slice(0, MAX_FRAMES),
+    framesSkipped: Math.max(0, frames.length - MAX_FRAMES),
+  };
 }
 
 export interface Needs {

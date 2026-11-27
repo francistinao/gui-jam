@@ -168,6 +168,37 @@ export function parseJiraStatus(stdout: string): JiraSite[] {
   }));
 }
 
+export interface FigmaStatus {
+  token: 'env' | 'keychain' | 'file' | null;
+  accepted: boolean | null;
+  error: string | null;
+}
+
+export function parseFigmaStatus(stdout: string): FigmaStatus {
+  const value: unknown = JSON.parse(stdout);
+  if (!isRecord(value)) throw new Error(`gjd printed an unexpected Figma status: ${stdout}`);
+  const token = value.token;
+  return {
+    token: token === 'env' || token === 'keychain' || token === 'file' ? token : null,
+    accepted: typeof value.accepted === 'boolean' ? value.accepted : null,
+    error: typeof value.error === 'string' ? value.error : null,
+  };
+}
+
+export async function figmaStatus(gjd: string): Promise<FigmaStatus> {
+  const { stdout } = await run(gjd, ['figma', 'status', '--json'], { timeout: LIST_TIMEOUT_MS });
+  return parseFigmaStatus(stdout);
+}
+
+export function figmaLogin(gjd: string, token: string): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(gjd, ['figma', 'login'], { stdio: ['pipe', 'inherit', 'inherit'] });
+    child.on('error', reject);
+    child.on('close', (code) => resolve(code ?? 1));
+    child.stdin.end(`${token}\n`);
+  });
+}
+
 export async function jiraStatus(gjd: string): Promise<JiraSite[]> {
   const { stdout } = await run(gjd, ['jira', 'status', '--json'], { timeout: LIST_TIMEOUT_MS });
   return parseJiraStatus(stdout);

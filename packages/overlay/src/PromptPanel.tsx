@@ -3,6 +3,7 @@ import {
   CircleCheck,
   Eye,
   EyeOff,
+  Frame,
   ImagePlus,
   Link2,
   LoaderCircle,
@@ -20,7 +21,14 @@ import { DelayedTip } from './DelayedTip';
 import { Button } from './figui/button';
 import { cn } from './figui/cn';
 import { INPUT_BASE_CLASS } from './figui/text-input';
-import { formatElapsed, linksIn, MAX_LINKS, showsSketchToggle, stillWorking } from './model';
+import {
+  formatElapsed,
+  linksIn,
+  MAX_FRAMES,
+  MAX_LINKS,
+  showsSketchToggle,
+  stillWorking,
+} from './model';
 import { Popover, PopoverHeader, SKETCH_LABEL } from './Popover';
 import { type Store, useStore } from './store';
 import { TicketField } from './TicketField';
@@ -192,27 +200,35 @@ function TargetList({
 }
 
 function LinkChips({ prompt }: { prompt: string }) {
-  const { links, skipped } = linksIn(prompt);
-  if (links.length === 0) return null;
+  const { links, skipped, frames, framesSkipped } = linksIn(prompt);
+  if (links.length === 0 && frames.length === 0) return null;
+  const notes = [
+    ...frames.flatMap((frame) => (frame.problem ? [frame.problem] : [])),
+    ...(framesSkipped > 0 ? [`Only the first ${MAX_FRAMES} Figma frames are read.`] : []),
+    ...(skipped > 0 ? [`Only the first ${MAX_LINKS} links are read.`] : []),
+  ];
   return (
     <div className="flex flex-col gap-1">
       <ul aria-label="Links GUIJam will read" className="m-0 flex list-none flex-wrap gap-1 p-0">
-        {links.map((link) => (
-          <li
-            key={link.href}
-            title={link.href}
-            className="typography-body-small flex max-w-full items-center gap-1 rounded-full bg-grey-100 px-2 py-0.5 text-grey-600"
-          >
-            <Link2 aria-hidden="true" className="size-3 shrink-0" />
-            <span className="truncate">{link.label}</span>
-          </li>
-        ))}
+        {[...frames, ...links].map((link) => {
+          const Icon = frames.includes(link) ? Frame : Link2;
+          return (
+            <li
+              key={link.href}
+              title={link.href}
+              className="typography-body-small flex max-w-full items-center gap-1 rounded-full bg-grey-100 px-2 py-0.5 text-grey-600"
+            >
+              <Icon aria-hidden="true" className="size-3 shrink-0" />
+              <span className="truncate">{link.label}</span>
+            </li>
+          );
+        })}
       </ul>
-      {skipped > 0 ? (
-        <p role="note" className="typography-body-small m-0 text-grey-500">
-          {`Only the first ${MAX_LINKS} links are read.`}
+      {notes.map((note) => (
+        <p key={note} role="note" className="typography-body-small m-0 text-grey-500">
+          {note}
         </p>
-      ) : null}
+      ))}
     </div>
   );
 }

@@ -3,6 +3,9 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
 
+use serde::Deserialize;
+use tokio::sync::Semaphore;
+
 use futures_util::{SinkExt, StreamExt};
 use gjd_providers::ImageInput;
 use gjd_providers::spawn::{ProcessTree, command};
@@ -20,6 +23,41 @@ const JPEG_QUALITY: u8 = 80;
 const LOAD_WAIT: Duration = Duration::from_secs(8);
 const CAPTURE_RESERVE: Duration = Duration::from_secs(2);
 const SETTLE: Duration = Duration::from_millis(600);
+const READ_SETTLE: Duration = Duration::from_millis(1500);
+const BROWSERS: usize = 3;
+static RUNNING: Semaphore = Semaphore::const_new(BROWSERS);
+const READ_PAGE: &str = r#"(() => {
+  const top = (map, count) => [...map.entries()].sort((a, b) => b[1] - a[1]).slice(0, count);
+  const tally = (map, value) => map.set(value, (map.get(value) || 0) + 1);
+  const colors = new Map();
+  const fonts = new Map();
+  const spacing = new Map();
+  for (const element of [...document.querySelectorAll('body *')].slice(0, 1500)) {
+    const style = getComputedStyle(element);
+    for (const color of [style.color, style.backgroundColor]) {
+      if (color && color !== 'rgba(0, 0, 0, 0)' && color !== 'transparent') tally(colors, color);
+    }
+    const family = style.fontFamily.split(',')[0].replace(/["']/g, '').trim();
+    if (family) tally(fonts, family);
+    for (const value of [style.paddingTop, style.paddingLeft, style.rowGap, style.columnGap, style.borderTopLeftRadius]) {
+      if (value && value !== '0px' && value !== 'normal') tally(spacing, value);
+    }
+  }
+  const code = [...document.querySelectorAll('pre')].slice(0, 4).map((pre) => {
+    const classes = `${pre.className} ${pre.querySelector('code')?.className ?? ''}`;
+    const found = /lang(?:uage)?-([\w-]+)/.exec(classes);
+    return { language: found ? found[1] : null, text: pre.innerText.slice(0, 2500) };
+  });
+  return {
+    title: document.title,
+    headings: [...document.querySelectorAll('h1, h2, h3')].map((heading) => heading.innerText.trim()).filter(Boolean).slice(0, 12),
+    text: document.body ? document.body.innerText.slice(0, 6000) : '',
+    colors: top(colors, 8).map(([color, count]) => `${color} (${count})`),
+    fonts: top(fonts, 4).map(([font]) => font),
+    spacing: top(spacing, 8).map(([value, count]) => `${value} (${count})`),
+    code,
+  };
+})()"#;
 const POLL: Duration = Duration::from_millis(50);
 const OFF: [&str; 3] = ["off", "none", "0"];
 const MAC_APPS: [&str; 4] = [
@@ -62,6 +100,43 @@ const FLAGS: [&str; 13] = [
     "--disable-sync",
     "--remote-debugging-port=0",
 ];
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct SeenCode {
+    pub language: Option<String>,
+    pub text: String,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct Seen {
+    pub title: String,
+    pub headings: Vec<String>,
+    pub text: String,
+    pub colors: Vec<String>,
+    pub fonts: Vec<String>,
+    pub spacing: Vec<String>,
+    pub code: Vec<SeenCode>,
+}
+
+#[derive(Debug)]
+pub struct Capture {
+    pub image: ImageInput,
+    pub seen: Option<Seen>,
+}
+
+#[must_use]
+pub fn browser_allowed(start: &Url, url: &str) -> bool {
+    let Ok(target) = Url::parse(url) else {
+        return false;
+    };
+    match target.scheme() {
+        "data" | "blob" => true,
+        "http" | "https" => crate::links::hop_allowed(start, &target).is_ok(),
+        _ => false,
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Browser {
@@ -202,6 +277,7 @@ struct Cdp {
     socket: WebSocketStream<MaybeTlsStream<TcpStream>>,
     next: u64,
     events: Vec<String>,
+    start: Url,
 }
 
 impl Cdp {
@@ -212,6 +288,9 @@ impl Cdp {
                     let value: Value = serde_json::from_str(text.as_str()).map_err(protocol)?;
                     if let Some(method) = value.get("method").and_then(Value::as_str) {
                         self.events.push(method.to_owned());
+                        if method == "Fetch.requestPaused" {
+                            self.answer_paused(&value).await?;
+                        }
                     }
                     return Ok(value);
                 }
@@ -263,6 +342,36 @@ impl Cdp {
         }
     }
 
+    async fn answer_paused(&mut self, event: &Value) -> Result<(), ShotError> {
+        let params = event.get("params").cloned().unwrap_or(Value::Null);
+        let request_id = text_field(&params, "requestId")?;
+        let session = event
+            .get("sessionId")
+            .and_then(Value::as_str)
+            .map(str::to_owned);
+        let url = params
+            .get("request")
+            .and_then(|request| request.get("url"))
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        if browser_allowed(&self.start, url) {
+            self.send(
+                "Fetch.continueRequest",
+                json!({ "requestId": request_id }),
+                session.as_deref(),
+            )
+            .await?;
+        } else {
+            self.send(
+                "Fetch.failRequest",
+                json!({ "requestId": request_id, "errorReason": "BlockedByClient" }),
+                session.as_deref(),
+            )
+            .await?;
+        }
+        Ok(())
+    }
+
     async fn wait_for(&mut self, event: &str, limit: Duration) {
         let deadline = Instant::now() + limit;
         while !self.events.iter().any(|seen| seen == event) {
@@ -286,7 +395,8 @@ async fn shoot(
     running: &mut Running,
     url: &Url,
     deadline: Instant,
-) -> Result<ImageInput, ShotError> {
+    read: bool,
+) -> Result<Capture, ShotError> {
     let endpoint = devtools_endpoint(running).await?;
     let (socket, _) = tokio_tungstenite::connect_async(endpoint.as_str())
         .await
@@ -295,6 +405,7 @@ async fn shoot(
         socket,
         next: 0,
         events: Vec::new(),
+        start: url.clone(),
     };
     let target = cdp
         .call("Target.createTarget", json!({ "url": "about:blank" }), None)
@@ -309,6 +420,12 @@ async fn shoot(
         .await?;
     let session = text_field(&attached, "sessionId")?;
     cdp.call("Page.enable", json!({}), Some(&session)).await?;
+    cdp.call(
+        "Fetch.enable",
+        json!({ "patterns": [{ "urlPattern": "*" }] }),
+        Some(&session),
+    )
+    .await?;
     cdp.call(
         "Emulation.setDeviceMetricsOverride",
         json!({ "width": WIDTH, "height": HEIGHT, "deviceScaleFactor": 1, "mobile": false }),
@@ -332,7 +449,23 @@ async fn shoot(
         LOAD_WAIT.min(left.saturating_sub(CAPTURE_RESERVE)),
     )
     .await;
-    sleep(SETTLE.min(deadline.saturating_duration_since(Instant::now()))).await;
+    let settle = if read { READ_SETTLE } else { SETTLE };
+    sleep(settle.min(deadline.saturating_duration_since(Instant::now()))).await;
+    let seen = if read {
+        let evaluated = cdp
+            .call(
+                "Runtime.evaluate",
+                json!({ "expression": READ_PAGE, "returnByValue": true }),
+                Some(&session),
+            )
+            .await?;
+        evaluated
+            .get("result")
+            .and_then(|result| result.get("value"))
+            .and_then(|value| serde_json::from_value(value.clone()).ok())
+    } else {
+        None
+    };
     let shot = cdp
         .call(
             "Page.captureScreenshot",
@@ -342,16 +475,28 @@ async fn shoot(
         .await?;
     let data = text_field(&shot, "data")?;
     let _ = cdp.send("Browser.close", json!({}), None).await;
-    Ok(ImageInput {
-        media_type: "image/jpeg".to_owned(),
-        base64: data,
+    Ok(Capture {
+        image: ImageInput {
+            media_type: "image/jpeg".to_owned(),
+            base64: data,
+        },
+        seen,
     })
 }
 
-pub async fn capture(binary: &Path, url: &Url, limit: Duration) -> Result<ImageInput, ShotError> {
+pub async fn capture(
+    binary: &Path,
+    url: &Url,
+    limit: Duration,
+    read: bool,
+) -> Result<Capture, ShotError> {
     let deadline = Instant::now() + limit;
+    let _turn = timeout_at(deadline, RUNNING.acquire())
+        .await
+        .map_err(|_| ShotError::Timeout)?
+        .map_err(protocol)?;
     let mut running = launch(binary)?;
-    let result = timeout_at(deadline, shoot(&mut running, url, deadline)).await;
+    let result = timeout_at(deadline, shoot(&mut running, url, deadline, read)).await;
     running.stop().await;
     result.map_err(|_| ShotError::Timeout)?
 }
@@ -364,7 +509,10 @@ mod tests {
 
     use url::Url;
 
-    use super::{Browser, MAC_APPS, capture, find_browser, find_browser_with, installed_apps};
+    use super::{
+        Browser, MAC_APPS, browser_allowed, capture, find_browser, find_browser_with,
+        installed_apps,
+    };
 
     fn executable(dir: &Path, name: &str, body: &str) -> PathBuf {
         let path = dir.join(name);
@@ -376,6 +524,26 @@ mod tests {
             std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).expect("chmod");
         }
         path
+    }
+
+    #[test]
+    fn a_public_page_cannot_reach_private_addresses_or_other_schemes_in_the_browser() {
+        let public = Url::parse("https://93.184.216.34/docs").unwrap();
+        let local = Url::parse("http://127.0.0.1:5173/").unwrap();
+
+        assert!(browser_allowed(&public, "https://8.8.8.8/app.js"));
+        assert!(browser_allowed(&public, "data:image/png;base64,AA=="));
+        assert!(browser_allowed(&public, "blob:https://93.184.216.34/1"));
+        assert!(!browser_allowed(&public, "http://127.0.0.1:8080/admin"));
+        assert!(!browser_allowed(&public, "http://10.0.0.1/"));
+        assert!(!browser_allowed(&public, "http://[::1]/"));
+        assert!(!browser_allowed(&public, "file:///etc/passwd"));
+        assert!(!browser_allowed(&public, "chrome://settings"));
+        assert!(!browser_allowed(&public, "not a url"));
+        assert!(browser_allowed(
+            &local,
+            "http://127.0.0.1:5173/src/main.tsx"
+        ));
     }
 
     #[test]
@@ -470,7 +638,7 @@ mod tests {
         let browser = executable(dir.path(), "closes", "#!/bin/sh\nexit 3\n");
         let url = Url::parse("http://127.0.0.1:9/").expect("url");
 
-        let error = capture(&browser, &url, Duration::from_secs(5))
+        let error = capture(&browser, &url, Duration::from_secs(5), false)
             .await
             .expect_err("fails");
 
@@ -493,7 +661,7 @@ mod tests {
         let url = Url::parse("http://127.0.0.1:9/").expect("url");
         let started = Instant::now();
 
-        let error = capture(&browser, &url, Duration::from_secs(3))
+        let error = capture(&browser, &url, Duration::from_secs(3), false)
             .await
             .expect_err("fails");
 
@@ -527,12 +695,16 @@ mod tests {
         let url = Url::from_file_path(&page).expect("file url");
         let started = Instant::now();
 
-        let image = capture(&browser, &url, Duration::from_secs(20))
+        let image = capture(&browser, &url, Duration::from_secs(20), false)
             .await
             .expect("screenshot");
 
-        assert_eq!(image.media_type, "image/jpeg");
-        assert!(image.base64.starts_with("/9j/"), "{}", &image.base64[..12]);
+        assert_eq!(image.image.media_type, "image/jpeg");
+        assert!(
+            image.image.base64.starts_with("/9j/"),
+            "{}",
+            &image.image.base64[..12]
+        );
         eprintln!("{} in {:?}", browser.display(), started.elapsed());
     }
 }

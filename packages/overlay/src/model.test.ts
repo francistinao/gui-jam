@@ -756,11 +756,28 @@ describe('linksIn', () => {
     expect(hrefs(prompt)).toEqual(expected);
   });
 
-  it('keeps the first three and counts the rest', () => {
-    const found = linksIn('https://a.com https://b.com https://c.com https://d.com https://e.com');
+  it('keeps the first five and counts the rest', () => {
+    const found = linksIn(
+      'https://a.com https://b.com https://c.com https://d.com https://e.com https://f.com https://g.com',
+    );
     expect(found.links).toHaveLength(MAX_LINKS);
-    expect(found.links[2]?.href).toBe('https://c.com/');
+    expect(found.links[4]?.href).toBe('https://e.com/');
     expect(found.skipped).toBe(2);
+  });
+
+  it('keeps Figma frames apart, names them by file and explains links it cannot read', () => {
+    const found = linksIn(
+      'match https://www.figma.com/design/KEY/Shop-Redesign?node-id=12-34 and https://www.figma.com/board/B/Ideas plus https://www.figma.com/design/KEY/Shop and https://a.com',
+    );
+    expect(found.links.map((link) => link.href)).toEqual(['https://a.com/']);
+    expect(found.frames.map((frame) => [frame.label, frame.problem])).toEqual([
+      ['Figma · Shop Redesign', undefined],
+      [
+        'Figma · Ideas',
+        "Figma · Ideas: FigJam boards, Make and Slides aren't read. Link a frame in a Design file.",
+      ],
+    ]);
+    expect(found.framesSkipped).toBe(1);
   });
 
   it('labels links by host and path without www or a trailing slash', () => {

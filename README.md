@@ -69,6 +69,9 @@ Run these in your app's folder.
 | `npx guijam provider use <id>` | Switches the AI tool: `claude-code`, `codex`, `opencode`, `qwen-code` or `gemini-cli`. |
 | `npx guijam provider use opencode --model <id>` | With OpenCode, also picks the model, such as `deepseek/deepseek-chat`. |
 | `npx guijam provider use <id> --effort <level>` | Fixes how hard the AI tool thinks: `low`, `medium` or `high`. Without it, GUIJam uses low for small edits and questions and medium for sketches and open-ended changes. Claude Code and Codex use it. |
+| `npx guijam figma login` | Saves a Figma personal access token so GUIJam can read frames you link. It is checked with Figma, then kept in the macOS Keychain or Windows Credential Manager, or in `~/.config/guijam/figma-token` (readable only by you) on Linux. |
+| `npx guijam figma status` | Shows whether a token is saved and Figma accepts it. Add `--json` for scripts. |
+| `npx guijam figma logout` | Forgets the saved Figma token. |
 | `npx guijam --help` | Shows every command and option. |
 
 Options for `init`:
@@ -101,6 +104,8 @@ The AI tool you pick is saved for your user in `~/.config/guijam/config.toml`, a
 | `GUIJAM_GJD_BIN` | Path to a `gjd` binary to use instead of the one installed from npm |
 | `GUIJAM_BROWSER` | Path to the Chromium-based browser that takes screenshots of links in your prompts. By default GUIJam finds Chrome, Brave, Edge or Chromium. |
 | `XDG_CONFIG_HOME` | Moves the saved AI tool choice to `$XDG_CONFIG_HOME/guijam/config.toml`. Without it, the choice is saved in `~/.config/guijam/` on macOS and Linux and in `%APPDATA%\guijam\` on Windows. |
+| `GUIJAM_FIGMA_TOKEN` | A Figma personal access token to use instead of the saved one |
+| `GUIJAM_FIGMA_API` | Base URL of the Figma REST API, for tests. Defaults to `https://api.figma.com`. |
 | `GUIJAM_NO_UPDATE_CHECK` | Set to `1` to stop the daily check for a newer guijam. The check is also off in CI. |
 
 GUIJam keeps its run state, logs and undo journal in `.guijam/` in your project. `init` adds that folder to `.gitignore`.
@@ -148,7 +153,8 @@ With Laravel's `@vite` directive, Inertia, or any server that renders the HTML i
 - **References across the page.** "Use the image from the navbar here" works, because GUIJam indexes your project's assets and the page you are looking at.
 - **Sketch to UI.** Rough out a layout or an icon. GUIJam sends the sketch and a screenshot of the page, then places the new markup in the right component. A self-contained piece becomes one component file, split into atoms and molecules only when its parts are reused.
 - **Sketch over a component.** Select an element and draw on it what you want: a new shape, an icon, an arrow at the part to change. The AI gets the page, a close-up of the element with your strokes and your prompt, and changes that component instead of adding a new one.
-- **Inspiration and links.** Paste or drop images next to your prompt, or paste a link: GUIJam reads the page's text, colors and fonts, and takes a screenshot with your installed Chromium browser.
+- **Inspiration and links.** Paste or drop images next to your prompt, or paste up to 5 links. GUIJam reads each page's text, colors, fonts and code examples, follows up to 2 links on the same site one level deep, and takes a screenshot with your installed Chromium browser. Pages built by JavaScript are read in that browser. Links to code on GitHub, GitLab or a gist send the file itself.
+- **Figma frames as references.** Paste a link to a Figma frame (Copy link to selection) and the variants match it: layout, auto layout, spacing, colors, type and text, mapped to your theme tokens and components. GUIJam reads up to 2 frames with your own token (`npx guijam figma login`) before the AI runs, and stops with the reason if a frame can't be read, so no tokens are spent.
 - **3D and motion when asked.** Requests that need three.js, Motion or GSAP can use them, after you approve the install.
 - **Safe writes.** Edits are journaled with the exact previous bytes, conflicts with your own unsaved work are refused, and undo restores files exactly.
 - **Undo any change, in any order.** History undoes one change and keeps everything written after it, including your own edits elsewhere in the file. When a later change touched the same lines, it names that change instead of guessing.

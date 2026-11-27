@@ -35,6 +35,21 @@ enum Command {
     Daemon(DaemonCommand),
     #[command(subcommand, about = "Connect GUIJam to Jira")]
     Jira(JiraCommand),
+    #[command(subcommand, about = "Let GUIJam read Figma frames you link in prompts")]
+    Figma(FigmaCommand),
+}
+
+#[derive(Subcommand)]
+enum FigmaCommand {
+    #[command(about = "Save a Figma personal access token, read from standard input")]
+    Login,
+    #[command(about = "Forget the saved Figma token")]
+    Logout,
+    #[command(about = "Show whether a Figma token is saved and accepted")]
+    Status {
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -160,6 +175,56 @@ async fn jira(command: JiraCommand) -> ExitCode {
         Err(text) => {
             eprintln!("{text}");
             ExitCode::FAILURE
+        }
+    }
+}
+
+fn figma(command: &FigmaCommand) -> Result<String, String> {
+    use gjd_daemon::figma;
+    match command {
+        FigmaCommand::Login => {
+            let mut line = String::new();
+            std::io::stdin()
+                .read_line(&mut line)
+                .map_err(|error| format!("Couldn't read the token: {error}"))?;
+            let token = figma::Token::new(&line)
+                .ok_or("Paste a Figma personal access token, then press Enter.")?;
+            figma::check(&token).map_err(|error| format!("{error}. {}", error.action()))?;
+            let stored = figma::save(&token)?;
+            Ok(format!(
+                "Figma token saved in {stored}. Paste a frame link into a prompt to use it."
+            ))
+        }
+        FigmaCommand::Logout => Ok(if figma::forget()? {
+            "Figma token removed.".to_owned()
+        } else {
+            "No Figma token was saved.".to_owned()
+        }),
+        FigmaCommand::Status { json } => {
+            let saved = figma::load();
+            let checked = saved.as_ref().map(|(token, _)| figma::check(token));
+            if *json {
+                return Ok(serde_json::json!({
+                    "token": saved.as_ref().map(|(_, stored)| match stored {
+                        figma::Stored::Env => "env",
+                        figma::Stored::Keychain => "keychain",
+                        figma::Stored::File => "file",
+                    }),
+                    "accepted": checked.as_ref().map(Result::is_ok),
+                    "error": checked.and_then(Result::err).map(|error| error.to_string()),
+                })
+                .to_string());
+            }
+            Ok(match (&saved, checked) {
+                (None, _) => "No Figma token is saved. Run npx guijam figma login.".to_owned(),
+                (Some((_, stored)), Some(Ok(()))) => {
+                    format!("Figma token in {stored} is accepted.")
+                }
+                (Some((_, stored)), Some(Err(error))) => {
+                    format!("Figma token in {stored}: {error}. {}", error.action())
+                }
+                (Some(_), None) => unreachable!("a saved token is always checked"),
+            })
         }
     }
 }
@@ -489,6 +554,21 @@ async fn main() -> ExitCode {
         Command::Daemon(DaemonCommand::Status { project }) => daemon_status(&project),
         Command::Daemon(DaemonCommand::Stop { project }) => stop_daemon(&project).await,
         Command::Jira(command) => jira(command).await,
+        Command::Figma(command) => {
+            match tokio::task::spawn_blocking(move || figma(&command))
+                .await
+                .unwrap_or_else(|error| Err(error.to_string()))
+            {
+                Ok(text) => {
+                    println!("{text}");
+                    ExitCode::SUCCESS
+                }
+                Err(text) => {
+                    eprintln!("{text}");
+                    ExitCode::FAILURE
+                }
+            }
+        }
         Command::Provider(ProviderCommand::List { json: true }) => list_json().await,
         Command::Provider(ProviderCommand::List { json: false }) => list().await,
         Command::Provider(ProviderCommand::Use { id, model, effort }) => {

@@ -91,7 +91,7 @@ pub fn remove_in(path: &Path, host: Option<&str>) -> io::Result<Vec<Site>> {
     Ok(removed)
 }
 
-fn write_private(path: &Path, text: &str) -> io::Result<()> {
+pub(crate) fn write_private(path: &Path, text: &str) -> io::Result<()> {
     if let Some(dir) = path.parent() {
         let mut builder = DirBuilder::new();
         builder.recursive(true);
@@ -102,7 +102,11 @@ fn write_private(path: &Path, text: &str) -> io::Result<()> {
         }
         builder.create(dir)?;
     }
-    let temp = path.with_file_name(format!("{FILE_NAME}.{}.tmp", std::process::id()));
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or(FILE_NAME);
+    let temp = path.with_file_name(format!("{name}.{}.tmp", std::process::id()));
     let mut options = OpenOptions::new();
     options.create(true).write(true).truncate(true);
     #[cfg(unix)]
