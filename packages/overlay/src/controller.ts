@@ -377,7 +377,7 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
   let previewTimer: ReturnType<typeof setTimeout> | undefined;
   let following: MutationObserver | undefined;
   let followTimer: ReturnType<typeof setTimeout> | undefined;
-  let previewing: Promise<void> | undefined;
+  let previewing: Promise<void> = Promise.resolve();
   let noticeTimer: ReturnType<typeof setTimeout> | undefined;
   let editSequence = 0;
   let selectSequence = 0;
@@ -564,7 +564,7 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
     clearTimeout(previewTimer);
     previewTimer = setTimeout(() => {
       previewTimer = undefined;
-      previewing = preview(sequence);
+      previewing = previewing.then(() => preview(sequence));
     }, PREVIEW_DEBOUNCE_MS);
   }
 
@@ -628,7 +628,7 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
 
   async function preview(sequence: number): Promise<void> {
     const { selection, draft } = store.get();
-    if (!selection) return;
+    if (!selection || sequence !== editSequence) return;
     const reply = await host.request({
       type: 'finetune.preview',
       payload: {
@@ -638,7 +638,16 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
         props: finetuneProps(draft),
       },
     });
-    if (sequence !== editSequence) return;
+    if (sequence !== editSequence) {
+      const reverted = Object.keys(store.get().draft).length === 0;
+      if (reverted && reply.type === 'finetune.previewed') {
+        await host.request({
+          type: 'changeset.discard',
+          payload: { changesetId: reply.payload.changesetId },
+        });
+      }
+      return;
+    }
     if (reply.type !== 'finetune.previewed') {
       clearOptimistic();
       domPreview.revert();
@@ -1671,7 +1680,8 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
       if (previewTimer) {
         clearTimeout(previewTimer);
         previewTimer = undefined;
-        previewing = preview(editSequence);
+        const sequence = editSequence;
+        previewing = previewing.then(() => preview(sequence));
       }
       await previewing;
       const { preview: pending } = store.get();
