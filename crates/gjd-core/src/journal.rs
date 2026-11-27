@@ -1,5 +1,6 @@
+use std::collections::{HashMap, HashSet};
 use std::fs::{self, DirBuilder, File, OpenOptions};
-use std::io::{self, BufRead, BufReader, Write};
+use std::io::{self, Write};
 #[cfg(unix)]
 use std::os::unix::fs::DirBuilderExt;
 use std::path::{Path, PathBuf};
@@ -10,6 +11,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::content_hash;
 use crate::contracts::ContentHash;
+use crate::merge::{changed_lines, map_line, revert};
 use crate::policy::{PolicyError, ProjectRoot};
 
 const BUSY_RETRIES: u32 = 5;
@@ -20,6 +22,42 @@ const ERROR_LOCK_VIOLATION: i32 = 33;
 const MS_PER_DAY: u64 = 86_400_000;
 
 const ABSENT: &str = "absent";
+const UNDO: &str = "undo";
+const REDO: &str = "redo";
+const MAX_BLOCKERS: usize = 3;
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EntryMeta {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub src: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub component: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub page_url: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Flipped {
+    pub id: String,
+    pub of: String,
+    pub paths: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Row {
+    pub id: String,
+    pub at_ms: u64,
+    pub origin: String,
+    pub title: String,
+    pub meta: EntryMeta,
+    pub files: Vec<String>,
+    pub applied: bool,
+    pub line: Option<usize>,
+}
 
 #[derive(Debug, Clone)]
 pub struct FileChange {
@@ -62,6 +100,16 @@ pub enum CommitError {
     UnknownEntry(String),
     #[error("journal entry {0} was already undone")]
     AlreadyUndone(String),
+    #[error("journal entry {0} is already applied")]
+    NotUndone(String),
+    #[error("{path} shares lines with a later change")]
+    Overlap {
+        path: String,
+        lines: Vec<(usize, usize)>,
+        blockers: Vec<String>,
+    },
+    #[error("{path} changed since this change, which was made before History")]
+    Stale { path: String },
     #[error("the journal is unreadable: {0}")]
     Corrupt(String),
     #[error(transparent)]
@@ -86,6 +134,8 @@ enum Record {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         undo_of: Option<String>,
         files: Vec<FileRecord>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        meta: Option<EntryMeta>,
     },
     Commit {
         id: String,
@@ -153,31 +203,236 @@ impl Journal {
         origin: &str,
         label: &str,
     ) -> Result<String, CommitError> {
-        self.write_entry(changes, origin, label, None)
+        self.write_entry(changes, origin, label, None, None)
+    }
+
+    pub fn commit_with(
+        &self,
+        changes: &[FileChange],
+        origin: &str,
+        label: &str,
+        meta: EntryMeta,
+    ) -> Result<String, CommitError> {
+        self.write_entry(changes, origin, label, None, Some(meta))
     }
 
     pub fn undo(&self, id: &str) -> Result<String, CommitError> {
+        self.flip(id, false).map(|flipped| flipped.id)
+    }
+
+    pub fn flip(&self, id: &str, want_applied: bool) -> Result<Flipped, CommitError> {
         let records = self.records()?;
-        let files = committed_files(&records, id)
+        let index = Index::new(&records);
+        let root = index
+            .root(id)
             .ok_or_else(|| CommitError::UnknownEntry(id.to_owned()))?;
-        let already_undone = records.iter().any(|record| {
-            matches!(record, Record::Begin { id: undo_id, undo_of: Some(of), .. }
-                if of == id && is_committed(&records, undo_id))
-        });
-        if already_undone {
-            return Err(CommitError::AlreadyUndone(id.to_owned()));
+        let chain = index.chain(root);
+        let tip = *chain.last().unwrap_or(&root);
+        let applied = chain.len() % 2 == 1;
+        if applied == want_applied {
+            return Err(if want_applied {
+                CommitError::NotUndone(root.to_owned())
+            } else {
+                CommitError::AlreadyUndone(root.to_owned())
+            });
         }
-        let changes = files
+        let files = index.files(tip);
+        let mut changes = Vec::with_capacity(files.len());
+        for file in files {
+            let target = self.project.resolve(&file.path)?;
+            let current = read_if_present(&target)?;
+            let current_hash = current.as_deref().map(content_hash);
+            let current_text = hash_text(current_hash.as_ref());
+            if current_text == file.pre_hash {
+                continue;
+            }
+            let content = if current_text == file.post_hash {
+                self.read_optional_blob(&file.pre_hash)?
+            } else {
+                Some(self.merged(&index, &chain, file, current.as_deref())?)
+            };
+            changes.push(FileChange {
+                path: file.path.clone(),
+                expected_hash: current_hash,
+                content,
+            });
+        }
+        let (origin, label) = if want_applied {
+            (REDO, format!("redo {root}"))
+        } else {
+            (UNDO, format!("undo {root}"))
+        };
+        let paths = files.iter().map(|file| file.path.clone()).collect();
+        let id = self.write_entry(&changes, origin, &label, Some(tip), None)?;
+        Ok(Flipped {
+            id,
+            of: root.to_owned(),
+            paths,
+        })
+    }
+
+    fn merged(
+        &self,
+        index: &Index<'_>,
+        chain: &[&str],
+        file: &FileRecord,
+        current: Option<&[u8]>,
+    ) -> Result<Vec<u8>, CommitError> {
+        let conflict = || CommitError::Conflict {
+            path: file.path.clone(),
+        };
+        let Some(current) = current else {
+            return Err(conflict());
+        };
+        if file.pre_hash == ABSENT || file.post_hash == ABSENT {
+            return Err(conflict());
+        }
+        let ancestor = self
+            .blob_text(&file.post_hash)?
+            .ok_or_else(|| CommitError::Stale {
+                path: file.path.clone(),
+            })?;
+        let target = self.blob_text(&file.pre_hash)?.ok_or_else(conflict)?;
+        let current = std::str::from_utf8(current).map_err(|_| conflict())?;
+        match revert(&ancestor, current, &target) {
+            Ok(merged) => Ok(merged.into_bytes()),
+            Err(clashes) => Err(CommitError::Overlap {
+                path: file.path.clone(),
+                blockers: self.blockers(index, chain, &file.path, current, &clashes),
+                lines: clashes
+                    .iter()
+                    .map(|range| (range.start + 1, range.end.max(range.start + 1)))
+                    .collect(),
+            }),
+        }
+    }
+
+    fn blockers(
+        &self,
+        index: &Index<'_>,
+        chain: &[&str],
+        path: &str,
+        current: &str,
+        clashes: &[std::ops::Range<usize>],
+    ) -> Vec<String> {
+        let first = index.position(chain.first().copied().unwrap_or_default());
+        let mut names = Vec::new();
+        for (position, record) in index.begins.iter().rev() {
+            if *position <= first || names.len() >= MAX_BLOCKERS {
+                continue;
+            }
+            let Record::Begin {
+                id,
+                undo_of: None,
+                files,
+                ..
+            } = record
+            else {
+                continue;
+            };
+            if chain.contains(&id.as_str()) || !index.applied(id) {
+                continue;
+            }
+            let Some(file) = files.iter().find(|file| file.path == path) else {
+                continue;
+            };
+            let touches = match (
+                self.blob_text(&file.pre_hash).ok().flatten(),
+                self.blob_text(&file.post_hash).ok().flatten(),
+            ) {
+                (Some(before), Some(after)) => changed_lines(&before, &after).iter().any(|range| {
+                    let start = map_line(&after, current, range.start);
+                    let end = map_line(&after, current, range.end.max(range.start + 1) - 1) + 1;
+                    clashes
+                        .iter()
+                        .any(|clash| start < clash.end.max(clash.start + 1) && clash.start < end)
+                }),
+                _ => true,
+            };
+            let name = title(record);
+            if touches && !names.contains(&name) {
+                names.push(name);
+            }
+        }
+        names
+    }
+
+    pub fn history(
+        &self,
+        page_url: Option<&str>,
+        before: Option<&str>,
+        limit: usize,
+    ) -> Result<(Vec<Row>, bool), CommitError> {
+        let records = self.records()?;
+        let index = Index::new(&records);
+        let mut rows: Vec<&Record> = index
+            .begins
             .iter()
-            .map(|file| {
-                Ok(FileChange {
-                    path: file.path.clone(),
-                    expected_hash: parse_optional_hash(&file.post_hash)?,
-                    content: self.read_optional_blob(&file.pre_hash)?,
+            .map(|(_, record)| *record)
+            .filter(|record| matches!(record, Record::Begin { undo_of: None, .. }))
+            .filter(|record| {
+                let Record::Begin { id, meta, .. } = record else {
+                    return false;
+                };
+                let on_page = page_url.is_none_or(|page| {
+                    meta.as_ref().and_then(|meta| meta.page_url.as_deref()) == Some(page)
+                });
+                on_page && before.is_none_or(|before| id.as_str() < before)
+            })
+            .collect();
+        rows.sort_by(|a, b| sort_key(b).cmp(&sort_key(a)));
+        let more = rows.len() > limit;
+        let rows = rows
+            .into_iter()
+            .take(limit)
+            .filter_map(|record| {
+                let Record::Begin {
+                    id,
+                    at_ms,
+                    origin,
+                    files,
+                    meta,
+                    ..
+                } = record
+                else {
+                    return None;
+                };
+                let meta = meta.clone().unwrap_or_default();
+                Some(Row {
+                    line: self.current_line(&meta, files),
+                    id: id.clone(),
+                    at_ms: *at_ms,
+                    origin: origin.clone(),
+                    title: title(record),
+                    files: files.iter().map(|file| file.path.clone()).collect(),
+                    applied: index.applied(id),
+                    meta,
                 })
             })
-            .collect::<Result<Vec<_>, CommitError>>()?;
-        self.write_entry(&changes, "undo", &format!("undo {id}"), Some(id))
+            .collect();
+        Ok((rows, more))
+    }
+
+    fn current_line(&self, meta: &EntryMeta, files: &[FileRecord]) -> Option<usize> {
+        let src = meta.src.as_deref()?;
+        let (rest, _column) = src.rsplit_once(':')?;
+        let (path, line) = rest.rsplit_once(':')?;
+        let line: usize = line.parse().ok()?;
+        let file = files.iter().find(|file| file.path == path)?;
+        let before = self.blob_text(&file.pre_hash).ok().flatten()?;
+        let current = fs::read_to_string(self.project.resolve(path).ok()?).ok()?;
+        Some(map_line(&before, &current, line.checked_sub(1)?) + 1)
+    }
+
+    fn blob_text(&self, hash: &str) -> Result<Option<String>, CommitError> {
+        if hash == ABSENT {
+            return Ok(None);
+        }
+        match fs::read(self.blobs.join(hash)) {
+            Ok(bytes) => Ok(String::from_utf8(bytes).ok()),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(error.into()),
+        }
     }
 
     pub fn paths(&self, id: &str) -> Result<Vec<String>, CommitError> {
@@ -264,6 +519,7 @@ impl Journal {
         origin: &str,
         label: &str,
         undo_of: Option<&str>,
+        meta: Option<EntryMeta>,
     ) -> Result<String, CommitError> {
         let mut sorted: Vec<&FileChange> = changes.iter().collect();
         sorted.sort_by(|a, b| a.path.cmp(&b.path));
@@ -281,6 +537,9 @@ impl Journal {
             }
             if let (Some(bytes), Some(hash)) = (&previous, &pre_hash) {
                 self.store_blob(hash, bytes)?;
+            }
+            if let Some(bytes) = &change.content {
+                self.store_blob(&content_hash(bytes), bytes)?;
             }
             files.push(FileRecord {
                 path: change.path.clone(),
@@ -303,6 +562,7 @@ impl Journal {
             label: label.to_owned(),
             undo_of: undo_of.map(str::to_owned),
             files,
+            meta,
         })?;
         if let Err(error) = write_all_or_none(&id, &planned) {
             self.append(&Record::Abort {
@@ -367,12 +627,15 @@ impl Journal {
         files.sort();
         let mut records = Vec::new();
         for path in files {
-            for line in BufReader::new(File::open(&path)?).lines() {
-                let line = line?;
+            let text = fs::read_to_string(&path)?;
+            for line in text.split_inclusive('\n') {
+                let Some(line) = line.strip_suffix('\n') else {
+                    continue;
+                };
                 if line.trim().is_empty() {
                     continue;
                 }
-                let record = serde_json::from_str(&line).map_err(|error| {
+                let record = serde_json::from_str(line).map_err(|error| {
                     CommitError::Corrupt(format!("{}: {error}", path.display()))
                 })?;
                 records.push(record);
@@ -529,6 +792,114 @@ fn is_closed(records: &[Record], id: &str) -> bool {
     })
 }
 
+struct Index<'r> {
+    begins: Vec<(usize, &'r Record)>,
+    by_id: HashMap<&'r str, (usize, &'r Record)>,
+    child: HashMap<&'r str, &'r str>,
+}
+
+impl<'r> Index<'r> {
+    fn new(records: &'r [Record]) -> Self {
+        let committed: HashSet<&str> = records
+            .iter()
+            .filter_map(|record| match record {
+                Record::Commit { id, .. } => Some(id.as_str()),
+                _ => None,
+            })
+            .collect();
+        let mut begins = Vec::new();
+        let mut by_id = HashMap::new();
+        let mut child = HashMap::new();
+        for (position, record) in records.iter().enumerate() {
+            let Record::Begin { id, undo_of, .. } = record else {
+                continue;
+            };
+            if !committed.contains(id.as_str()) {
+                continue;
+            }
+            begins.push((position, record));
+            by_id.insert(id.as_str(), (position, record));
+            if let Some(of) = undo_of {
+                child.insert(of.as_str(), id.as_str());
+            }
+        }
+        Self {
+            begins,
+            by_id,
+            child,
+        }
+    }
+
+    fn root(&self, id: &str) -> Option<&'r str> {
+        let (_, mut record) = *self.by_id.get(id)?;
+        loop {
+            match record {
+                Record::Begin {
+                    undo_of: Some(of), ..
+                } => record = self.by_id.get(of.as_str())?.1,
+                Record::Begin { id, .. } => return Some(id.as_str()),
+                _ => return None,
+            }
+        }
+    }
+
+    fn chain(&self, root: &'r str) -> Vec<&'r str> {
+        let mut chain = vec![root];
+        let mut at = root;
+        while let Some(next) = self.child.get(at) {
+            chain.push(next);
+            at = next;
+        }
+        chain
+    }
+
+    fn applied(&self, root: &str) -> bool {
+        self.by_id
+            .get_key_value(root)
+            .is_some_and(|(root, _)| self.chain(root).len() % 2 == 1)
+    }
+
+    fn files(&self, id: &str) -> &'r [FileRecord] {
+        match self.by_id.get(id) {
+            Some((_, Record::Begin { files, .. })) => files.as_slice(),
+            _ => &[],
+        }
+    }
+
+    fn position(&self, id: &str) -> usize {
+        self.by_id.get(id).map_or(0, |(position, _)| *position)
+    }
+}
+
+fn sort_key(record: &Record) -> (u64, &str) {
+    match record {
+        Record::Begin { at_ms, id, .. } => (*at_ms, id.as_str()),
+        _ => (0, ""),
+    }
+}
+
+fn title(record: &Record) -> String {
+    let Record::Begin { label, meta, .. } = record else {
+        return String::new();
+    };
+    if let Some(EntryMeta {
+        component: Some(component),
+        detail: Some(detail),
+        ..
+    }) = meta
+    {
+        return format!("{component} · {detail}");
+    }
+    let summary = label
+        .split_once(" · ")
+        .map_or(label.as_str(), |(_, rest)| rest);
+    summary
+        .rsplit_once(" (")
+        .filter(|(_, route)| route.ends_with(')') && route.contains(" · "))
+        .map_or(summary, |(text, _)| text)
+        .to_owned()
+}
+
 fn committed_files<'r>(records: &'r [Record], id: &str) -> Option<&'r [FileRecord]> {
     if !is_committed(records, id) {
         return None;
@@ -539,17 +910,6 @@ fn committed_files<'r>(records: &'r [Record], id: &str) -> Option<&'r [FileRecor
         } if begun == id => Some(files.as_slice()),
         _ => None,
     })
-}
-
-fn parse_optional_hash(value: &str) -> Result<Option<ContentHash>, CommitError> {
-    if value == ABSENT {
-        return Ok(None);
-    }
-    parse_hash(value).map(Some)
-}
-
-fn parse_hash(value: &str) -> Result<ContentHash, CommitError> {
-    ContentHash::try_from(value).map_err(|_| CommitError::Corrupt(format!("bad hash {value}")))
 }
 
 fn now_ms() -> u64 {
@@ -594,7 +954,8 @@ mod tests {
     use std::os::unix::fs::PermissionsExt;
 
     use super::{
-        CommitError, FileChange, FileRecord, Journal, Record, Recovery, now_ms, year_month,
+        CommitError, EntryMeta, FileChange, FileRecord, Journal, Record, Recovery, now_ms,
+        year_month,
     };
     use crate::content_hash;
     use crate::policy::ProjectRoot;
@@ -695,7 +1056,7 @@ mod tests {
 
         assert!(matches!(
             journal.undo(&id),
-            Err(CommitError::Conflict { .. })
+            Err(CommitError::Overlap { blockers, .. }) if blockers.is_empty()
         ));
         assert_eq!(read(&dir, BUTTON), "A, then edited\n");
     }
@@ -758,6 +1119,7 @@ mod tests {
                 label: "crash".to_owned(),
                 undo_of: None,
                 files,
+                meta: None,
             })
             .expect("appended");
     }
@@ -879,5 +1241,250 @@ mod tests {
         );
         journal.undo(&id).expect("undone");
         assert!(!dir.path().join("public/cup.webp").exists());
+    }
+
+    const LINES: &str = "a\nb\nc\nd\n";
+
+    fn meta(component: &str, detail: &str, page: &str) -> EntryMeta {
+        EntryMeta {
+            component: Some(component.to_owned()),
+            detail: Some(detail.to_owned()),
+            page_url: Some(page.to_owned()),
+            src: Some(format!("{BUTTON}:4:3")),
+            prompt: None,
+        }
+    }
+
+    fn commit_as(
+        journal: &Journal,
+        path: &str,
+        from: &str,
+        to: &str,
+        name: (&str, &str),
+    ) -> String {
+        journal
+            .commit_with(
+                &[change(path, from, to)],
+                "finetune",
+                &format!("{path}:1 · {}", name.1),
+                meta(name.0, name.1, "http://localhost:5173/"),
+            )
+            .expect("committed")
+    }
+
+    #[test]
+    fn undoes_an_older_change_and_keeps_a_later_one_in_the_same_file() {
+        let (dir, journal) = project(&[(BUTTON, LINES)]);
+        let header = commit_as(&journal, BUTTON, LINES, "a\nB\nc\nd\n", ("Header", "Fill"));
+        commit_as(
+            &journal,
+            BUTTON,
+            "a\nB\nc\nd\n",
+            "a\nB\nc\nD\n",
+            ("Footer", "Text"),
+        );
+
+        journal.undo(&header).expect("undone");
+
+        assert_eq!(read(&dir, BUTTON), "a\nb\nc\nD\n");
+        let (rows, more) = journal.history(None, None, 10).expect("history");
+        assert!(!more);
+        let states: Vec<(&str, bool)> = rows
+            .iter()
+            .map(|row| (row.title.as_str(), row.applied))
+            .collect();
+        assert_eq!(states, [("Footer · Text", true), ("Header · Fill", false)]);
+    }
+
+    #[test]
+    fn an_edit_elsewhere_in_the_file_does_not_block_undo() {
+        let (dir, journal) = project(&[(BUTTON, LINES)]);
+        let id = commit_as(&journal, BUTTON, LINES, "a\nB\nc\nd\n", ("Header", "Fill"));
+        fs::write(dir.path().join(BUTTON), "a\nB\nc\nmine\n").expect("ide edit");
+
+        journal.undo(&id).expect("undone");
+
+        assert_eq!(read(&dir, BUTTON), "a\nb\nc\nmine\n");
+    }
+
+    #[test]
+    fn names_the_later_change_on_the_same_lines_and_writes_nothing() {
+        let (dir, journal) = project(&[(BUTTON, LINES)]);
+        let id = commit_as(&journal, BUTTON, LINES, "a\nB\nc\nd\n", ("Header", "Fill"));
+        commit_as(
+            &journal,
+            BUTTON,
+            "a\nB\nc\nd\n",
+            "a\nBB\nc\nd\n",
+            ("MenuCard", "V2 · soft card"),
+        );
+
+        let error = journal.undo(&id).expect_err("overlap");
+
+        assert!(matches!(
+            error,
+            CommitError::Overlap { ref blockers, ref lines, .. }
+                if blockers == &["MenuCard · V2 · soft card".to_owned()] && lines == &[(2, 2)]
+        ));
+        assert_eq!(read(&dir, BUTTON), "a\nBB\nc\nd\n");
+    }
+
+    #[test]
+    fn a_change_across_two_files_is_undone_in_both_or_neither() {
+        let (dir, journal) = project(&[(BUTTON, LINES), (CARD, LINES)]);
+        let both = journal
+            .commit_with(
+                &[
+                    change(BUTTON, LINES, "a\nB\nc\nd\n"),
+                    change(CARD, LINES, "a\nB\nc\nd\n"),
+                ],
+                "ai",
+                "both",
+                EntryMeta::default(),
+            )
+            .expect("committed");
+        commit_as(
+            &journal,
+            CARD,
+            "a\nB\nc\nd\n",
+            "a\nBee\nc\nd\n",
+            ("Card", "Text"),
+        );
+
+        assert!(matches!(
+            journal.undo(&both),
+            Err(CommitError::Overlap { .. })
+        ));
+        assert_eq!(read(&dir, BUTTON), "a\nB\nc\nd\n");
+        assert_eq!(read(&dir, CARD), "a\nBee\nc\nd\n");
+    }
+
+    #[test]
+    fn undo_redo_undo_redo_follows_the_chain() {
+        let (dir, journal) = project(&[(BUTTON, LINES)]);
+        let id = commit_as(&journal, BUTTON, LINES, "a\nB\nc\nd\n", ("Header", "Fill"));
+
+        journal.flip(&id, false).expect("undo");
+        assert_eq!(read(&dir, BUTTON), LINES);
+        assert!(matches!(
+            journal.flip(&id, false),
+            Err(CommitError::AlreadyUndone(_))
+        ));
+        let redone = journal.flip(&id, true).expect("redo");
+        assert_eq!(redone.of, id);
+        assert_eq!(read(&dir, BUTTON), "a\nB\nc\nd\n");
+        assert!(matches!(
+            journal.flip(&id, true),
+            Err(CommitError::NotUndone(_))
+        ));
+        journal
+            .flip(&redone.id, false)
+            .expect("undo through a later link");
+        assert_eq!(read(&dir, BUTTON), LINES);
+        journal.flip(&id, true).expect("redo again");
+        assert_eq!(read(&dir, BUTTON), "a\nB\nc\nd\n");
+        let (rows, _) = journal.history(None, None, 10).expect("history");
+        assert_eq!(rows.len(), 1);
+        assert!(rows[0].applied);
+    }
+
+    #[test]
+    fn never_deletes_a_created_file_that_was_edited_since() {
+        let (dir, journal) = project(&[]);
+        let new = "src/New.tsx";
+        let id = journal
+            .commit_with(
+                &[FileChange::create(new, "made\n")],
+                "ai",
+                "new",
+                EntryMeta::default(),
+            )
+            .expect("created");
+        fs::write(dir.path().join(new), "made\nand mine\n").expect("edit");
+
+        assert!(matches!(
+            journal.undo(&id),
+            Err(CommitError::Conflict { .. })
+        ));
+        assert_eq!(read(&dir, new), "made\nand mine\n");
+
+        fs::write(dir.path().join(new), "made\n").expect("back");
+        journal.undo(&id).expect("undone");
+        assert!(!dir.path().join(new).exists());
+        fs::write(dir.path().join(new), "someone else\n").expect("recreated");
+        assert!(matches!(
+            journal.flip(&id, true),
+            Err(CommitError::Conflict { .. })
+        ));
+        assert_eq!(read(&dir, new), "someone else\n");
+    }
+
+    #[test]
+    fn an_old_entry_without_its_after_version_only_undoes_while_unchanged() {
+        let (dir, journal) = project(&[(BUTTON, LINES)]);
+        let id = journal
+            .commit(&[change(BUTTON, LINES, "a\nB\nc\nd\n")], "finetune", "old")
+            .expect("committed");
+        fs::remove_file(
+            dir.path()
+                .join(".guijam/journal/blobs")
+                .join(content_hash(b"a\nB\nc\nd\n").as_str()),
+        )
+        .expect("old journals kept no after-version");
+        fs::write(dir.path().join(BUTTON), "a\nB\nc\nmine\n").expect("edit");
+
+        assert!(matches!(journal.undo(&id), Err(CommitError::Stale { .. })));
+        fs::write(dir.path().join(BUTTON), "a\nB\nc\nd\n").expect("back");
+        journal.undo(&id).expect("unchanged file undoes by hash");
+        assert_eq!(read(&dir, BUTTON), LINES);
+    }
+
+    fn journal_file(dir: &tempfile::TempDir) -> std::path::PathBuf {
+        fs::read_dir(dir.path().join(".guijam/journal"))
+            .expect("journal dir")
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .find(|path| {
+                path.extension()
+                    .is_some_and(|extension| extension == "jsonl")
+            })
+            .expect("journal file")
+    }
+
+    #[test]
+    fn history_pages_newest_first_filters_by_page_and_names_old_entries() {
+        let (dir, journal) = project(&[(BUTTON, LINES)]);
+        let old = journal
+            .commit(
+                &[change(BUTTON, LINES, "a\nB\nc\nd\n")],
+                "ai",
+                "src/Button.tsx:2 · Polished card (R2 · Claude Code opus)",
+            )
+            .expect("old entry");
+        let newer = journal
+            .commit_with(
+                &[change(BUTTON, "a\nB\nc\nd\n", "x\na\nB\nc\nd\n")],
+                "finetune",
+                "added",
+                meta("Header", "Text 'x'", "http://localhost:5173/menu"),
+            )
+            .expect("newer");
+        let log = journal_file(&dir);
+        let text = fs::read_to_string(&log).expect("journal text");
+        fs::write(&log, format!("{text}{{\"event\":\"begin\"")).expect("half-written line");
+
+        let (rows, more) = journal.history(None, None, 1).expect("history");
+        assert!(more);
+        assert_eq!(rows[0].id, newer);
+        assert_eq!(rows[0].line, Some(5));
+        let (rest, more) = journal.history(None, Some(&newer), 10).expect("page two");
+        assert!(!more);
+        assert_eq!(rest[0].id, old);
+        assert_eq!(rest[0].title, "Polished card");
+        let (menu, _) = journal
+            .history(Some("http://localhost:5173/menu"), None, 10)
+            .expect("filtered");
+        assert_eq!(menu.len(), 1);
+        assert_eq!(menu[0].title, "Header · Text 'x'");
     }
 }

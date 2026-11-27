@@ -6,6 +6,8 @@ const WIDGET_REQUEST_TYPES = [
   'changeset.commit',
   'changeset.discard',
   'journal.undo',
+  'journal.redo',
+  'journal.list',
   'generate.request',
   'generate.cancel',
   'variant.select',
@@ -86,6 +88,8 @@ export function terminalLine(reply: GuijamMessage): string | undefined {
       return `✎ ${reply.payload.summary}`;
     case 'undo.done':
       return `↺ undid ${reply.payload.undoOf}`;
+    case 'redo.done':
+      return `↻ redid ${reply.payload.redoOf}`;
     case 'generate.done':
       return `✦ ${reply.payload.summary}`;
     case 'tracker.posted':

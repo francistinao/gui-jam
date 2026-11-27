@@ -33,6 +33,10 @@ export type GuijamMessage =
   | ChangesetDiscardedMessage
   | JournalUndoMessage
   | UndoDoneMessage
+  | JournalRedoMessage
+  | RedoDoneMessage
+  | JournalListMessage
+  | JournalEntriesMessage
   | GenerateRequestMessage
   | GenerateDoneMessage
   | GenerateCancelMessage
@@ -569,10 +573,11 @@ export interface DomPatch {
 export interface ChangesetCommitMessage {
   type: 'changeset.commit';
   id?: string;
-  payload: ChangesetRef;
+  payload: CommitRequest;
 }
-export interface ChangesetRef {
+export interface CommitRequest {
   changesetId: string;
+  pageUrl?: string;
 }
 export interface CommitDoneMessage {
   type: 'commit.done';
@@ -588,6 +593,9 @@ export interface ChangesetDiscardMessage {
   type: 'changeset.discard';
   id?: string;
   payload: ChangesetRef;
+}
+export interface ChangesetRef {
+  changesetId: string;
 }
 export interface ChangesetDiscardedMessage {
   type: 'changeset.discarded';
@@ -610,6 +618,50 @@ export interface UndoDoneMessage {
 export interface UndoDone {
   journalId: string;
   undoOf: string;
+}
+export interface JournalRedoMessage {
+  type: 'journal.redo';
+  id?: string;
+  payload: JournalRef;
+}
+export interface RedoDoneMessage {
+  type: 'redo.done';
+  id?: string;
+  payload: RedoDone;
+}
+export interface RedoDone {
+  journalId: string;
+  redoOf: string;
+}
+export interface JournalListMessage {
+  type: 'journal.list';
+  id?: string;
+  payload: JournalList;
+}
+export interface JournalList {
+  pageUrl?: string;
+  before?: string;
+  limit?: number;
+}
+export interface JournalEntriesMessage {
+  type: 'journal.entries';
+  id?: string;
+  payload: JournalEntries;
+}
+export interface JournalEntries {
+  entries: HistoryEntry[];
+  more: boolean;
+}
+export interface HistoryEntry {
+  id: string;
+  atMs: number;
+  origin: string;
+  title: string;
+  files: string[];
+  state: 'applied' | 'undone';
+  src?: string;
+  pageUrl?: string;
+  prompt?: string;
 }
 export interface GenerateRequestMessage {
   type: 'generate.request';

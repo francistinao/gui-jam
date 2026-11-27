@@ -81,8 +81,13 @@ export function Popover({ label, anchor, at, onMove, children }: PopoverProps) {
   const grab = useRef<Grab | null>(null);
   const reset = useCallback(() => onMove(null), [onMove]);
   const screen = useSyncExternalStore(onResize, readViewport);
+  const [toolbar, setToolbar] = useState<Element | null>(null);
   const measure = useCallback((element: HTMLDivElement | null) => {
     if (!element) return;
+    const root = element.getRootNode();
+    if (root instanceof ShadowRoot || root instanceof Document) {
+      setToolbar(root.querySelector('[role="toolbar"]'));
+    }
     const observer = new ResizeObserver(() => setHeight(element.offsetHeight));
     observer.observe(element);
     return () => observer.disconnect();
@@ -90,7 +95,8 @@ export function Popover({ label, anchor, at, onMove, children }: PopoverProps) {
   const size = { width: POPOVER_WIDTH, height };
   const spot = held ?? at;
   const placed = spot ? placeHeldPanel(spot, size, screen) : null;
-  const placement = placed ?? placePopover(anchor, size, screen);
+  const avoid = toolbar?.getBoundingClientRect() ?? null;
+  const placement = placed ?? placePopover(anchor, size, screen, 12, avoid);
 
   const dropAt = (event: PointerEvent<HTMLElement>, started: Grab): PanelSpot => ({
     left: started.origin.left + event.clientX - started.from.x,
@@ -176,9 +182,11 @@ export function Popover({ label, anchor, at, onMove, children }: PopoverProps) {
 
 interface PopoverHeaderProps {
   tag: string | undefined;
-  badge: string;
+  badge?: string;
   number?: number;
-  selection: Selection;
+  selection?: Selection;
+  subtitle?: string;
+  onClose?: () => void;
   controller: Controller;
   children?: ReactNode;
 }
@@ -188,6 +196,8 @@ export function PopoverHeader({
   badge,
   number,
   selection,
+  subtitle,
+  onClose,
   controller,
   children,
 }: PopoverHeaderProps) {
@@ -229,12 +239,14 @@ export function PopoverHeader({
             </span>
           )}
           <span className="typography-body-medium font-[600]">{tag ?? '…'}</span>
-          <span className="typography-body-small rounded-sm bg-green-100 px-1 text-green-700">
-            {badge}
-          </span>
+          {badge ? (
+            <span className="typography-body-small rounded-sm bg-green-100 px-1 text-green-700">
+              {badge}
+            </span>
+          ) : null}
         </div>
         <code className="typography-body-small block truncate text-grey-500">
-          {`${selection.file}:${selection.line}`}
+          {subtitle ?? (selection ? `${selection.file}:${selection.line}` : '')}
         </code>
       </div>
       <div className="flex items-center gap-1">
@@ -255,7 +267,7 @@ export function PopoverHeader({
           variant="ghost"
           size="icon"
           aria-label="Close"
-          onClick={() => void controller.close()}
+          onClick={onClose ?? (() => void controller.close())}
         >
           <X aria-hidden="true" />
         </Button>

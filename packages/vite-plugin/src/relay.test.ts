@@ -149,6 +149,12 @@ describe('terminalLine', () => {
     expect(terminalLine({ type: 'undo.done', payload: { journalId: 'j2', undoOf: 'j1' } })).toBe(
       '↺ undid j1',
     );
+    expect(terminalLine({ type: 'redo.done', payload: { journalId: 'j3', redoOf: 'j1' } })).toBe(
+      '↻ redid j1',
+    );
+    expect(
+      terminalLine({ type: 'journal.entries', payload: { entries: [], more: false } }),
+    ).toBeUndefined();
     expect(
       terminalLine({ type: 'changeset.discarded', payload: { changesetId: 'c1' } }),
     ).toBeUndefined();

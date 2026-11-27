@@ -2,6 +2,7 @@ import { X } from 'lucide-react';
 import type { Controller, WidgetState } from './controller';
 import { FinetunePanel } from './FinetunePanel';
 import { Button } from './figui/button';
+import { HistoryPanel } from './HistoryPanel';
 import { JobBadges } from './JobBadges';
 import type { Rect } from './model';
 import { PasteBar } from './PasteBar';
@@ -69,7 +70,7 @@ export function App({ store, controller }: { store: Store<WidgetState>; controll
   const gone = useStore(store, (state) => state.selectionGone);
   return (
     <>
-      {tool === 'select' && hovered ? <Outline rect={hovered} /> : null}
+      {(tool === 'select' || tool === 'history') && hovered ? <Outline rect={hovered} /> : null}
       {anchor && !gone ? <Outline rect={anchor} dashed /> : null}
       {group.map((rect) => (
         <Outline key={`${rect.src}@${rect.left},${rect.top}`} rect={rect} dashed />
@@ -82,6 +83,7 @@ export function App({ store, controller }: { store: Store<WidgetState>; controll
       )}
       <JobBadges store={store} controller={controller} />
       <PasteBar store={store} controller={controller} />
+      {tool === 'history' ? <HistoryPanel store={store} controller={controller} /> : null}
       <Notice store={store} controller={controller} />
     </>
   );

@@ -635,6 +635,7 @@ dependencies = [
  "schemars",
  "serde",
  "serde_json",
+ "similar",
  "syn 3.0.10",
  "tempfile",
  "thiserror",

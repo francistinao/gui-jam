@@ -1,6 +1,6 @@
 import type { GuijamMessage } from '@guijam/contracts-ts';
 import type { Tool, Widget, WidgetHost, WidgetModule } from '@guijam/overlay/host';
-import { createElement, type IconNode, MousePointer, Pencil } from 'lucide';
+import { createElement, History, type IconNode, MousePointer, Pencil } from 'lucide';
 import { LOGO_DATA_URL } from './logo.js';
 import type { Shield } from './shield.js';
 import { followTopLayer } from './top-layer.js';
@@ -27,6 +27,7 @@ export interface ToolSpec {
 export const TOOLS: readonly ToolSpec[] = [
   { tool: 'select', label: 'Select object', keys: 'Alt+Shift+S', icon: MousePointer },
   { tool: 'draw', label: 'Draw', keys: 'Alt+Shift+D', icon: Pencil },
+  { tool: 'history', label: 'History', keys: 'Alt+Shift+H', icon: History },
 ];
 
 export const EXIT_HINT = 'Press Esc to exit';
@@ -38,6 +39,7 @@ export function tooltipFor(spec: ToolSpec, active: Tool | null): string {
 const SHORTCUTS: Readonly<Record<string, Tool | 'toolbar'>> = {
   KeyS: 'select',
   KeyD: 'draw',
+  KeyH: 'history',
   KeyM: 'toolbar',
 };
 
@@ -107,6 +109,7 @@ function timeoutFor(type: string): number {
 const PAGE_KEY = 'guijam:page';
 const JOBS_KEY = 'guijam:jobs';
 const STYLE_KEY = 'guijam:style';
+const HISTORY_KEY = 'guijam:history';
 const TICKET_PARAM = 'guijam-ticket';
 const PAGE_ID = /^[\w-]{1,100}$/;
 
@@ -133,7 +136,7 @@ function pageReloaded(): boolean {
 
 function hasSavedJobs(): boolean {
   try {
-    return Boolean(sessionStorage.getItem(JOBS_KEY) || sessionStorage.getItem(STYLE_KEY));
+    return [JOBS_KEY, STYLE_KEY, HISTORY_KEY].some((key) => Boolean(sessionStorage.getItem(key)));
   } catch {
     return false;
   }

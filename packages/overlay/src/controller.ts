@@ -4,6 +4,7 @@ import type {
   GenerateDone,
   GenerateProgress,
   GuijamMessage,
+  HistoryEntry,
   Route,
   Sketch,
   StyleGroup,
@@ -74,12 +75,15 @@ import {
   fileOfImage,
   type LinkedTicket,
   linkedTicket,
+  pageKey,
   pageUrl,
   promptFromTicket,
   type TicketLoading,
 } from './tracker';
 
 const PREVIEW_DEBOUNCE_MS = 120;
+const HISTORY_PAGE = 50;
+export const HISTORY_KEY = 'guijam:history';
 const UNDO_WINDOW_MS = 10_000;
 const NOTICE_MS = 4_000;
 const FOLLOW_MS = 2_000;
@@ -194,6 +198,7 @@ export interface WidgetState {
   ticketLoading: TicketLoading | null;
   copied: CopiedStyle | null;
   pasting: StyleGroup[] | null;
+  historyVersion: number;
 }
 
 export const initialState: WidgetState = {
@@ -219,6 +224,7 @@ export const initialState: WidgetState = {
   ticketLoading: null,
   copied: null,
   pasting: null,
+  historyVersion: 0,
 };
 
 export function rectOf(element: Element): Rect {
@@ -534,6 +540,10 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
       }
       styled.set(element, previous);
     }
+  }
+
+  function changedHistory(): void {
+    store.set({ historyVersion: store.get().historyVersion + 1 });
   }
 
   function refreshCurrent(selection: Selection): void {
@@ -1537,7 +1547,7 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
       store.set({ busy: true });
       const reply = await host.request({
         type: 'changeset.commit',
-        payload: { changesetId: variant.changesetId },
+        payload: { changesetId: variant.changesetId, pageUrl: pageKey(window.location) },
       });
       if (reply.type !== 'commit.done') {
         store.set({ busy: false });
@@ -1552,6 +1562,7 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
       const { target } = job;
       const own = changesIn(target.file, variant.changes);
       committed.set(reply.payload.journalId, own);
+      changedHistory();
       const { runId: stillRunning, status } = job.generation;
       if (status === 'running' && stillRunning) {
         runs.delete(stillRunning);
@@ -1692,7 +1703,7 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
       store.set({ busy: true });
       const reply = await host.request({
         type: 'changeset.commit',
-        payload: { changesetId: pending.changesetId },
+        payload: { changesetId: pending.changesetId, pageUrl: pageKey(window.location) },
       });
       store.set({ busy: false, draft: {}, preview: null });
       if (reply.type !== 'commit.done') {
@@ -1702,6 +1713,7 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
         return;
       }
       domPreview.keep();
+      changedHistory();
       const { ticket: linked } = ticketTarget();
       notify(
         withTicketNote(
@@ -1736,6 +1748,7 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
         return;
       }
       notify({ kind: 'info', message: 'Change undone.' });
+      changedHistory();
       const { selection, style } = store.get();
       if (!selection) return;
       if (style?.content?.some((part) => part.kind === 'found')) {
@@ -1772,6 +1785,77 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
       previousFocus = null;
       if (back) await focusJob(back.id);
       else clearPanel();
+    },
+
+    async listHistory(
+      pageUrl: string | null,
+      before: string | null,
+    ): Promise<{ entries: HistoryEntry[]; more: boolean } | { error: Notice }> {
+      const reply = await host.request({
+        type: 'journal.list',
+        payload: {
+          ...(pageUrl ? { pageUrl } : {}),
+          ...(before ? { before } : {}),
+          limit: HISTORY_PAGE,
+        },
+      });
+      return reply.type === 'journal.entries' ? reply.payload : { error: failure(reply) };
+    },
+
+    async redo(journalId: string): Promise<void> {
+      const reply = await host.request({ type: 'journal.redo', payload: { journalId } });
+      if (reply.type !== 'redo.done') {
+        notify(failure(reply), UNDO_WINDOW_MS);
+        return;
+      }
+      notify(
+        { kind: 'info', message: 'Change reapplied.', undoJournalId: reply.payload.redoOf },
+        UNDO_WINDOW_MS,
+      );
+      changedHistory();
+      const { selection } = store.get();
+      if (selection) await inspect(selection, true);
+    },
+
+    outline(src: string | null): void {
+      if (!src) {
+        store.set({ hovered: null });
+        return;
+      }
+      const [file, line] = src.split(':');
+      const element =
+        elementsAt(src)[0] ??
+        document.querySelector(`[${SRC_ATTRIBUTE}^="${CSS.escape(`${file}:${line}:`)}"]`);
+      store.set({ hovered: element ? rectOf(element) : null });
+    },
+
+    toolbarRect(): Rect {
+      const toolbar = host.shadowRoot.querySelector('[role="toolbar"]');
+      return toolbar
+        ? rectOf(toolbar)
+        : { left: window.innerWidth - 20, top: window.innerHeight - 20, width: 0, height: 0 };
+    },
+
+    closeHistory(): void {
+      store.set({ tool: null });
+      host.onToolChange(null);
+    },
+
+    openHistory(): void {
+      store.set({ tool: 'history' });
+      host.onToolChange('history');
+    },
+
+    async openHistoryPage(url: string): Promise<void> {
+      const target = new URL(url, window.location.href);
+      if (target.origin !== window.location.origin) return;
+      if (hasUnsaved()) await revert('Unsaved tweaks were reverted.');
+      try {
+        sessionStorage.setItem(HISTORY_KEY, '1');
+      } catch {
+        return;
+      }
+      window.location.assign(target.toString());
     },
 
     dismissNotice: () => notify(null),

@@ -69,6 +69,12 @@ export function pageUrl(location: Pick<Location, 'href'>): string {
   return url.toString();
 }
 
+export function pageKey(location: Pick<Location, 'href'>): string {
+  const url = new URL(pageUrl(location));
+  if (!url.hash.startsWith('#/')) url.hash = '';
+  return url.toString();
+}
+
 export function takeTicketParam(
   location: Pick<Location, 'href'>,
   history: Pick<History, 'replaceState' | 'state'>,

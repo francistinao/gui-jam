@@ -6,6 +6,7 @@ import {
   linkedTicket,
   loadingMessage,
   MAX_PROMPT,
+  pageKey,
   pageUrl,
   promptFromTicket,
   storedTicket,
@@ -97,5 +98,16 @@ describe('loading a ticket', () => {
     expect(at('prompt', 1)).toBe("Adding WEB-7's text and 1 image to your prompt…");
     expect(at('prompt', 0)).toBe("Adding WEB-7's text to your prompt…");
     expect(at('prompt', 0, false)).toBe('Linking WEB-7…');
+  });
+});
+
+describe('pageKey', () => {
+  it('names a page without the ticket parameter or an in-page anchor, but keeps hash routes', () => {
+    expect(pageKey({ href: 'http://localhost:5173/menu?guijam-ticket=WEB-7#rewards' })).toBe(
+      'http://localhost:5173/menu',
+    );
+    expect(pageKey({ href: 'http://localhost:5173/#/settings?tab=2' })).toBe(
+      'http://localhost:5173/#/settings?tab=2',
+    );
   });
 });

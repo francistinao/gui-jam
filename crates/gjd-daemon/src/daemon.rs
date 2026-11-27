@@ -15,11 +15,12 @@ use gjd_core::contracts::{
     DependencyNeeds, DomPatchTextItem, EditOp, EditOpValue, ElementInspect, ElementStyle,
     ErrorCode, ErrorPayload, FinetunePreview, FinetunePreviewed, FinetunePropsSource, GenerateDone,
     GenerateDoneDroppedItem, GenerateDoneNotesItem, GenerateRequest, GuijamMessage, HelloOk,
-    JsxValue, OverlayClear, OverlaySet, Package, Route, RouteTier, RunRef, SrcLoc, TextPlace,
-    UndoDone, UpdateResult, UpdateResultStatus, UpdateResultUpdateId, Variant,
-    VariantAssetsItemFormat, VariantPreview, VariantSelect, VariantSelected, VariantSet,
+    JournalEntries, JournalList, JsxValue, OverlayClear, OverlaySet, Package, RedoDone, Route,
+    RouteTier, RunRef, SrcLoc, TextPlace, UndoDone, UpdateResult, UpdateResultStatus,
+    UpdateResultUpdateId, Variant, VariantAssetsItemFormat, VariantPreview, VariantSelect,
+    VariantSelected, VariantSet,
 };
-use gjd_core::journal::{CommitError, FileChange, Journal};
+use gjd_core::journal::{CommitError, EntryMeta, FileChange, Journal};
 use gjd_core::jsx::{self, Component, JsxError, check_syntax, imports};
 use gjd_core::patch::{self, PatchError};
 use gjd_core::policy::{PolicyError, ProjectRoot};
@@ -40,6 +41,7 @@ use crate::config;
 use crate::diff::code_changes;
 use crate::found_text;
 use crate::generate::{self, Progress, Step, TierConfig};
+use crate::history;
 use crate::index::ProjectIndex;
 use crate::install;
 use crate::libraries::{self, Need};
@@ -67,6 +69,8 @@ const PLACES_COPY_WHY: &str = "places this copy";
 const SELECTED_WHY: &str = "selected too";
 const MAX_ALSO_SELECTED: usize = 4;
 const SUMMARY_TEXT_CHARS: usize = 40;
+const HISTORY_PAGE: usize = 50;
+const HISTORY_PAGE_MAX: usize = 100;
 
 type VersionCache = HashMap<(String, Option<u64>), (String, Instant)>;
 
@@ -193,6 +197,39 @@ impl From<CommitError> for Failure {
             CommitError::Policy(policy) => policy.into(),
             CommitError::UnknownEntry(_) => Self::new(ErrorCode::UnknownEntry, error.to_string()),
             CommitError::AlreadyUndone(_) => Self::new(ErrorCode::AlreadyUndone, error.to_string()),
+            CommitError::NotUndone(_) => {
+                Self::new(ErrorCode::InvalidRequest, "This change is already applied.")
+            }
+            CommitError::Overlap {
+                ref path,
+                ref lines,
+                ref blockers,
+            } => {
+                let at = lines.first().map_or_else(String::new, |(start, end)| {
+                    if start == end {
+                        format!("line {start}")
+                    } else {
+                        format!("lines {start}\u{2013}{end}")
+                    }
+                });
+                let action = if blockers.is_empty() {
+                    "Undo that edit in your editor, or keep this change.".to_owned()
+                } else {
+                    let names: Vec<String> =
+                        blockers.iter().map(|name| format!("'{name}'")).collect();
+                    format!("Undo {} first.", names.join(" and "))
+                };
+                Self::new(
+                    ErrorCode::Conflict,
+                    format!("{at} of {path} changed after this change."),
+                )
+                .with_action(action)
+            }
+            CommitError::Stale { ref path } => Self::new(
+                ErrorCode::Conflict,
+                format!("{path} changed since this change, which was made before History."),
+            )
+            .with_action("It can be undone only while the file is unchanged."),
             CommitError::Corrupt(_) | CommitError::Io(_) => {
                 Self::new(ErrorCode::Internal, error.to_string())
             }
@@ -1043,6 +1080,7 @@ struct Changeset {
     origin: &'static str,
     created: Vec<AssetFile>,
     needs: Vec<Need>,
+    meta: EntryMeta,
 }
 
 struct Run {
@@ -1437,12 +1475,15 @@ impl Daemon {
             ),
             GuijamMessage::ChangesetCommit { id, payload } => reply(
                 id,
-                self.commit(&payload.changeset_id)
-                    .await
-                    .map(|done| GuijamMessage::CommitDone {
-                        id: None,
-                        payload: done,
-                    }),
+                self.commit(
+                    &payload.changeset_id,
+                    payload.page_url.as_ref().map(|url| url.as_str()),
+                )
+                .await
+                .map(|done| GuijamMessage::CommitDone {
+                    id: None,
+                    payload: done,
+                }),
             ),
             GuijamMessage::ChangesetDiscard { id, payload } => reply(
                 id,
@@ -1453,15 +1494,9 @@ impl Daemon {
                     }
                 }),
             ),
-            GuijamMessage::JournalUndo { id, payload } => reply(
-                id,
-                self.undo(payload.journal_id)
-                    .await
-                    .map(|done| GuijamMessage::UndoDone {
-                        id: None,
-                        payload: done,
-                    }),
-            ),
+            message @ (GuijamMessage::JournalUndo { .. }
+            | GuijamMessage::JournalRedo { .. }
+            | GuijamMessage::JournalList { .. }) => self.handle_journal_request(message).await,
             GuijamMessage::GenerateRequest { id, payload } => reply(
                 id,
                 self.generate(payload)
@@ -1501,6 +1536,8 @@ impl Daemon {
             | GuijamMessage::CommitDone { id, .. }
             | GuijamMessage::ChangesetDiscarded { id, .. }
             | GuijamMessage::UndoDone { id, .. }
+            | GuijamMessage::RedoDone { id, .. }
+            | GuijamMessage::JournalEntries { id, .. }
             | GuijamMessage::TrackerStatusOk { id, .. }
             | GuijamMessage::TrackerTickets { id, .. }
             | GuijamMessage::TrackerTicketOk { id, .. }
@@ -1512,6 +1549,49 @@ impl Daemon {
                 "the daemon does not accept this message",
             )
             .into_message(id),
+        }
+    }
+
+    async fn handle_journal_request(&self, message: GuijamMessage) -> GuijamMessage {
+        match message {
+            GuijamMessage::JournalUndo { id, payload } => reply(
+                id,
+                self.flip(payload.journal_id, false)
+                    .await
+                    .map(|(journal_id, undo_of)| GuijamMessage::UndoDone {
+                        id: None,
+                        payload: UndoDone {
+                            journal_id,
+                            undo_of,
+                        },
+                    }),
+            ),
+            GuijamMessage::JournalRedo { id, payload } => reply(
+                id,
+                self.flip(payload.journal_id, true)
+                    .await
+                    .map(|(journal_id, redo_of)| GuijamMessage::RedoDone {
+                        id: None,
+                        payload: RedoDone {
+                            journal_id,
+                            redo_of,
+                        },
+                    }),
+            ),
+            GuijamMessage::JournalList { id, payload } => reply(
+                id,
+                self.history(&payload)
+                    .await
+                    .map(|entries| GuijamMessage::JournalEntries {
+                        id: None,
+                        payload: entries,
+                    }),
+            ),
+            other => Failure::new(
+                ErrorCode::InvalidRequest,
+                "the daemon does not accept this message",
+            )
+            .into_message(message_id(&other)),
         }
     }
 
@@ -1942,8 +2022,24 @@ impl Daemon {
             });
         let content = changed_content(&versions[&file]);
         let others = other_overlays(&file, &versions, previous);
-        let changeset_id =
-            self.store_changeset(Some(element), versions, summary, "finetune", Vec::new());
+        let meta = EntryMeta {
+            src: Some(format!("{file}:{}:{}", request.line, request.column)),
+            component: Some(history::component_name(
+                &file,
+                &source,
+                request.line,
+                request.column,
+            )),
+            detail: history::described(&request.props),
+            ..EntryMeta::default()
+        };
+        let changeset_id = self.store_changeset(
+            Some(element),
+            versions,
+            (summary, meta),
+            "finetune",
+            Vec::new(),
+        );
         let update = self
             .show_finetune(&file, content.as_deref(), others, page_reload)
             .await?;
@@ -3359,8 +3455,17 @@ impl Daemon {
                         (path, version)
                     })
                     .collect();
+                let meta = EntryMeta {
+                    src: Some(format!("{file}:{}:{}", request.line, request.column)),
+                    component: bases.get(file).map(|source| {
+                        history::component_name(file, source, request.line, request.column)
+                    }),
+                    detail: Some(variant.label.clone()),
+                    prompt: Some(request.prompt.to_string()),
+                    page_url: None,
+                };
                 let changeset_id =
-                    self.store_changeset(None, versions, summary, "ai", variant.assets);
+                    self.store_changeset(None, versions, (summary, meta), "ai", variant.assets);
                 if let Some(changeset) = locked(&self.changesets).get_mut(&changeset_id) {
                     changeset.needs.clone_from(&variant.needs);
                 }
@@ -3451,7 +3556,7 @@ impl Daemon {
         &self,
         element: Option<(String, NonZeroU64, NonZeroU64)>,
         files: BTreeMap<String, Version>,
-        summary: String,
+        (summary, meta): (String, EntryMeta),
         origin: &'static str,
         created: Vec<AssetFile>,
     ) -> String {
@@ -3472,17 +3577,19 @@ impl Daemon {
                 origin,
                 created,
                 needs: Vec::new(),
+                meta,
             },
         );
         id
     }
 
-    async fn commit(&self, changeset_id: &str) -> Result<CommitDone, Failure> {
+    async fn commit(&self, changeset_id: &str, page: Option<&str>) -> Result<CommitDone, Failure> {
         let mut slot = self.preview.lock().await;
         let settled = self.settle_variant_run(changeset_id);
-        let changeset = locked(&self.changesets)
+        let mut changeset = locked(&self.changesets)
             .remove(changeset_id)
             .ok_or_else(|| unknown_changeset(changeset_id))?;
+        changeset.meta.page_url = history::page_url(page);
         let files: Vec<String> = changeset
             .files
             .keys()
@@ -3588,11 +3695,13 @@ impl Daemon {
         let journal = Arc::clone(&self.journal);
         let summary = changeset.summary.clone();
         let origin = changeset.origin;
-        let journal_id =
-            tokio::task::spawn_blocking(move || journal.commit(&changes, origin, &summary))
-                .await
-                .map_err(|error| Failure::new(ErrorCode::Internal, error.to_string()))?
-                .map_err(Failure::from)?;
+        let meta = changeset.meta.clone();
+        let journal_id = tokio::task::spawn_blocking(move || {
+            journal.commit_with(&changes, origin, &summary, meta)
+        })
+        .await
+        .map_err(|error| Failure::new(ErrorCode::Internal, error.to_string()))?
+        .map_err(Failure::from)?;
         Ok((journal_id, snapshot))
     }
 
@@ -3608,31 +3717,46 @@ impl Daemon {
         Ok(())
     }
 
-    async fn undo(&self, journal_id: String) -> Result<UndoDone, Failure> {
+    async fn flip(&self, journal_id: String, redo: bool) -> Result<(String, String), Failure> {
         let write = self.write_lock.lock().await;
         let journal = Arc::clone(&self.journal);
         let target = journal_id.clone();
-        let (undo_id, paths) = tokio::task::spawn_blocking(move || {
-            let paths = journal.paths(&target)?;
-            Ok::<_, CommitError>((journal.undo(&target)?, paths))
-        })
-        .await
-        .map_err(|error| Failure::new(ErrorCode::Internal, error.to_string()))??;
+        let flipped = tokio::task::spawn_blocking(move || journal.flip(&target, redo))
+            .await
+            .map_err(|error| Failure::new(ErrorCode::Internal, error.to_string()))??;
         drop(write);
-        for path in &paths {
+        for path in &flipped.paths {
             self.refresh(path);
         }
-        if let Some((site, key)) = self.tracker.undone(&journal_id) {
-            let reverted = journal_id.clone();
+        if !redo && let Some((site, key)) = self.tracker.undone(&flipped.of) {
+            let reverted = flipped.of.clone();
             tokio::spawn(async move {
                 if let Err(error) = tracker::revert(site, key, reverted).await {
                     tracing::warn!(%error, "couldn't mark the ticket as reverted");
                 }
             });
         }
-        Ok(UndoDone {
-            journal_id: undo_id,
-            undo_of: journal_id,
+        Ok((flipped.id, flipped.of))
+    }
+
+    async fn history(&self, request: &JournalList) -> Result<JournalEntries, Failure> {
+        let _write = self.write_lock.lock().await;
+        let journal = Arc::clone(&self.journal);
+        let page = request.page_url.as_ref().map(|url| url.to_string());
+        let before = request.before.clone();
+        let limit = request
+            .limit
+            .and_then(|limit| usize::try_from(limit.get()).ok())
+            .unwrap_or(HISTORY_PAGE)
+            .min(HISTORY_PAGE_MAX);
+        let (rows, more) = tokio::task::spawn_blocking(move || {
+            journal.history(page.as_deref(), before.as_deref(), limit)
+        })
+        .await
+        .map_err(|error| Failure::new(ErrorCode::Internal, error.to_string()))??;
+        Ok(JournalEntries {
+            entries: rows.into_iter().map(history::entry).collect(),
+            more,
         })
     }
 
@@ -3761,6 +3885,10 @@ fn with_id(mut message: GuijamMessage, reply_to: Option<String>) -> GuijamMessag
         | GuijamMessage::ChangesetDiscarded { id, .. }
         | GuijamMessage::JournalUndo { id, .. }
         | GuijamMessage::UndoDone { id, .. }
+        | GuijamMessage::JournalRedo { id, .. }
+        | GuijamMessage::RedoDone { id, .. }
+        | GuijamMessage::JournalList { id, .. }
+        | GuijamMessage::JournalEntries { id, .. }
         | GuijamMessage::GenerateRequest { id, .. }
         | GuijamMessage::GenerateDone { id, .. }
         | GuijamMessage::GenerateCancel { id, .. }

@@ -28,6 +28,7 @@ import {
   formatElapsed,
   gapSlots,
   hexOfComputedColor,
+  intersects,
   invertChanges,
   isCopyShortcut,
   isPanelSpot,
@@ -58,6 +59,7 @@ import {
   type Rect,
   radiusOfToken,
   redoStroke,
+  relativeTime,
   type Size,
   type SketchOwner,
   type SketchState,
@@ -1691,5 +1693,32 @@ describe('gap slots in reversed flows', () => {
         { left: 0, top: 0, width: 40, height: 30 },
       ]),
     ).toEqual([{ axis: 'row', rect: { left: 0, top: 30, width: 40, height: 10 } }]);
+  });
+});
+
+describe('relativeTime', () => {
+  it('says how long ago a change was applied', () => {
+    const now = Date.UTC(2026, 10, 28, 12, 0, 0);
+    expect(relativeTime(now - 10_000, now)).toBe('just now');
+    expect(relativeTime(now - 5 * 60_000, now)).toBe('5 minutes ago');
+    expect(relativeTime(now - 3 * 3_600_000, now)).toBe('3 hours ago');
+    expect(relativeTime(now - 26 * 3_600_000, now)).toBe('yesterday');
+    expect(relativeTime(now - 30 * 86_400_000, now)).toBe('Oct 29');
+  });
+});
+
+describe('panels and the toolbar', () => {
+  it('opens a panel clear of the toolbar in the bottom-right corner', () => {
+    const screen = { width: 1280, height: 720 };
+    const toolbar = { left: 1108, top: 656, width: 152, height: 44 };
+    const panel = { width: 300, height: 460 };
+    const placement = placePopover(
+      { left: 728, top: 264, width: 112, height: 60 },
+      panel,
+      screen,
+      12,
+      toolbar,
+    );
+    expect(intersects({ left: placement.left, top: placement.top, ...panel }, toolbar)).toBe(false);
   });
 });

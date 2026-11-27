@@ -4,6 +4,7 @@ pub mod content;
 pub mod groups;
 pub mod journal;
 pub mod jsx;
+pub mod merge;
 pub mod patch;
 pub mod policy;
 pub mod srcloc;

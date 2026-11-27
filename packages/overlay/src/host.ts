@@ -1,6 +1,6 @@
 import type { GuijamMessage } from '@guijam/contracts-ts';
 
-export type Tool = 'select' | 'draw';
+export type Tool = 'select' | 'draw' | 'history';
 
 export interface WidgetHost {
   shadowRoot: ShadowRoot;

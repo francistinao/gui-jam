@@ -1,6 +1,6 @@
 import { createRoot } from 'react-dom/client';
 import { App } from './App';
-import { createController, initialState, type WidgetState } from './controller';
+import { createController, HISTORY_KEY, initialState, type WidgetState } from './controller';
 import { createDrawLayer } from './draw-layer';
 import type { Widget, WidgetHost } from './host';
 import {
@@ -44,6 +44,16 @@ function adoptStyles(shadowRoot: ShadowRoot): void {
   const sheet = new CSSStyleSheet();
   sheet.replaceSync(css.replace(PROPERTY_RULE, ''));
   shadowRoot.adoptedStyleSheets = [...shadowRoot.adoptedStyleSheets, sheet];
+}
+
+function takeHistoryFlag(): boolean {
+  try {
+    const flagged = sessionStorage.getItem(HISTORY_KEY) !== null;
+    sessionStorage.removeItem(HISTORY_KEY);
+    return flagged;
+  } catch {
+    return false;
+  }
 }
 
 function typing(event: Event): boolean {
@@ -201,6 +211,7 @@ export function mount(host: WidgetHost): Widget {
   createRoot(container).render(<App store={store} controller={controller} />);
   const style = loadStyle();
   if (style) controller.restoreStyle(style.copied, style.pasting);
+  if (takeHistoryFlag()) controller.openHistory();
   const restored = load();
   if (restored) void controller.restore(restored).then(repaint);
   const linked = takeTicketParam(window.location, window.history);

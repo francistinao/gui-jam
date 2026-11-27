@@ -289,6 +289,8 @@ test('a new selection opens beside its element, not where the last panel was mov
   const other = finetune(page, APP_FILE);
   await expect(other).toBeVisible();
   await expect(other).not.toHaveAttribute('data-moved');
+  await page.keyboard.press('Escape');
+  await expect(other).toHaveCount(0);
 
   await orderButton(page).click();
   await expect(panel).not.toHaveAttribute('data-moved');

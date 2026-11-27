@@ -44,6 +44,7 @@ Then start your dev server as usual, for example `npm run dev`. The GUIJam toolb
 | **Select** (sketch) | Click an element, then **Sketch what you want for this component**. Draw over it and describe the change: the sketch goes to the AI with your prompt, and the AI changes that component to match. |
 | **Draw** | Circle an element and describe the change. Pick one of three live variants and **Use** it. Up to three drawings can generate at once, each behind a numbered badge. |
 | **Draw** (sketch) | Sketch a card, a section or an icon where you want it. GUIJam works out the component and where it goes. |
+| **History** | Lists every change GUIJam applied in this project, newest first. **Undo** any one of them, even an older one in a file you changed since, and **Redo** it later. Changes made on other pages show under **All pages** and open their page. |
 | **Ask** | Ask a question about what you see, such as "what's the path of this image?" |
 
 Padding and gap handles snap to your spacing scale (`p-4`, `p-5`…). Hold `Shift` to move them by one pixel, or `Alt` to change the opposite side too. They also take the arrow keys.
@@ -89,6 +90,7 @@ The AI tool you pick is saved for your user in `~/.config/guijam/config.toml`, a
 | `Esc` | Closes the open panel, then leaves the active tool. The page doesn't see it while GUIJam uses it. |
 | `Alt+Shift+S` | Starts or leaves Select |
 | `Alt+Shift+D` | Starts or leaves Draw |
+| `Alt+Shift+H` | Opens or closes History |
 | `Alt+Shift+M` | Hides or shows the toolbar |
 | `Alt+Shift+C` | Copies the selected element's style so you can paste it onto other elements |
 
@@ -149,6 +151,7 @@ With Laravel's `@vite` directive, Inertia, or any server that renders the HTML i
 - **Inspiration and links.** Paste or drop images next to your prompt, or paste a link: GUIJam reads the page's text, colors and fonts, and takes a screenshot with your installed Chromium browser.
 - **3D and motion when asked.** Requests that need three.js, Motion or GSAP can use them, after you approve the install.
 - **Safe writes.** Edits are journaled with the exact previous bytes, conflicts with your own unsaved work are refused, and undo restores files exactly.
+- **Undo any change, in any order.** History undoes one change and keeps everything written after it, including your own edits elsewhere in the file. When a later change touched the same lines, it names that change instead of guessing.
 - **Your CLI, your login.** GUIJam runs the provider CLI headlessly with no write tools and never reads its credentials.
 
 ## Jira (optional)

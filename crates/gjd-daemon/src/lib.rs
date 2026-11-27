@@ -6,6 +6,7 @@ pub mod diff;
 pub mod found_text;
 pub mod gateway;
 pub mod generate;
+pub mod history;
 pub mod html_text;
 pub mod index;
 pub mod install;

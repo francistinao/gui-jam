@@ -209,7 +209,7 @@
           "description": "Set on requests; a reply repeats its request's id."
         },
         "payload": {
-          "$ref": "#/$defs/ChangesetRef"
+          "$ref": "#/$defs/CommitRequest"
         }
       }
     },
@@ -305,6 +305,82 @@
         },
         "payload": {
           "$ref": "#/$defs/UndoDone"
+        }
+      }
+    },
+    {
+      "title": "JournalRedoMessage",
+      "type": "object",
+      "required": ["type", "payload"],
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "journal.redo"
+        },
+        "id": {
+          "type": "string",
+          "description": "Set on requests; a reply repeats its request's id."
+        },
+        "payload": {
+          "$ref": "#/$defs/JournalRef"
+        }
+      }
+    },
+    {
+      "title": "RedoDoneMessage",
+      "type": "object",
+      "required": ["type", "payload"],
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "redo.done"
+        },
+        "id": {
+          "type": "string",
+          "description": "Set on requests; a reply repeats its request's id."
+        },
+        "payload": {
+          "$ref": "#/$defs/RedoDone"
+        }
+      }
+    },
+    {
+      "title": "JournalListMessage",
+      "type": "object",
+      "required": ["type", "payload"],
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "journal.list"
+        },
+        "id": {
+          "type": "string",
+          "description": "Set on requests; a reply repeats its request's id."
+        },
+        "payload": {
+          "$ref": "#/$defs/JournalList"
+        }
+      }
+    },
+    {
+      "title": "JournalEntriesMessage",
+      "type": "object",
+      "required": ["type", "payload"],
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "journal.entries"
+        },
+        "id": {
+          "type": "string",
+          "description": "Set on requests; a reply repeats its request's id."
+        },
+        "payload": {
+          "$ref": "#/$defs/JournalEntries"
         }
       }
     },
@@ -1030,6 +1106,67 @@
         "summary": {
           "type": "string"
         }
+      }
+    },
+    "CommitRequest": {
+      "description": "Write a previewed changeset. pageUrl is the page it was applied on, kept in the journal for History.",
+      "type": "object",
+      "required": ["changesetId"],
+      "additionalProperties": false,
+      "properties": {
+        "changesetId": { "type": "string" },
+        "pageUrl": { "type": "string", "maxLength": 2048 }
+      }
+    },
+    "RedoDone": {
+      "type": "object",
+      "required": ["journalId", "redoOf"],
+      "additionalProperties": false,
+      "properties": {
+        "journalId": { "type": "string" },
+        "redoOf": { "type": "string" }
+      }
+    },
+    "JournalList": {
+      "description": "List applied changes, newest first. pageUrl keeps only changes applied on that page; before is the id of the last entry already shown.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "pageUrl": { "type": "string", "maxLength": 2048 },
+        "before": { "type": "string" },
+        "limit": { "type": "integer", "minimum": 1, "maximum": 100 }
+      }
+    },
+    "JournalEntries": {
+      "type": "object",
+      "required": ["entries", "more"],
+      "additionalProperties": false,
+      "properties": {
+        "entries": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/HistoryEntry" }
+        },
+        "more": { "type": "boolean" }
+      }
+    },
+    "HistoryEntry": {
+      "description": "One change in History. title is 'Component · what changed'. src is the element's place in the file as it is now, when known.",
+      "type": "object",
+      "required": ["id", "atMs", "origin", "title", "files", "state"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string" },
+        "atMs": { "type": "integer", "minimum": 0 },
+        "origin": { "type": "string" },
+        "title": { "type": "string" },
+        "files": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "state": { "enum": ["applied", "undone"] },
+        "src": { "type": "string" },
+        "pageUrl": { "type": "string" },
+        "prompt": { "type": "string" }
       }
     },
     "JournalRef": {

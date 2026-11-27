@@ -206,7 +206,22 @@ export interface Placement {
   side: 'right' | 'left' | 'below' | 'above' | 'corner';
 }
 
-export function placePopover(anchor: Rect, popover: Size, viewport: Size, gap = 12): Placement {
+function clearOf(placement: Placement, popover: Size, avoid: Rect | null, gap: number): Placement {
+  if (!avoid || !intersects({ left: placement.left, top: placement.top, ...popover }, avoid)) {
+    return placement;
+  }
+  const above = avoid.top - gap - popover.height;
+  if (above >= gap) return { ...placement, top: above };
+  return { ...placement, left: Math.max(gap, avoid.left - gap - popover.width) };
+}
+
+export function placePopover(
+  anchor: Rect,
+  popover: Size,
+  viewport: Size,
+  gap = 12,
+  avoid: Rect | null = null,
+): Placement {
   const maxLeft = Math.max(gap, viewport.width - popover.width - gap);
   const maxTop = Math.max(gap, viewport.height - popover.height - gap);
   const clampLeft = (left: number) => Math.min(Math.max(left, gap), maxLeft);
@@ -218,7 +233,10 @@ export function placePopover(anchor: Rect, popover: Size, viewport: Size, gap = 
     placement.top >= gap &&
     placement.left <= maxLeft &&
     placement.top <= maxTop;
-  const free = (placement: Placement) => inside(placement) && cover(placement) === 0;
+  const free = (placement: Placement) =>
+    inside(placement) &&
+    cover(placement) === 0 &&
+    (!avoid || !intersects({ left: placement.left, top: placement.top, ...popover }, avoid));
   const onScreen = (placement: Placement): Placement => ({
     ...placement,
     left: clampLeft(placement.left),
@@ -253,7 +271,7 @@ export function placePopover(anchor: Rect, popover: Size, viewport: Size, gap = 
   if (found) return found;
   const below = onScreen(toBelow);
   const above = onScreen(toAbove);
-  return cover(above) < cover(below) ? above : below;
+  return clearOf(cover(above) < cover(below) ? above : below, popover, avoid, gap);
 }
 
 const BADGE_EDGE = 12;
@@ -1636,4 +1654,18 @@ export function isCopyShortcut(
   return (
     event.altKey && event.shiftKey && !event.metaKey && !event.ctrlKey && event.code === 'KeyC'
   );
+}
+
+const MINUTE_MS = 60_000;
+const HOUR_MS = 60 * MINUTE_MS;
+const DAY_MS = 24 * HOUR_MS;
+
+export function relativeTime(at: number, now: number): string {
+  const elapsed = now - at;
+  if (elapsed < 45_000) return 'just now';
+  const format = new Intl.RelativeTimeFormat('en', { numeric: 'auto' });
+  if (elapsed < HOUR_MS) return format.format(-Math.round(elapsed / MINUTE_MS), 'minute');
+  if (elapsed < DAY_MS) return format.format(-Math.round(elapsed / HOUR_MS), 'hour');
+  if (elapsed < 7 * DAY_MS) return format.format(-Math.round(elapsed / DAY_MS), 'day');
+  return new Date(at).toLocaleDateString('en', { month: 'short', day: 'numeric' });
 }

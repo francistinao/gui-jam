@@ -14,7 +14,7 @@ const TONE: Record<BadgeState, string> = {
 
 const URL_CHECK_MS = 500;
 
-function onUrlChange(notify: () => void): () => void {
+export function onUrlChange(notify: () => void): () => void {
   const timer = setInterval(notify, URL_CHECK_MS);
   window.addEventListener('popstate', notify);
   return () => {
