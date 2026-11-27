@@ -105,6 +105,8 @@ pub enum FigmaError {
     Network(String),
     #[error("Figma's answer couldn't be read")]
     Unreadable,
+    #[error("this frame is too large to read")]
+    TooLarge,
 }
 
 impl FigmaError {
@@ -122,6 +124,7 @@ impl FigmaError {
                 "Check that the link is current and the file is shared with your Figma account."
             }
             Self::Limited(_) => "Wait a little, or attach a screenshot of the frame instead.",
+            Self::TooLarge => "Link a smaller frame inside it, or attach a screenshot instead.",
             Self::Status(_) | Self::Network(_) | Self::Unreadable => {
                 "Try again, or attach a screenshot of the frame instead."
             }
@@ -322,6 +325,7 @@ fn get_json(api: &str, path: &str, token: &Token) -> Result<Value, FigmaError> {
                 .headers()
                 .get("retry-after")
                 .and_then(|value| value.to_str().ok())
+                .and_then(|value| value.trim().parse::<u64>().ok())
                 .map_or_else(String::new, |seconds| format!("; try again in {seconds} s"));
             return Err(FigmaError::Limited(after));
         }
@@ -331,9 +335,12 @@ fn get_json(api: &str, path: &str, token: &Token) -> Result<Value, FigmaError> {
     response
         .body_mut()
         .as_reader()
-        .take(NODES_BYTES)
+        .take(NODES_BYTES + 1)
         .read_to_end(&mut body)
         .map_err(|error| FigmaError::Network(error.to_string()))?;
+    if body.len() as u64 > NODES_BYTES {
+        return Err(FigmaError::TooLarge);
+    }
     serde_json::from_slice(&body).map_err(|_| FigmaError::Unreadable)
 }
 
@@ -456,11 +463,12 @@ struct Outline<'d> {
 
 impl Outline<'_> {
     fn push(&mut self, line: String) -> bool {
-        if self.lines.len() >= MAX_LINES || self.chars + line.len() > MAX_CHARS {
+        let cost = escape(&line).len() + 1;
+        if self.lines.len() >= MAX_LINES || self.chars + cost > MAX_CHARS {
             self.cut = true;
             return false;
         }
-        self.chars += line.len() + 1;
+        self.chars += cost;
         self.lines.push(line);
         true
     }
@@ -695,7 +703,7 @@ fn read_from(api: &str, target: &Target, token: &Token, images: bool) -> Result<
     let answer = get_json(
         api,
         &format!(
-            "/v1/files/{}/nodes?ids={}",
+            "/v1/files/{}/nodes?ids={}&depth={MAX_DEPTH}",
             target.file,
             urlencode(&target.node)
         ),
@@ -905,7 +913,10 @@ mod tests {
                         .starts_with("x-figma-token: figd_test");
                 }
                 log.lock().expect("log").push((path.clone(), token));
-                let (code, kind, body): (u16, &str, Vec<u8>) = if status != 200 {
+                let (code, kind, body): (u16, &str, Vec<u8>) = if status == 413 {
+                    let huge = usize::try_from(super::NODES_BYTES).expect("size") + 1;
+                    (200, "application/json", vec![b' '; huge])
+                } else if status != 200 {
                     (status, "application/json", b"{}".to_vec())
                 } else if path.starts_with("/v1/files/") {
                     (200, "application/json", NODES.as_bytes().to_vec())
@@ -953,7 +964,7 @@ mod tests {
         let seen = server.seen.lock().expect("seen").clone();
         assert_eq!(
             seen[0],
-            ("/v1/files/KEY/nodes?ids=12%3A34".to_owned(), true)
+            ("/v1/files/KEY/nodes?ids=12%3A34&depth=12".to_owned(), true)
         );
         assert!(
             seen[1]
@@ -970,6 +981,14 @@ mod tests {
                 .contains("Image 2 is a render of this frame.")
         );
         assert_eq!(rendered.images.len(), 1);
+    }
+
+    #[test]
+    fn a_frame_larger_than_the_read_limit_asks_for_a_smaller_frame() {
+        let token = Token::new("figd_test").expect("token");
+        let error = read_from(&fake(413).base, &frame_link(), &token, false).expect_err("large");
+        assert_eq!(error, FigmaError::TooLarge);
+        assert!(error.action().starts_with("Link a smaller frame"));
     }
 
     #[test]
