@@ -522,7 +522,8 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
   }
 
   function applyOptimistic(draft: Draft, selection: Selection): void {
-    const css = optimisticCss(draft, store.get().style);
+    const { style, current } = store.get();
+    const css = optimisticCss(draft, style, current);
     for (const element of elementsAt(selection.src)) {
       if (SERVER_RENDERED.test(selection.file)) domPreview.remember(element);
       const previous = styled.get(element) ?? new Map<string, string>();
@@ -1152,9 +1153,11 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
       store.get().pasting ? paste(element) : additive ? extend(element) : openFinetune(element),
 
     copyStyle(): boolean {
-      const { style, current, selection } = store.get();
+      const { style, current, selection, draft } = store.get();
       if (!style || !current || !selection) return false;
-      const values = copiedStyle(style, current);
+      const element = elementsAt(selection.src)[selection.instance ?? 0];
+      const { content: _, source: __, ...drafted } = draft;
+      const values = copiedStyle(style, element ? readCurrent(element) : current, drafted);
       const groups = copiedGroups(values);
       if (groups.length === 0) {
         notify({ kind: 'info', message: 'This element has no style to copy.' });

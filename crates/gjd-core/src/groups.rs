@@ -1,7 +1,7 @@
 use crate::codemod::{CodemodError, color_token, fill_style};
 use crate::contracts::{
-    EditOpValue, ElementStyle, FinetuneProps, GapValue, PaddingValue, ShadowValue, StrokeValue,
-    StrokeValueStyle, StyleGroup, StyleToken, TextValue,
+    EditOpValue, EffectsValue, ElementStyle, FinetuneProps, GapValue, PaddingValue, ShadowValue,
+    StrokeValue, StrokeValueStyle, StyleGroup, StyleToken, TextValue,
 };
 use crate::tailwind::{FONT_WEIGHTS, trimmed};
 use crate::theme::Theme;
@@ -106,39 +106,13 @@ pub fn class_change(
         stroke_classes(style, stroke, theme, &mut change)?;
     }
     if let Some(effects) = &props.effects {
-        change.replace(editable(
-            style,
-            StyleGroup::Effects,
-            &[
-                "shadow",
-                "shadow-color",
-                "inset-shadow",
-                "inset-shadow-color",
-            ],
-        ));
-        let drop = effects
-            .drop
-            .as_ref()
-            .map(|shadow| shadow_css(shadow, false, theme))
-            .transpose()?;
-        let inner = effects
-            .inner
-            .as_ref()
-            .map(|shadow| shadow_css(shadow, true, theme))
-            .transpose()?;
         if theme.legacy() {
-            let layers: Vec<String> = drop.into_iter().chain(inner).collect();
-            if !layers.is_empty() {
-                change
-                    .add
-                    .push(format!("shadow-[{}]", layers.join(",").replace(' ', "_")));
-            }
+            legacy_shadows(style, effects, theme, &mut change)?;
         } else {
-            if let Some(drop) = &effects.drop {
-                change.add.push(shadow_class(drop, false));
-            }
-            if let Some(inner) = &effects.inner {
-                change.add.push(shadow_class(inner, true));
+            for (shadow, inset) in [(&effects.drop, false), (&effects.inner, true)] {
+                if let Some(shadow) = shadow {
+                    shadow_classes(style, shadow, inset, theme, &mut change)?;
+                }
             }
         }
     }
@@ -282,6 +256,113 @@ fn stroke_classes(
     Ok(())
 }
 
+fn shadow_properties(inset: bool) -> (&'static str, &'static str) {
+    if inset {
+        ("inset-shadow", "inset-shadow-color")
+    } else {
+        ("shadow", "shadow-color")
+    }
+}
+
+fn shadow_classes(
+    style: &ElementStyle,
+    shadow: &ShadowValue,
+    inset: bool,
+    theme: &Theme,
+    change: &mut ClassChange,
+) -> Result<(), CodemodError> {
+    let (size, tint) = shadow_properties(inset);
+    match shadow {
+        ShadowValue::None => change.replace(editable(style, StyleGroup::Effects, &[size, tint])),
+        ShadowValue::Token { .. } => {
+            shadow_css(shadow, inset, theme)?;
+            change.replace(editable(style, StyleGroup::Effects, &[size]));
+            change.add.push(shadow_class(shadow, inset));
+        }
+        ShadowValue::Custom { .. } => {
+            shadow_css(shadow, inset, theme)?;
+            change.replace(editable(style, StyleGroup::Effects, &[size, tint]));
+            change.add.push(shadow_class(shadow, inset));
+        }
+    }
+    Ok(())
+}
+
+fn legacy_shadows(
+    style: &ElementStyle,
+    effects: &EffectsValue,
+    theme: &Theme,
+    change: &mut ClassChange,
+) -> Result<(), CodemodError> {
+    let existing: Vec<String> = editable(style, StyleGroup::Effects, &["shadow", "inset-shadow"])
+        .filter_map(|token| token.value.as_deref())
+        .flat_map(|value| shadow_layers(&value.replace('_', " ")))
+        .collect();
+    let layers = merged_layers(effects, &existing, theme)?;
+    change.replace(editable(
+        style,
+        StyleGroup::Effects,
+        &[
+            "shadow",
+            "shadow-color",
+            "inset-shadow",
+            "inset-shadow-color",
+        ],
+    ));
+    if !layers.is_empty() {
+        change
+            .add
+            .push(format!("shadow-[{}]", layers.join(",").replace(' ', "_")));
+    }
+    Ok(())
+}
+
+fn shadow_layers(css: &str) -> Vec<String> {
+    let mut layers = Vec::new();
+    let mut depth = 0i32;
+    let mut layer = String::new();
+    for ch in css.chars() {
+        match ch {
+            '(' => depth += 1,
+            ')' => depth -= 1,
+            _ => {}
+        }
+        if ch == ',' && depth == 0 {
+            layers.push(std::mem::take(&mut layer).trim().to_owned());
+        } else {
+            layer.push(ch);
+        }
+    }
+    layers.push(layer.trim().to_owned());
+    layers.retain(|layer| !layer.is_empty() && layer != "none");
+    layers
+}
+
+fn is_inset(layer: &str) -> bool {
+    css_words(layer).iter().any(|word| word == "inset")
+}
+
+fn merged_layers(
+    effects: &EffectsValue,
+    existing: &[String],
+    theme: &Theme,
+) -> Result<Vec<String>, CodemodError> {
+    let mut layers = Vec::new();
+    for (shadow, inset) in [(&effects.drop, false), (&effects.inner, true)] {
+        match shadow {
+            None => layers.extend(
+                existing
+                    .iter()
+                    .filter(|layer| is_inset(layer) == inset)
+                    .cloned(),
+            ),
+            Some(ShadowValue::None) => {}
+            Some(shadow) => layers.push(shadow_css(shadow, inset, theme)?),
+        }
+    }
+    Ok(layers)
+}
+
 fn shadow_class(shadow: &ShadowValue, inset: bool) -> String {
     let prefix = if inset { "inset-shadow" } else { "shadow" };
     match shadow {
@@ -290,6 +371,7 @@ fn shadow_class(shadow: &ShadowValue, inset: bool) -> String {
             "{prefix}-[{}]",
             custom_shadow(shadow).unwrap_or_default().replace(' ', "_")
         ),
+        ShadowValue::None => format!("{prefix}-none"),
     }
 }
 
@@ -332,6 +414,7 @@ fn hex_color(hex: &str, opacity: i64) -> String {
 
 fn shadow_css(shadow: &ShadowValue, inset: bool, theme: &Theme) -> Result<String, CodemodError> {
     match shadow {
+        ShadowValue::None => Ok("none".to_owned()),
         ShadowValue::Token { name } => {
             let value = theme
                 .shadow(name, inset)
@@ -526,11 +609,8 @@ pub fn style_changes(
         stroke_styles(style, stroke, theme, &mut changes)?;
     }
     if let Some(effects) = &props.effects {
-        let layers: Vec<String> = [(&effects.drop, false), (&effects.inner, true)]
-            .into_iter()
-            .filter_map(|(shadow, inset)| shadow.as_ref().map(|shadow| (shadow, inset)))
-            .map(|(shadow, inset)| shadow_css(shadow, inset, theme))
-            .collect::<Result<_, _>>()?;
+        let existing = inline_value(style, "box-shadow").unwrap_or_default();
+        let layers = merged_layers(effects, &shadow_layers(existing), theme)?;
         changes.push((
             "boxShadow",
             if layers.is_empty() {
@@ -1095,6 +1175,13 @@ mod tests {
         );
         assert_eq!(
             tw(class, serde_json::json!({ "effects": {} })),
+            (Vec::new(), Vec::new())
+        );
+        assert_eq!(
+            tw(
+                class,
+                serde_json::json!({ "effects": { "drop": { "kind": "none" } } })
+            ),
             (Vec::new(), list(&["shadow-sm", "shadow-black/20"]))
         );
         assert_eq!(
@@ -1104,6 +1191,47 @@ mod tests {
                 serde_json::json!({ "effects": { "drop": { "kind": "token", "name": "huge" } } })
             ),
             Err(CodemodError::UnknownShadow("huge".to_owned()))
+        );
+    }
+
+    #[test]
+    fn a_preset_keeps_the_tint_and_one_kind_never_touches_the_other() {
+        assert_eq!(
+            tw(
+                "shadow-md shadow-blue-500",
+                serde_json::json!({ "effects": { "drop": { "kind": "token", "name": "lg" } } })
+            ),
+            (list(&["shadow-lg"]), list(&["shadow-md"]))
+        );
+        assert_eq!(
+            tw(
+                "shadow-[0_4px_6px_-1px_var(--color-brand)] inset-shadow-xs",
+                serde_json::json!({ "effects": { "inner": { "kind": "token", "name": "sm" } } })
+            ),
+            (list(&["inset-shadow-sm"]), list(&["inset-shadow-xs"]))
+        );
+    }
+
+    #[test]
+    fn inline_shadows_keep_the_layers_of_the_kind_left_out() {
+        let source = "export const P = () => <p style={{ boxShadow: '0 2px 4px rgb(0 0 0 / 0.2), inset 0 1px 2px #fff', color: c }}>Hi</p>;";
+        assert_eq!(
+            written(
+                "src/P.tsx",
+                source,
+                true,
+                serde_json::json!({ "effects": { "inner": { "kind": "none" } } })
+            ),
+            "export const P = () => <p style={{ boxShadow: '0 2px 4px rgb(0 0 0 / 0.2)', color: c }}>Hi</p>;"
+        );
+        assert_eq!(
+            written(
+                "src/P.tsx",
+                source,
+                true,
+                serde_json::json!({ "effects": { "drop": { "kind": "none" }, "inner": { "kind": "none" } } })
+            ),
+            "export const P = () => <p style={{ color: c }}>Hi</p>;"
         );
     }
 
@@ -1219,6 +1347,14 @@ mod tests {
                 "inner": { "kind": "custom", "x": 0, "y": 1, "blur": 2, "spread": 0, "hex": "#FFFFFF", "opacity": 50 }
             } })),
             list(&["shadow-[0_2px_4px_0_#000000,inset_0_1px_2px_0_rgba(255,255,255,0.5)]"])
+        );
+        assert_eq!(
+            run(serde_json::json!({ "effects": {
+                "inner": { "kind": "custom", "x": 0, "y": 1, "blur": 2, "spread": 0, "hex": "#FFFFFF", "opacity": 100 }
+            } })),
+            list(&[
+                "shadow-[0_1px_3px_0_rgb(0_0_0_/_0.1),0_1px_2px_-1px_rgb(0_0_0_/_0.1),inset_0_1px_2px_0_#FFFFFF]"
+            ])
         );
     }
 

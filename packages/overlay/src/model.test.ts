@@ -131,7 +131,7 @@ describe('computed colours', () => {
   it('reads rgb and rgba into hex and percent opacity', () => {
     expect(hexOfComputedColor('rgb(190, 18, 60)')).toEqual({ hex: '#BE123C', opacity: 100 });
     expect(hexOfComputedColor('rgba(29, 78, 216, 0.5)')).toEqual({ hex: '#1D4ED8', opacity: 50 });
-    expect(hexOfComputedColor('oklch(0.5 0.1 20)')).toBeNull();
+    expect(hexOfComputedColor('hsl(0 100% 50%)')).toBeNull();
   });
 
   it('writes hex and opacity back as rgba', () => {
@@ -1474,7 +1474,22 @@ describe('optimisticCss', () => {
       'padding-top': '20px',
       'column-gap': '8px',
     });
-    expect(optimisticCss({ effects: {} }, tokens)).toEqual({ 'box-shadow': 'none' });
+    const shadowed = currentOf(
+      computed({
+        boxShadow: 'rgba(0, 0, 0, 0.1) 0px 4px 6px -1px, rgb(255, 255, 255) 0px 1px 2px 0px inset',
+      }),
+    );
+    expect(optimisticCss({ effects: {} }, tokens, shadowed)).toEqual({
+      'box-shadow': 'rgba(0, 0, 0, 0.1) 0px 4px 6px -1px, rgb(255, 255, 255) 0px 1px 2px 0px inset',
+    });
+    expect(optimisticCss({ effects: { inner: { kind: 'none' } } }, tokens, shadowed)).toEqual({
+      'box-shadow': 'rgba(0, 0, 0, 0.1) 0px 4px 6px -1px',
+    });
+    expect(
+      optimisticCss({ effects: { drop: { kind: 'token', name: 'sm' } } }, tokens, shadowed),
+    ).toEqual({
+      'box-shadow': '0 1px 3px 0 rgb(0 0 0 / 0.1), rgb(255, 255, 255) 0px 1px 2px 0px inset',
+    });
     expect(optimisticCss({ stroke: { kind: 'none' } }, tokens)).toEqual({ 'border-style': 'none' });
   });
 });
@@ -1593,14 +1608,26 @@ describe('copy style', () => {
     const target = style({ tag: 'p', adapter: 'inline', theme: brand.theme });
     expect(pastedDraft(values, gift, target)).toEqual({
       fill: { kind: 'token', name: 'brand' },
-      text: {
-        weight: 500,
-        align: 'center',
-        color: { kind: 'hex', hex: '#FFFFFF', opacity: 100 },
-      },
+      text: { color: { kind: 'hex', hex: '#FFFFFF', opacity: 100 } },
       layout: { padding: { top: 12, right: 24, bottom: 12, left: 24 } },
     });
     expect(pastedDraft(values, source, brand)).toEqual({});
+  });
+
+  it('copies the unsaved draft over what the element shows, and only typography it sets', () => {
+    const values = copiedStyle(brand, source, {
+      text: { size: 22 },
+      fill: { kind: 'hex', hex: '#1D4ED8', opacity: 100 },
+      layout: { padding: { top: 4 } },
+      stroke: { kind: 'none' },
+    });
+    expect(values.text).toEqual({
+      size: 22,
+      color: { kind: 'hex', hex: '#FFFFFF', opacity: 100 },
+    });
+    expect(values.fill).toEqual({ kind: 'hex', hex: '#1D4ED8', opacity: 100 });
+    expect(values.layout?.padding).toEqual({ top: 4, right: 24, bottom: 12, left: 24 });
+    expect(values.stroke).toBeUndefined();
   });
 
   it('leaves text out of elements that cannot hold it, and gap out of non-flex targets', () => {
@@ -1615,5 +1642,54 @@ describe('copy style', () => {
     expect(isCopyShortcut({ ...key, metaKey: true })).toBe(false);
     expect(isCopyShortcut({ ...key, shiftKey: false })).toBe(false);
     expect(isCopyShortcut({ ...key, code: 'KeyV' })).toBe(false);
+  });
+});
+
+describe('modern colors', () => {
+  it('reads oklch, oklab and srgb colors the way Chrome computes Tailwind 4 palettes', () => {
+    expect(hexOfComputedColor('oklch(0.628 0.2577 29.23)')).toEqual({
+      hex: '#FF0000',
+      opacity: 100,
+    });
+    expect(hexOfComputedColor('oklch(62.8% 0.2577 29.23 / 0.5)')).toEqual({
+      hex: '#FF0000',
+      opacity: 50,
+    });
+    expect(hexOfComputedColor('oklch(1 0 0)')).toEqual({ hex: '#FFFFFF', opacity: 100 });
+    expect(hexOfComputedColor('oklab(0.628 0.2249 0.1258)')).toEqual({
+      hex: '#FF0000',
+      opacity: 100,
+    });
+    expect(hexOfComputedColor('color(srgb 1 0 0 / 0.25)')).toEqual({ hex: '#FF0000', opacity: 25 });
+    expect(hexOfComputedColor('lab(50% 40 59)')).toBeNull();
+  });
+
+  it('never reads an unknown shadow color as solid black', () => {
+    expect(parseShadows('lab(50% 40 59) 0px 4px 6px -1px').drop).toBeNull();
+    expect(parseShadows('oklch(0.628 0.2577 29.23 / 0.4) 0px 4px 6px -1px inset').inner).toEqual({
+      x: 0,
+      y: 4,
+      blur: 6,
+      spread: -1,
+      hex: '#FF0000',
+      opacity: 40,
+    });
+  });
+});
+
+describe('gap slots in reversed flows', () => {
+  it('finds the column gap in a reversed row and the row gap in a reversed column', () => {
+    expect(
+      gapSlots([
+        { left: 100, top: 0, width: 40, height: 20 },
+        { left: 50, top: 0, width: 40, height: 20 },
+      ]),
+    ).toEqual([{ axis: 'column', rect: { left: 90, top: 0, width: 10, height: 20 } }]);
+    expect(
+      gapSlots([
+        { left: 0, top: 40, width: 40, height: 20 },
+        { left: 0, top: 0, width: 40, height: 30 },
+      ]),
+    ).toEqual([{ axis: 'row', rect: { left: 0, top: 30, width: 40, height: 10 } }]);
   });
 });

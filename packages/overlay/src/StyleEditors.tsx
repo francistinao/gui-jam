@@ -395,6 +395,7 @@ export function StrokeEditor({ style, draft, current, controller }: EditorProps)
 
 function customOf(shadow: ShadowValue, inset: boolean, style: ElementStyle): Shadow {
   if (shadow.kind === 'custom') return shadow;
+  if (shadow.kind === 'none') return DEFAULT_SHADOW;
   const value =
     style.theme.shadows.find((entry) => entry.name === shadow.name && entry.inset === inset)
       ?.value ?? '';
@@ -405,21 +406,26 @@ function customOf(shadow: ShadowValue, inset: boolean, style: ElementStyle): Sha
 function ShadowBlock({
   kind,
   style,
-  effects,
+  drafted,
+  base,
+  inCode,
   controller,
 }: {
   kind: 'drop' | 'inner';
   style: ElementStyle;
-  effects: EffectsValue;
+  drafted: EffectsValue | undefined;
+  base: ShadowValue | undefined;
+  inCode: boolean;
   controller: Controller;
 }) {
   const inset = kind === 'inner';
   const label = inset ? 'Inner shadow' : 'Drop shadow';
-  const shadow = effects[kind];
-  const set = (next: ShadowValue | undefined) => {
-    const { [kind]: _, ...rest } = effects;
-    controller.edit({ effects: next ? { ...rest, [kind]: next } : rest });
-  };
+  const wanted = drafted?.[kind];
+  const shadow =
+    wanted?.kind === 'none'
+      ? undefined
+      : (wanted ?? base ?? (inCode ? { kind: 'custom' as const, ...DEFAULT_SHADOW } : undefined));
+  const set = (next: ShadowValue) => controller.edit({ effects: { ...drafted, [kind]: next } });
   const presets = style.theme.shadows.filter((entry) => entry.inset === inset);
   if (!shadow) {
     return (
@@ -462,7 +468,7 @@ function ShadowBlock({
           variant="ghost"
           size="icon"
           aria-label={`Remove ${label.toLowerCase()}`}
-          onClick={() => set(undefined)}
+          onClick={() => set({ kind: 'none' })}
         >
           <Minus aria-hidden="true" />
         </Button>
@@ -504,11 +510,29 @@ function ShadowBlock({
 }
 
 export function EffectsEditor({ style, draft, current, controller }: EditorProps) {
-  const effects = draft.effects ?? effectsBase(style, current);
+  const base = effectsBase(style, current);
+  const coded = (property: string) =>
+    style.tokens.some(
+      (token) => token.group === 'effects' && token.property === property && token.editable,
+    );
   return (
     <div className="flex flex-col gap-3">
-      <ShadowBlock kind="drop" style={style} effects={effects} controller={controller} />
-      <ShadowBlock kind="inner" style={style} effects={effects} controller={controller} />
+      <ShadowBlock
+        kind="drop"
+        style={style}
+        drafted={draft.effects}
+        base={base.drop}
+        inCode={coded('shadow')}
+        controller={controller}
+      />
+      <ShadowBlock
+        kind="inner"
+        style={style}
+        drafted={draft.effects}
+        base={base.inner}
+        inCode={coded('inset-shadow')}
+        controller={controller}
+      />
     </div>
   );
 }

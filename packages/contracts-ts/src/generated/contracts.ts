@@ -15,7 +15,7 @@ export type ContentPart = TextPart | CodePart | FoundPart | ElementPart;
 export type FillValue = FillToken | FillHex | FillNone;
 export type RadiusValue = RadiusToken | RadiusPx | RadiusFull;
 export type StrokeValue = StrokeNone | StrokeSet;
-export type ShadowValue = ShadowToken | ShadowCustom;
+export type ShadowValue = ShadowNone | ShadowToken | ShadowCustom;
 export type GuijamMessage =
   | PluginHelloMessage
   | HelloOkMessage
@@ -422,6 +422,9 @@ export interface StrokeSet {
 export interface EffectsValue {
   drop?: ShadowValue;
   inner?: ShadowValue;
+}
+export interface ShadowNone {
+  kind: 'none';
 }
 export interface ShadowToken {
   kind: 'token';

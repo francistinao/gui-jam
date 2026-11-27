@@ -178,7 +178,7 @@
       ]
     },
     "EffectsValue": {
-      "description": "Box shadows. Replaces the element's drop and inner shadows; a kind that is left out means no shadow of that kind.",
+      "description": "Box shadows by kind. A kind that is left out stays as it is; none removes that kind.",
       "type": "object",
       "additionalProperties": false,
       "properties": {
@@ -188,6 +188,15 @@
     },
     "ShadowValue": {
       "oneOf": [
+        {
+          "title": "ShadowNone",
+          "type": "object",
+          "required": ["kind"],
+          "additionalProperties": false,
+          "properties": {
+            "kind": { "type": "string", "const": "none" }
+          }
+        },
         {
           "title": "ShadowToken",
           "type": "object",

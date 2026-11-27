@@ -204,10 +204,16 @@ const CLASS_CASES: &[(&str, &str, &str, &str)] = &[
         "rounded-lg shadow-md",
     ),
     (
-        "effects without inner removes the inner shadow",
+        "effects without inner keeps the inner shadow",
         "shadow-md inset-shadow-sm",
         r#"{"effects":{"drop":{"kind":"token","name":"lg"}}}"#,
-        "shadow-lg",
+        "shadow-lg inset-shadow-sm",
+    ),
+    (
+        "an inner shadow of none removes only the inner shadow",
+        "shadow-md inset-shadow-sm",
+        r#"{"effects":{"inner":{"kind":"none"}}}"#,
+        "shadow-md",
     ),
     (
         "opacity on the scale",

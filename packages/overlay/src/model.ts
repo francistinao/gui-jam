@@ -74,7 +74,62 @@ export interface HexColor {
   opacity: number;
 }
 
+function channelHex(value: number): string {
+  return Math.round(Math.min(1, Math.max(0, value)) * 255)
+    .toString(16)
+    .padStart(2, '0');
+}
+
+function gamma(linear: number): number {
+  return linear <= 0.0031308 ? 12.92 * linear : 1.055 * linear ** (1 / 2.4) - 0.055;
+}
+
+function oklabHex(l: number, a: number, b: number): string {
+  const long = (l + 0.3963377774 * a + 0.2158037573 * b) ** 3;
+  const medium = (l - 0.1055613458 * a - 0.0638541728 * b) ** 3;
+  const short = (l - 0.0894841775 * a - 1.291485548 * b) ** 3;
+  const red = 4.0767416621 * long - 3.3077115913 * medium + 0.2309699292 * short;
+  const green = -1.2684380046 * long + 2.6097574011 * medium - 0.3413193965 * short;
+  const blue = -0.0041960863 * long - 0.7034186147 * medium + 1.707614701 * short;
+  return `#${[red, green, blue]
+    .map((channel) => channelHex(gamma(channel)))
+    .join('')
+    .toUpperCase()}`;
+}
+
+function colorNumber(word: string, percentScale = 1): number {
+  return word.endsWith('%') ? (Number.parseFloat(word) / 100) * percentScale : Number(word);
+}
+
+function modernColor(css: string): HexColor | null {
+  const match = /^(oklch|oklab|color)\(([^)]+)\)$/.exec(css.trim());
+  if (!match?.[1] || !match[2]) return null;
+  const [values = '', alpha] = match[2].split('/');
+  const words = values.trim().split(/\s+/);
+  const opacity = alpha === undefined ? 100 : Math.round(colorNumber(alpha.trim()) * 100);
+  if (match[1] === 'color') {
+    const [space, r, g, b] = words;
+    if (space !== 'srgb' || r === undefined || g === undefined || b === undefined) return null;
+    const hex = [r, g, b].map((channel) => channelHex(colorNumber(channel))).join('');
+    return Number.isNaN(opacity) ? null : { hex: `#${hex.toUpperCase()}`, opacity };
+  }
+  const [first, second, third] = words.map((word) => (word === 'none' ? '0' : word));
+  if (first === undefined || second === undefined || third === undefined) return null;
+  const l = colorNumber(first);
+  const hex =
+    match[1] === 'oklab'
+      ? oklabHex(l, colorNumber(second, 0.4), colorNumber(third, 0.4))
+      : oklabHex(
+          l,
+          colorNumber(second, 0.4) * Math.cos((Number.parseFloat(third) * Math.PI) / 180),
+          colorNumber(second, 0.4) * Math.sin((Number.parseFloat(third) * Math.PI) / 180),
+        );
+  return hex.includes('NAN') || Number.isNaN(opacity) ? null : { hex, opacity };
+}
+
 export function hexOfComputedColor(css: string): HexColor | null {
+  const modern = modernColor(css);
+  if (modern) return modern;
   const match = /^rgba?\(([^)]+)\)$/.exec(css.trim());
   if (!match?.[1]) return null;
   const parts = match[1]
@@ -955,6 +1010,7 @@ export interface Current {
   align: TextAlign;
   border: { width: number; style: string; color: HexColor | null };
   shadows: { drop: Shadow | null; inner: Shadow | null };
+  shadowCss: string;
   opacity: number;
   padding: Record<Side, number>;
   gap: { row: number; column: number };
@@ -1024,10 +1080,8 @@ export function parseShadows(css: string): Current['shadows'] {
   for (const layer of topLevel(css, ',')) {
     const words = topLevel(layer, ' ');
     const inset = words.includes('inset');
-    const color = words.map(colorOf).find((found) => found !== null) ?? {
-      hex: '#000000',
-      opacity: 100,
-    };
+    const color = words.map(colorOf).find((found) => found !== null);
+    if (!color) continue;
     const lengths = words
       .filter((word) => /^-?[\d.]+(px)?$/.test(word))
       .map((word) => Number.parseFloat(word));
@@ -1072,6 +1126,7 @@ export function currentOf(computed: ComputedLike): Current {
       color: hexOfComputedColor(computed.borderTopColor),
     },
     shadows: parseShadows(computed.boxShadow),
+    shadowCss: computed.boxShadow,
     opacity: Math.round((pixels(computed.opacity) ?? 1) * 100),
     padding: {
       top: pixels(computed.paddingTop) ?? 0,
@@ -1109,6 +1164,7 @@ function radiusCss(radius: RadiusValue, style: ElementStyle | null): string | nu
 }
 
 export function shadowCss(shadow: ShadowValue, inset: boolean, style: ElementStyle | null): string {
+  if (shadow.kind === 'none') return 'none';
   if (shadow.kind === 'token') {
     return (
       style?.theme.shadows.find((entry) => entry.name === shadow.name && entry.inset === inset)
@@ -1120,7 +1176,21 @@ export function shadowCss(shadow: ShadowValue, inset: boolean, style: ElementSty
   return inset ? `inset ${css}` : css;
 }
 
-export function optimisticCss(draft: Draft, style: ElementStyle | null): Record<string, string> {
+export function shadowLayers(css: string): string[] {
+  return css === 'none' ? [] : topLevel(css, ',');
+}
+
+function keptLayers(current: Current | null, inset: boolean): string[] {
+  return shadowLayers(current?.shadowCss ?? '').filter(
+    (layer) => topLevel(layer, ' ').includes('inset') === inset,
+  );
+}
+
+export function optimisticCss(
+  draft: Draft,
+  style: ElementStyle | null,
+  current: Current | null = null,
+): Record<string, string> {
   const css: Record<string, string> = {};
   const put = (property: string, value: string | null) => {
     if (value !== null) css[property] = value;
@@ -1147,10 +1217,13 @@ export function optimisticCss(draft: Draft, style: ElementStyle | null): Record<
     if (stroke.color) put('border-color', fillCss(stroke.color, style));
   }
   if (effects) {
-    const layers = [
-      effects.drop ? shadowCss(effects.drop, false, style) : null,
-      effects.inner ? shadowCss(effects.inner, true, style) : null,
-    ].filter((layer): layer is string => layer !== null && layer !== 'none');
+    const layers = (['drop', 'inner'] as const).flatMap((kind) => {
+      const inset = kind === 'inner';
+      const shadow = effects[kind];
+      if (!shadow) return keptLayers(current, inset);
+      const css = shadowCss(shadow, inset, style);
+      return css === 'none' ? [] : [css];
+    });
     put('box-shadow', layers.length > 0 ? layers.join(', ') : 'none');
   }
   if (draft.opacity !== undefined) put('opacity', String(draft.opacity / 100));
@@ -1244,37 +1317,39 @@ export interface GapSlot {
   rect: Rect;
 }
 
+function between(first: Rect, second: Rect, axis: 'row' | 'column'): GapSlot | null {
+  if (axis === 'column') {
+    const top = Math.max(first.top, second.top);
+    const bottom = Math.min(first.top + first.height, second.top + second.height);
+    const gap = second.left - (first.left + first.width);
+    if (gap < -1 || bottom <= top) return null;
+    return {
+      axis,
+      rect: { left: first.left + first.width, top, width: Math.max(0, gap), height: bottom - top },
+    };
+  }
+  const gap = second.top - (first.top + first.height);
+  if (gap < -1) return null;
+  const left = Math.min(first.left, second.left);
+  const right = Math.max(first.left + first.width, second.left + second.width);
+  return {
+    axis,
+    rect: { left, top: first.top + first.height, width: right - left, height: Math.max(0, gap) },
+  };
+}
+
 export function gapSlots(children: readonly Rect[]): GapSlot[] {
   const slots: GapSlot[] = [];
   for (let index = 1; index < children.length; index += 1) {
     const before = children[index - 1];
     const after = children[index];
     if (!before || !after) continue;
-    const top = Math.max(before.top, after.top);
-    const bottom = Math.min(before.top + before.height, after.top + after.height);
-    if (after.left >= before.left + before.width - 1 && bottom > top) {
-      slots.push({
-        axis: 'column',
-        rect: {
-          left: before.left + before.width,
-          top,
-          width: after.left - (before.left + before.width),
-          height: bottom - top,
-        },
-      });
-    } else if (after.top >= before.top + before.height - 1) {
-      const start = Math.min(before.left, after.left);
-      const end = Math.max(before.left + before.width, after.left + after.width);
-      slots.push({
-        axis: 'row',
-        rect: {
-          left: start,
-          top: before.top + before.height,
-          width: end - start,
-          height: after.top - (before.top + before.height),
-        },
-      });
-    }
+    const slot =
+      between(before, after, 'column') ??
+      between(after, before, 'column') ??
+      between(before, after, 'row') ??
+      between(after, before, 'row');
+    if (slot) slots.push(slot);
   }
   return slots;
 }
@@ -1306,11 +1381,9 @@ export function effectsBase(style: ElementStyle, current: Current | null): Effec
   const fromDrop = shadowFrom(drop, false);
   const fromInner = shadowFrom(inner, true);
   if (fromDrop) base.drop = fromDrop;
-  else if (!drop && current?.shadows.drop) base.drop = { kind: 'custom', ...current.shadows.drop };
+  else if (current?.shadows.drop) base.drop = { kind: 'custom', ...current.shadows.drop };
   if (fromInner) base.inner = fromInner;
-  else if (!inner && current?.shadows.inner) {
-    base.inner = { kind: 'custom', ...current.shadows.inner };
-  }
+  else if (current?.shadows.inner) base.inner = { kind: 'custom', ...current.shadows.inner };
   return base;
 }
 
@@ -1335,7 +1408,44 @@ function hexFill(color: HexColor): FillValue {
   return { kind: 'hex', hex: color.hex, opacity: color.opacity };
 }
 
-export function copiedStyle(style: ElementStyle, current: Current): StyleDraft {
+function authored(style: ElementStyle, property: string): boolean {
+  return style.tokens.some(
+    (token) => token.group === 'text' && token.property === property && token.variants.length === 0,
+  );
+}
+
+function withDraft(values: StyleDraft, draft: StyleDraft): StyleDraft {
+  const merged: StyleDraft = { ...values };
+  if (draft.fill) merged.fill = draft.fill;
+  if (draft.radius) merged.radius = draft.radius;
+  if (draft.opacity !== undefined) merged.opacity = draft.opacity;
+  if (draft.text) merged.text = { ...values.text, ...draft.text };
+  if (draft.stroke?.kind === 'none') delete merged.stroke;
+  else if (draft.stroke) {
+    merged.stroke = {
+      ...(values.stroke?.kind === 'set' ? values.stroke : {}),
+      ...draft.stroke,
+      kind: 'set',
+    };
+  }
+  if (draft.effects) merged.effects = { ...values.effects, ...draft.effects };
+  if (draft.layout) {
+    merged.layout = {
+      ...values.layout,
+      ...(draft.layout.padding
+        ? { padding: { ...values.layout?.padding, ...draft.layout.padding } }
+        : {}),
+      ...(draft.layout.gap ? { gap: { ...values.layout?.gap, ...draft.layout.gap } } : {}),
+    };
+  }
+  return merged;
+}
+
+export function copiedStyle(
+  style: ElementStyle,
+  current: Current,
+  draft: StyleDraft = {},
+): StyleDraft {
   const values: StyleDraft = {};
   if (current.fill && current.fill.opacity > 0) {
     values.fill = themedColor(style, 'fill') ?? hexFill(current.fill);
@@ -1360,25 +1470,37 @@ export function copiedStyle(style: ElementStyle, current: Current): StyleDraft {
   }
   if (!TEXTLESS_TAGS.has(style.tag)) {
     const family = baseToken(style, 'text', 'family')?.themeToken;
-    values.text = {
+    const text: TextValue = {
       ...(family && style.theme.fonts.includes(family) ? { family } : {}),
-      ...(current.fontWeight === null ? {} : { weight: Math.round(current.fontWeight) }),
-      ...(current.fontSize === null ? {} : { size: current.fontSize }),
-      ...(current.lineHeight === null ? {} : { lineHeight: current.lineHeight }),
-      letterSpacing: current.letterSpacing,
-      align: current.align,
-      color: themedColor(style, 'text') ?? hexFill(current.color ?? BLACK),
+      ...(authored(style, 'weight') && current.fontWeight !== null
+        ? { weight: Math.round(current.fontWeight) }
+        : {}),
+      ...(authored(style, 'size') && current.fontSize !== null ? { size: current.fontSize } : {}),
+      ...(authored(style, 'line-height') && current.lineHeight !== null
+        ? { lineHeight: current.lineHeight }
+        : {}),
+      ...(authored(style, 'letter-spacing') ? { letterSpacing: current.letterSpacing } : {}),
+      ...(authored(style, 'align') ? { align: current.align } : {}),
+      ...(authored(style, 'color')
+        ? { color: themedColor(style, 'text') ?? hexFill(current.color ?? BLACK) }
+        : {}),
     };
+    if (Object.keys(text).length > 0) values.text = text;
   }
   const effects = effectsBase(style, current);
-  if (effects.drop || effects.inner) values.effects = effects;
+  if (effects.drop || effects.inner) {
+    values.effects = {
+      drop: effects.drop ?? { kind: 'none' },
+      inner: effects.inner ?? { kind: 'none' },
+    };
+  }
   if (current.opacity < 100) values.opacity = current.opacity;
   const padding = current.padding;
   if (SIDES.some((side) => padding[side] > 0)) values.layout = { padding: { ...padding } };
   if (current.flow && (current.gap.row > 0 || current.gap.column > 0)) {
     values.layout = { ...values.layout, gap: { ...current.gap } };
   }
-  return values;
+  return withDraft(values, draft);
 }
 
 function colorValue(fill: FillValue, style: ElementStyle): HexColor | null {
@@ -1403,7 +1525,7 @@ function shadowValueOf(
   inset: boolean,
   style: ElementStyle,
 ): Shadow | null {
-  if (!shadow) return null;
+  if (!shadow || shadow.kind === 'none') return null;
   if (shadow.kind === 'custom') return shadow;
   const value = style.theme.shadows.find(
     (entry) => entry.name === shadow.name && entry.inset === inset,
