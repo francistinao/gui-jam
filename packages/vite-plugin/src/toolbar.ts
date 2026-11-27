@@ -106,6 +106,7 @@ function timeoutFor(type: string): number {
 
 const PAGE_KEY = 'guijam:page';
 const JOBS_KEY = 'guijam:jobs';
+const STYLE_KEY = 'guijam:style';
 const TICKET_PARAM = 'guijam-ticket';
 const PAGE_ID = /^[\w-]{1,100}$/;
 
@@ -132,7 +133,7 @@ function pageReloaded(): boolean {
 
 function hasSavedJobs(): boolean {
   try {
-    return Boolean(sessionStorage.getItem(JOBS_KEY));
+    return Boolean(sessionStorage.getItem(JOBS_KEY) || sessionStorage.getItem(STYLE_KEY));
   } catch {
     return false;
   }

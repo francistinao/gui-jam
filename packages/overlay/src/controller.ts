@@ -6,6 +6,7 @@ import type {
   GuijamMessage,
   Route,
   Sketch,
+  StyleGroup,
   TextPlace,
   TicketRef,
   TicketSummary,
@@ -25,10 +26,13 @@ import type { WidgetHost } from './host';
 import {
   addStroke,
   appliedMessage,
+  type CopiedStyle,
   type Current,
   changesIn,
   classifyGesture,
   containerIndex,
+  copiedGroups,
+  copiedStyle,
   currentOf,
   type Draft,
   editedFiles,
@@ -44,6 +48,8 @@ import {
   optimisticCss,
   type PanelSpot,
   type Point,
+  pastedDraft,
+  pickedValues,
   placedCopy,
   type Rect,
   redoStroke,
@@ -186,6 +192,8 @@ export interface WidgetState {
   ticket: LinkedTicket | null;
   pendingTicket: string | null;
   ticketLoading: TicketLoading | null;
+  copied: CopiedStyle | null;
+  pasting: StyleGroup[] | null;
 }
 
 export const initialState: WidgetState = {
@@ -209,6 +217,8 @@ export const initialState: WidgetState = {
   ticket: null,
   pendingTicket: null,
   ticketLoading: null,
+  copied: null,
+  pasting: null,
 };
 
 export function rectOf(element: Element): Rect {
@@ -374,7 +384,7 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
   let previousFocus: string | null = null;
   const runs = new Map<string, string>();
   const committed = new Map<string, CodeChange[]>();
-  const styled = new Map<HTMLElement, Set<string>>();
+  const styled = new Map<HTMLElement, Map<string, string>>();
   const domPreview = new DomPreview<HTMLElement>();
 
   host.onEvent((message) => {
@@ -515,12 +525,13 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
     const css = optimisticCss(draft, store.get().style);
     for (const element of elementsAt(selection.src)) {
       if (SERVER_RENDERED.test(selection.file)) domPreview.remember(element);
-      const set = styled.get(element) ?? new Set<string>();
+      const previous = styled.get(element) ?? new Map<string, string>();
       for (const [property, value] of Object.entries(css)) {
+        if (!previous.has(property))
+          previous.set(property, element.style.getPropertyValue(property));
         element.style.setProperty(property, value);
-        set.add(property);
       }
-      styled.set(element, set);
+      styled.set(element, previous);
     }
   }
 
@@ -529,9 +540,14 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
     if (element) store.set({ current: readCurrent(element) });
   }
 
-  function clearOptimistic(): void {
-    for (const [element, properties] of styled) {
-      for (const property of properties) element.style.removeProperty(property);
+  function clearOptimistic(restore = true): void {
+    if (restore) {
+      for (const [element, previous] of styled) {
+        for (const [property, value] of previous) {
+          if (value) element.style.setProperty(property, value);
+          else element.style.removeProperty(property);
+        }
+      }
     }
     styled.clear();
   }
@@ -630,7 +646,7 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
       notify(failure(reply));
       return;
     }
-    clearOptimistic();
+    clearOptimistic(store.get().style?.adapter === 'tailwind');
     const { dom } = reply.payload;
     if (dom) {
       const all = elementsAt(dom.src);
@@ -1108,9 +1124,60 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
     await addJob(selection, anchor, [], null, [picked]);
   }
 
+  async function paste(element: Element): Promise<void> {
+    const { copied, pasting } = store.get();
+    if (!copied || !pasting) return;
+    await openFinetune(element);
+    const { style, current, selection } = store.get();
+    if (!style || !current || selection?.src !== selectionOf(element)?.src) return;
+    const draft = pastedDraft(pickedValues(copied.values, pasting), current, style);
+    if (Object.keys(draft).length === 0) {
+      notify({ kind: 'info', message: 'Already matches the copied style.' });
+      return;
+    }
+    setDraft(draft);
+  }
+
   const controllerApi = {
     select: (element: Element, additive = false) =>
-      additive ? extend(element) : openFinetune(element),
+      store.get().pasting ? paste(element) : additive ? extend(element) : openFinetune(element),
+
+    copyStyle(): boolean {
+      const { style, current, selection } = store.get();
+      if (!style || !current || !selection) return false;
+      const values = copiedStyle(style, current);
+      const groups = copiedGroups(values);
+      if (groups.length === 0) {
+        notify({ kind: 'info', message: 'This element has no style to copy.' });
+        return true;
+      }
+      store.set({
+        copied: { tag: style.tag, file: selection.file, values },
+        pasting: groups,
+        tool: 'select',
+      });
+      host.onToolChange('select');
+      return true;
+    },
+
+    toggleCopied(group: StyleGroup): void {
+      const { pasting } = store.get();
+      if (!pasting) return;
+      store.set({
+        pasting: pasting.includes(group)
+          ? pasting.filter((entry) => entry !== group)
+          : [...pasting, group],
+      });
+    },
+
+    stopPasting(): void {
+      store.set({ copied: null, pasting: null });
+    },
+
+    restoreStyle(copied: CopiedStyle, pasting: StyleGroup[]): void {
+      store.set({ copied, pasting, tool: 'select' });
+      host.onToolChange('select');
+    },
 
     async loadTracker(): Promise<void> {
       const reply = await host.request({ type: 'tracker.status', payload: {} });

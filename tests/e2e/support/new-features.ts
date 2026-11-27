@@ -459,6 +459,33 @@ export async function dragPadding(page: Page, component: Component): Promise<voi
   await expect.poll(() => readFile(component.path, 'utf8')).toBe(before);
 }
 
+const BRAND_RGB = 'rgb(190, 18, 60)';
+
+export async function pasteStyle(page: Page, source: Component, target: Component): Promise<void> {
+  const before = await readFile(target.path, 'utf8');
+  await source.element.click();
+  await finetunePanel(page, source).getByRole('button', { name: 'Copy style' }).click();
+  const bar = page.getByRole('region', { name: 'Paste style' });
+  await expect(bar).toBeVisible();
+
+  await target.element.click();
+
+  await expect(target.element).toHaveCSS('background-color', BRAND_RGB, { timeout: READY_MS });
+  await expect(target.element).toHaveCSS('padding-left', '24px');
+  expect(await readFile(target.path, 'utf8')).toBe(before);
+  await finetunePanel(page, target).getByRole('button', { name: 'Apply' }).click();
+
+  const toast = applied(page, target);
+  await expect(toast).toBeVisible();
+  const written = await readFile(target.path, 'utf8');
+  expect(written).toContain('var(--color-brand, #BE123C)');
+  expect(written).toContain('12px 24px');
+  await toast.getByRole('button', { name: 'Undo' }).click();
+  await expect.poll(() => readFile(target.path, 'utf8')).toBe(before);
+  await bar.getByRole('button', { name: 'Stop' }).click();
+  await expect(bar).toHaveCount(0);
+}
+
 export interface FoundText extends Component {
   caption: string;
 }

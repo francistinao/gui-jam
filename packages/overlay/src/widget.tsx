@@ -3,8 +3,15 @@ import { App } from './App';
 import { createController, initialState, type WidgetState } from './controller';
 import { createDrawLayer } from './draw-layer';
 import type { Widget, WidgetHost } from './host';
-import { activeLayers, closesOnEscape, type Layers, sketchingOver, strokeShortcut } from './model';
-import { load, save } from './persist';
+import {
+  activeLayers,
+  closesOnEscape,
+  isCopyShortcut,
+  type Layers,
+  sketchingOver,
+  strokeShortcut,
+} from './model';
+import { load, loadStyle, save, saveStyle } from './persist';
 import { createSelectLayer } from './select-layer';
 import { createStore } from './store';
 import css from './styles.css?inline';
@@ -116,7 +123,11 @@ export function mount(host: WidgetHost): Widget {
   }
 
   function leaveOnEscape(): boolean {
-    const { selection, tool } = store.get();
+    const { selection, tool, pasting } = store.get();
+    if (pasting) {
+      controller.stopPasting();
+      return true;
+    }
     if (selection) {
       void controller.close();
       return true;
@@ -151,6 +162,10 @@ export function mount(host: WidgetHost): Widget {
   }
 
   document.addEventListener('keydown', (event) => {
+    if (isCopyShortcut(event) && !typing(event)) {
+      if (controller.copyStyle()) event.preventDefault();
+      return;
+    }
     const shortcut = strokeShortcut(event);
     if (shortcut) {
       if (typing(event)) return;
@@ -175,7 +190,17 @@ export function mount(host: WidgetHost): Widget {
     save(jobs, focus);
   });
 
+  let copied = { copied: store.get().copied, pasting: store.get().pasting };
+  store.subscribe(() => {
+    const { copied: style, pasting } = store.get();
+    if (style === copied.copied && pasting === copied.pasting) return;
+    copied = { copied: style, pasting };
+    saveStyle(style && pasting ? { copied: style, pasting } : null);
+  });
+
   createRoot(container).render(<App store={store} controller={controller} />);
+  const style = loadStyle();
+  if (style) controller.restoreStyle(style.copied, style.pasting);
   const restored = load();
   if (restored) void controller.restore(restored).then(repaint);
   const linked = takeTicketParam(window.location, window.history);

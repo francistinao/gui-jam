@@ -1,13 +1,18 @@
 import type {
+  EffectsValue,
   ElementStyle,
   FillValue,
   FinetuneProps,
+  GapValue,
   GenerateDone,
+  PaddingValue,
   RadiusValue,
   ShadowValue,
+  StrokeValue,
   StyleGroup,
   StyleToken,
   TextPlace,
+  TextValue,
 } from '@guijam/contracts-ts';
 import type { Tool } from './host';
 
@@ -21,9 +26,19 @@ export interface Range {
 export const RADIUS_RANGE: Range = { min: 0, max: 999 };
 export const OPACITY_RANGE: Range = { min: 0, max: 100 };
 
+export const GROUP_LABELS: Record<StyleGroup, string> = {
+  layout: 'Layout',
+  radius: 'Radius',
+  fill: 'Fill',
+  stroke: 'Stroke',
+  text: 'Text',
+  effects: 'Effects',
+  opacity: 'Opacity',
+};
+
 const ALWAYS_OPEN: ReadonlySet<StyleGroup> = new Set<StyleGroup>(['layout', 'text', 'opacity']);
 
-const SECTION_ORDER: readonly StyleGroup[] = [
+export const SECTION_ORDER: readonly StyleGroup[] = [
   'layout',
   'radius',
   'fill',
@@ -1262,4 +1277,241 @@ export function gapSlots(children: readonly Rect[]): GapSlot[] {
     }
   }
   return slots;
+}
+
+function shadowFrom(token: StyleToken | undefined, inset: boolean): ShadowValue | undefined {
+  if (!token) return undefined;
+  if (token.themeToken && token.themeToken !== 'none') {
+    return { kind: 'token', name: token.themeToken };
+  }
+  const parsed = parseShadows(`${inset ? 'inset ' : ''}${token.value ?? ''}`);
+  const shadow = inset ? parsed.inner : parsed.drop;
+  return shadow ? { kind: 'custom', ...shadow } : undefined;
+}
+
+function baseToken(
+  style: ElementStyle,
+  group: StyleGroup,
+  property: string,
+): StyleToken | undefined {
+  return style.tokens.find(
+    (token) => token.group === group && token.property === property && token.editable,
+  );
+}
+
+export function effectsBase(style: ElementStyle, current: Current | null): EffectsValue {
+  const drop = baseToken(style, 'effects', 'shadow');
+  const inner = baseToken(style, 'effects', 'inset-shadow');
+  const base: EffectsValue = {};
+  const fromDrop = shadowFrom(drop, false);
+  const fromInner = shadowFrom(inner, true);
+  if (fromDrop) base.drop = fromDrop;
+  else if (!drop && current?.shadows.drop) base.drop = { kind: 'custom', ...current.shadows.drop };
+  if (fromInner) base.inner = fromInner;
+  else if (!inner && current?.shadows.inner) {
+    base.inner = { kind: 'custom', ...current.shadows.inner };
+  }
+  return base;
+}
+
+export interface CopiedStyle {
+  tag: string;
+  file: string;
+  values: StyleDraft;
+}
+
+const PASTED_STROKES = ['solid', 'dashed', 'dotted'] as const;
+const FULL_RADIUS_PX = 999;
+const BLACK: HexColor = { hex: '#000000', opacity: 100 };
+
+function themedColor(style: ElementStyle, group: StyleGroup): FillValue | null {
+  const name = baseToken(style, group, 'color')?.themeToken;
+  return name && style.theme.colors.some((color) => color.name === name)
+    ? { kind: 'token', name }
+    : null;
+}
+
+function hexFill(color: HexColor): FillValue {
+  return { kind: 'hex', hex: color.hex, opacity: color.opacity };
+}
+
+export function copiedStyle(style: ElementStyle, current: Current): StyleDraft {
+  const values: StyleDraft = {};
+  if (current.fill && current.fill.opacity > 0) {
+    values.fill = themedColor(style, 'fill') ?? hexFill(current.fill);
+  }
+  if (current.radiusPx !== null && current.radiusPx > 0) {
+    const name = baseToken(style, 'radius', 'radius')?.themeToken;
+    values.radius =
+      name === 'full' || current.radiusPx >= FULL_RADIUS_PX
+        ? { kind: 'full' }
+        : name && style.theme.radii.some((radius) => radius.name === name)
+          ? { kind: 'token', name }
+          : { kind: 'px', px: Math.round(current.radiusPx) };
+  }
+  if (current.border.width > 0 && current.border.style !== 'none') {
+    const line = PASTED_STROKES.find((value) => value === current.border.style) ?? 'solid';
+    values.stroke = {
+      kind: 'set',
+      width: Math.round(current.border.width),
+      style: line,
+      color: themedColor(style, 'stroke') ?? hexFill(current.border.color ?? BLACK),
+    };
+  }
+  if (!TEXTLESS_TAGS.has(style.tag)) {
+    const family = baseToken(style, 'text', 'family')?.themeToken;
+    values.text = {
+      ...(family && style.theme.fonts.includes(family) ? { family } : {}),
+      ...(current.fontWeight === null ? {} : { weight: Math.round(current.fontWeight) }),
+      ...(current.fontSize === null ? {} : { size: current.fontSize }),
+      ...(current.lineHeight === null ? {} : { lineHeight: current.lineHeight }),
+      letterSpacing: current.letterSpacing,
+      align: current.align,
+      color: themedColor(style, 'text') ?? hexFill(current.color ?? BLACK),
+    };
+  }
+  const effects = effectsBase(style, current);
+  if (effects.drop || effects.inner) values.effects = effects;
+  if (current.opacity < 100) values.opacity = current.opacity;
+  const padding = current.padding;
+  if (SIDES.some((side) => padding[side] > 0)) values.layout = { padding: { ...padding } };
+  if (current.flow && (current.gap.row > 0 || current.gap.column > 0)) {
+    values.layout = { ...values.layout, gap: { ...current.gap } };
+  }
+  return values;
+}
+
+function colorValue(fill: FillValue, style: ElementStyle): HexColor | null {
+  if (fill.kind === 'none') return null;
+  if (fill.kind === 'hex') return { hex: fill.hex.toUpperCase(), opacity: fill.opacity };
+  const hex = parseHex(style.theme.colors.find((color) => color.name === fill.name)?.value ?? '');
+  return hex ? { hex, opacity: 100 } : null;
+}
+
+function sameColor(fill: FillValue, current: HexColor | null, style: ElementStyle): boolean {
+  const wanted = colorValue(fill, style);
+  if (!wanted || !current) return wanted === null && (current === null || current.opacity === 0);
+  return wanted.hex === current.hex && wanted.opacity === current.opacity;
+}
+
+function near(a: number | null | undefined, b: number | null | undefined, within = 0.01): boolean {
+  return a !== null && a !== undefined && b !== null && b !== undefined && Math.abs(a - b) < within;
+}
+
+function shadowValueOf(
+  shadow: ShadowValue | undefined,
+  inset: boolean,
+  style: ElementStyle,
+): Shadow | null {
+  if (!shadow) return null;
+  if (shadow.kind === 'custom') return shadow;
+  const value = style.theme.shadows.find(
+    (entry) => entry.name === shadow.name && entry.inset === inset,
+  )?.value;
+  const parsed = parseShadows(value ?? '');
+  return inset ? parsed.inner : parsed.drop;
+}
+
+function sameShadow(a: Shadow | null, b: Shadow | null): boolean {
+  if (!a || !b) return a === b;
+  return (
+    near(a.x, b.x) &&
+    near(a.y, b.y) &&
+    near(a.blur, b.blur) &&
+    near(a.spread, b.spread) &&
+    a.hex.toUpperCase() === b.hex.toUpperCase() &&
+    a.opacity === b.opacity
+  );
+}
+
+function radiusPxOf(radius: RadiusValue, style: ElementStyle): number | null {
+  if (radius.kind === 'full') return FULL_RADIUS_PX;
+  if (radius.kind === 'px') return radius.px;
+  return style.theme.radii.find((entry) => entry.name === radius.name)?.px ?? null;
+}
+
+export function pastedDraft(values: StyleDraft, target: Current, style: ElementStyle): StyleDraft {
+  const draft: StyleDraft = {};
+  if (values.fill && !sameColor(values.fill, target.fill, style)) draft.fill = values.fill;
+  if (values.radius) {
+    const wanted = radiusPxOf(values.radius, style);
+    const full = wanted === FULL_RADIUS_PX && (target.radiusPx ?? 0) >= FULL_RADIUS_PX;
+    if (!full && !near(wanted, target.radiusPx)) draft.radius = values.radius;
+  }
+  if (values.stroke?.kind === 'set') {
+    const { width, style: line, color } = values.stroke;
+    const bare = target.border.style === 'none' || target.border.width === 0;
+    const stroke: StrokeValue = { kind: 'set' };
+    if (width !== undefined && (bare || !near(width, target.border.width))) stroke.width = width;
+    if (line && (bare || line !== target.border.style)) stroke.style = line;
+    if (color && (bare || !sameColor(color, target.border.color, style))) stroke.color = color;
+    if (Object.keys(stroke).length > 1) draft.stroke = stroke;
+  }
+  if (values.text && !TEXTLESS_TAGS.has(style.tag)) {
+    const wanted = values.text;
+    const family = baseToken(style, 'text', 'family')?.themeToken;
+    const text: TextValue = {};
+    if (wanted.family && wanted.family !== family) text.family = wanted.family;
+    if (wanted.weight !== undefined && !near(wanted.weight, target.fontWeight)) {
+      text.weight = wanted.weight;
+    }
+    if (wanted.size !== undefined && !near(wanted.size, target.fontSize)) text.size = wanted.size;
+    if (wanted.lineHeight !== undefined && !near(wanted.lineHeight, target.lineHeight)) {
+      text.lineHeight = wanted.lineHeight;
+    }
+    if (
+      wanted.letterSpacing !== undefined &&
+      !near(wanted.letterSpacing, target.letterSpacing, 0.001)
+    ) {
+      text.letterSpacing = wanted.letterSpacing;
+    }
+    if (wanted.align && wanted.align !== target.align) text.align = wanted.align;
+    if (wanted.color && !sameColor(wanted.color, target.color, style)) text.color = wanted.color;
+    if (Object.keys(text).length > 0) draft.text = text;
+  }
+  if (values.effects) {
+    const same =
+      sameShadow(shadowValueOf(values.effects.drop, false, style), target.shadows.drop) &&
+      sameShadow(shadowValueOf(values.effects.inner, true, style), target.shadows.inner);
+    if (!same) draft.effects = values.effects;
+  }
+  if (values.opacity !== undefined && values.opacity !== target.opacity) {
+    draft.opacity = values.opacity;
+  }
+  const padding: PaddingValue = {};
+  for (const side of SIDES) {
+    const wanted = values.layout?.padding?.[side];
+    if (wanted !== undefined && !near(wanted, target.padding[side])) padding[side] = wanted;
+  }
+  const gap: GapValue = {};
+  if (target.flow) {
+    for (const axis of ['row', 'column'] as const) {
+      const wanted = values.layout?.gap?.[axis];
+      if (wanted !== undefined && !near(wanted, target.gap[axis])) gap[axis] = wanted;
+    }
+  }
+  const hasPadding = Object.keys(padding).length > 0;
+  const hasGap = Object.keys(gap).length > 0;
+  if (hasPadding || hasGap) {
+    draft.layout = { ...(hasPadding ? { padding } : {}), ...(hasGap ? { gap } : {}) };
+  }
+  return draft;
+}
+
+export function copiedGroups(values: StyleDraft): StyleGroup[] {
+  return SECTION_ORDER.filter((group) => values[group as keyof StyleDraft] !== undefined);
+}
+
+export function pickedValues(values: StyleDraft, groups: readonly StyleGroup[]): StyleDraft {
+  return Object.fromEntries(
+    Object.entries(values).filter(([group]) => groups.includes(group as StyleGroup)),
+  ) as StyleDraft;
+}
+
+export function isCopyShortcut(
+  event: Pick<KeyboardEvent, 'altKey' | 'shiftKey' | 'metaKey' | 'ctrlKey' | 'code'>,
+): boolean {
+  return (
+    event.altKey && event.shiftKey && !event.metaKey && !event.ctrlKey && event.code === 'KeyC'
+  );
 }

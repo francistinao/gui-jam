@@ -40,6 +40,7 @@ Then start your dev server as usual, for example `npm run dev`. The GUIJam toolb
 | Tool | What to do |
 |---|---|
 | **Select** | Click any element. Tweak its layout, fill, radius, stroke, typography, shadows and opacity in a Figma-style panel, or drag the pink handles on the element to change its padding and gap, then **Apply**. |
+| **Select** (copy style) | In an element's panel, choose **Copy style** (`Alt+Shift+C`). Then click other elements: each one previews the copied style, and **Apply** writes it. Untick groups in the paste bar to leave them out; `Esc` stops. |
 | **Select** (sketch) | Click an element, then **Sketch what you want for this component**. Draw over it and describe the change: the sketch goes to the AI with your prompt, and the AI changes that component to match. |
 | **Draw** | Circle an element and describe the change. Pick one of three live variants and **Use** it. Up to three drawings can generate at once, each behind a numbered badge. |
 | **Draw** (sketch) | Sketch a card, a section or an icon where you want it. GUIJam works out the component and where it goes. |
@@ -89,6 +90,7 @@ The AI tool you pick is saved for your user in `~/.config/guijam/config.toml`, a
 | `Alt+Shift+S` | Starts or leaves Select |
 | `Alt+Shift+D` | Starts or leaves Draw |
 | `Alt+Shift+M` | Hides or shows the toolbar |
+| `Alt+Shift+C` | Copies the selected element's style so you can paste it onto other elements |
 
 ### Settings
 

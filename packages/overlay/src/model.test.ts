@@ -15,6 +15,8 @@ import {
   closesOnEscape,
   closeUpRect,
   containerIndex,
+  copiedGroups,
+  copiedStyle,
   cssColor,
   currentOf,
   draggedSpacing,
@@ -27,6 +29,7 @@ import {
   gapSlots,
   hexOfComputedColor,
   invertChanges,
+  isCopyShortcut,
   isPanelSpot,
   keyedParts,
   linksIn,
@@ -47,6 +50,7 @@ import {
   parseHex,
   parseShadows,
   pastDragThreshold,
+  pastedDraft,
   placedCopy,
   placeHeldPanel,
   placePopover,
@@ -1515,5 +1519,101 @@ describe('spacing', () => {
       { axis: 'column', rect: { left: 40, top: 0, width: 8, height: 20 } },
       { axis: 'row', rect: { left: 0, top: 20, width: 88, height: 10 } },
     ]);
+  });
+});
+
+describe('copy style', () => {
+  const brand = style({
+    tag: 'button',
+    tokens: [
+      {
+        token: 'bg-brand',
+        group: 'fill',
+        property: 'color',
+        variants: [],
+        themeToken: 'brand',
+        value: '#BE123C',
+        editable: true,
+      },
+      {
+        token: 'rounded-lg',
+        group: 'radius',
+        property: 'radius',
+        variants: [],
+        themeToken: 'lg',
+        value: '8px',
+        editable: true,
+      },
+      {
+        token: 'text-white',
+        group: 'text',
+        property: 'color',
+        variants: [],
+        themeToken: 'white',
+        value: '#FFFFFF',
+        editable: true,
+      },
+    ],
+    theme: {
+      colors: [{ name: 'brand', value: '#BE123C' }],
+      radii: [{ name: 'lg', px: 8 }],
+      fonts: ['sans'],
+      textSizes: [],
+      shadows: [],
+      spacing: 4,
+    },
+  });
+  const source = currentOf(computed({ backgroundColor: 'rgb(190, 18, 60)', textAlign: 'center' }));
+
+  it('copies theme tokens it can name and computed values for the rest', () => {
+    const values = copiedStyle(brand, source);
+    expect(values.fill).toEqual({ kind: 'token', name: 'brand' });
+    expect(values.radius).toEqual({ kind: 'token', name: 'lg' });
+    expect(values.text?.color).toEqual({ kind: 'hex', hex: '#FFFFFF', opacity: 100 });
+    expect(values.layout).toEqual({ padding: { top: 12, right: 24, bottom: 12, left: 24 } });
+    expect(values.stroke).toBeUndefined();
+    expect(values.effects).toBeUndefined();
+    expect(values.opacity).toBeUndefined();
+    expect(copiedGroups(values)).toEqual(['layout', 'radius', 'fill', 'text']);
+  });
+
+  it('pastes only what differs from the target', () => {
+    const values = copiedStyle(brand, source);
+    const gift = currentOf(
+      computed({
+        backgroundColor: 'rgb(253, 230, 138)',
+        color: 'rgb(0, 0, 0)',
+        fontWeight: '400',
+        paddingTop: '16px',
+        paddingRight: '16px',
+        paddingBottom: '16px',
+        paddingLeft: '16px',
+      }),
+    );
+    const target = style({ tag: 'p', adapter: 'inline', theme: brand.theme });
+    expect(pastedDraft(values, gift, target)).toEqual({
+      fill: { kind: 'token', name: 'brand' },
+      text: {
+        weight: 500,
+        align: 'center',
+        color: { kind: 'hex', hex: '#FFFFFF', opacity: 100 },
+      },
+      layout: { padding: { top: 12, right: 24, bottom: 12, left: 24 } },
+    });
+    expect(pastedDraft(values, source, brand)).toEqual({});
+  });
+
+  it('leaves text out of elements that cannot hold it, and gap out of non-flex targets', () => {
+    const values = { text: { size: 20 }, layout: { gap: { row: 8, column: 8 } } };
+    const image = style({ tag: 'img' });
+    expect(pastedDraft(values, currentOf(computed({})), image)).toEqual({});
+  });
+
+  it('copies with Alt+Shift+C and nothing else', () => {
+    const key = { altKey: true, shiftKey: true, metaKey: false, ctrlKey: false, code: 'KeyC' };
+    expect(isCopyShortcut(key)).toBe(true);
+    expect(isCopyShortcut({ ...key, metaKey: true })).toBe(false);
+    expect(isCopyShortcut({ ...key, shiftKey: false })).toBe(false);
+    expect(isCopyShortcut({ ...key, code: 'KeyV' })).toBe(false);
   });
 });

@@ -18,6 +18,7 @@ import {
   editText,
   hideAndShowSketch,
   jiraLoop,
+  pasteStyle,
   pickThemeColor,
   promptForTwo,
   sketchWithUndo,
@@ -300,6 +301,24 @@ test('dragging a padding handle writes the shorter padding tokens and Undo resto
     file: 'src/components/OrderButton.vue',
     path: ORDER_BUTTON,
   });
+});
+test('Copy style pastes a button style onto an inline-styled paragraph and Undo restores it', async ({
+  page,
+}) => {
+  await select(page);
+  await pasteStyle(
+    page,
+    {
+      element: page.getByRole('button', { name: 'Order now' }),
+      file: 'src/components/OrderButton.vue',
+      path: ORDER_BUTTON,
+    },
+    {
+      element: page.getByText('Gift cards for every occasion'),
+      file: 'src/App.vue',
+      path: APP,
+    },
+  );
 });
 
 test('an inline error in a vue template is swapped for the existing ErrorMessage.vue', async ({

@@ -11,6 +11,7 @@ import {
   type Current,
   clamp,
   fillOfToken,
+  GROUP_LABELS,
   type PanelSection,
   panelSections,
   parseHex,
@@ -31,15 +32,6 @@ import {
 import { type Store, useStore } from './store';
 import { TicketField } from './TicketField';
 
-const GROUP_LABELS: Record<StyleGroup, string> = {
-  layout: 'Layout',
-  radius: 'Radius',
-  fill: 'Fill',
-  stroke: 'Stroke',
-  text: 'Text',
-  effects: 'Effects',
-  opacity: 'Opacity',
-};
 const DEFAULT_RADIUS_PX = 8;
 const DEFAULT_FILL = '#FFFFFF';
 
@@ -358,9 +350,17 @@ export function FinetunePanel({ store, controller }: PanelProps) {
         </TabsPanel>
       </Tabs>
       <footer className="flex items-center justify-end gap-2 pt-3">
-        {unsaved ? (
-          <span className="typography-body-small mr-auto text-orange-600">Unsaved</span>
-        ) : null}
+        <div className="mr-auto flex items-center gap-2">
+          <Button
+            variant="ghost"
+            disabled={!style}
+            title="Copy style (Alt+Shift+C)"
+            onClick={() => controller.copyStyle()}
+          >
+            Copy style
+          </Button>
+          {unsaved ? <span className="typography-body-small text-orange-600">Unsaved</span> : null}
+        </div>
         <Button
           variant="secondary"
           disabled={!unsaved || busy}

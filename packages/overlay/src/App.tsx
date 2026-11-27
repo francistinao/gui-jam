@@ -4,6 +4,7 @@ import { FinetunePanel } from './FinetunePanel';
 import { Button } from './figui/button';
 import { JobBadges } from './JobBadges';
 import type { Rect } from './model';
+import { PasteBar } from './PasteBar';
 import { PromptPanel } from './PromptPanel';
 import { SpacingHandles } from './SpacingHandles';
 import { type Store, useStore } from './store';
@@ -80,6 +81,7 @@ export function App({ store, controller }: { store: Store<WidgetState>; controll
         <FinetunePanel store={store} controller={controller} />
       )}
       <JobBadges store={store} controller={controller} />
+      <PasteBar store={store} controller={controller} />
       <Notice store={store} controller={controller} />
     </>
   );

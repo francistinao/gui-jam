@@ -1,5 +1,6 @@
+import type { StyleGroup } from '@guijam/contracts-ts';
 import type { Job } from './controller';
-import { isPanelSpot } from './model';
+import { type CopiedStyle, isPanelSpot, type StyleDraft } from './model';
 import { storedTicket } from './tracker';
 
 export const JOBS_KEY = 'guijam:jobs';
@@ -111,6 +112,65 @@ export function save(jobs: readonly Job[], focus: string | null): void {
 export function load(): Saved | null {
   try {
     return parseSaved(sessionStorage.getItem(JOBS_KEY));
+  } catch {
+    return null;
+  }
+}
+
+export const STYLE_KEY = 'guijam:style';
+const GROUPS: readonly StyleGroup[] = [
+  'layout',
+  'radius',
+  'fill',
+  'stroke',
+  'text',
+  'effects',
+  'opacity',
+];
+
+export interface SavedStyle {
+  copied: CopiedStyle;
+  pasting: StyleGroup[];
+}
+
+function isGroup(value: unknown): value is StyleGroup {
+  return GROUPS.includes(value as StyleGroup);
+}
+
+export function parseStyle(text: string | null): SavedStyle | null {
+  if (!text) return null;
+  let value: unknown;
+  try {
+    value = JSON.parse(text);
+  } catch {
+    return null;
+  }
+  if (!isRecord(value) || value.version !== VERSION || !isRecord(value.copied)) return null;
+  const { copied } = value;
+  if (typeof copied.tag !== 'string' || typeof copied.file !== 'string') return null;
+  if (!isRecord(copied.values) || !Array.isArray(value.pasting)) return null;
+  const values = Object.fromEntries(
+    Object.entries(copied.values).filter(([group, entry]) => isGroup(group) && entry !== null),
+  ) as StyleDraft;
+  if (Object.keys(values).length === 0) return null;
+  return {
+    copied: { tag: copied.tag, file: copied.file, values },
+    pasting: value.pasting.filter(isGroup),
+  };
+}
+
+export function saveStyle(saved: SavedStyle | null): void {
+  try {
+    if (saved) sessionStorage.setItem(STYLE_KEY, JSON.stringify({ version: VERSION, ...saved }));
+    else sessionStorage.removeItem(STYLE_KEY);
+  } catch {
+    return;
+  }
+}
+
+export function loadStyle(): SavedStyle | null {
+  try {
+    return parseStyle(sessionStorage.getItem(STYLE_KEY));
   } catch {
     return null;
   }

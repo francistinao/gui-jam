@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Job } from './controller';
-import { parseSaved, serialize } from './persist';
+import { parseSaved, parseStyle, serialize } from './persist';
 
 const job = (id: string, status: 'idle' | 'running' | 'ready' = 'ready'): Job =>
   ({
@@ -210,5 +210,38 @@ describe('persisted jobs', () => {
     const saved = parseSaved(text);
     expect(saved?.jobs.map((entry) => entry.id)).toEqual(['j1']);
     expect(saved?.focus).toBeNull();
+  });
+});
+
+describe('parseStyle', () => {
+  it('keeps a copied style with known groups and drops the rest', () => {
+    const saved = JSON.stringify({
+      version: 1,
+      copied: {
+        tag: 'button',
+        file: 'src/A.tsx',
+        values: { fill: { kind: 'token', name: 'brand' }, shape: 'round' },
+      },
+      pasting: ['fill', 'shape'],
+    });
+    expect(parseStyle(saved)).toEqual({
+      copied: {
+        tag: 'button',
+        file: 'src/A.tsx',
+        values: { fill: { kind: 'token', name: 'brand' } },
+      },
+      pasting: ['fill'],
+    });
+  });
+
+  it('rejects anything malformed', () => {
+    expect(parseStyle(null)).toBeNull();
+    expect(parseStyle('{')).toBeNull();
+    expect(parseStyle(JSON.stringify({ version: 2, copied: {}, pasting: [] }))).toBeNull();
+    expect(
+      parseStyle(
+        JSON.stringify({ version: 1, copied: { tag: 'p', file: 'a', values: {} }, pasting: [] }),
+      ),
+    ).toBeNull();
   });
 });

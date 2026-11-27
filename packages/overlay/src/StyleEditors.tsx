@@ -19,6 +19,7 @@ import {
   type Current,
   clamp,
   type Draft,
+  effectsBase,
   type HexColor,
   OPACITY_RANGE,
   parseHex,
@@ -390,31 +391,6 @@ export function StrokeEditor({ style, draft, current, controller }: EditorProps)
       </div>
     </div>
   );
-}
-
-function shadowFrom(token: StyleToken | undefined, inset: boolean): ShadowValue | undefined {
-  if (!token) return undefined;
-  if (token.themeToken && token.themeToken !== 'none') {
-    return { kind: 'token', name: token.themeToken };
-  }
-  const parsed = parseShadows(`${inset ? 'inset ' : ''}${token.value ?? ''}`);
-  const shadow = inset ? parsed.inner : parsed.drop;
-  return shadow ? { kind: 'custom', ...shadow } : undefined;
-}
-
-export function effectsBase(style: ElementStyle, current: Current | null): EffectsValue {
-  const drop = editableToken(style, 'effects', 'shadow');
-  const inner = editableToken(style, 'effects', 'inset-shadow');
-  const base: EffectsValue = {};
-  const fromDrop = shadowFrom(drop, false);
-  const fromInner = shadowFrom(inner, true);
-  if (fromDrop) base.drop = fromDrop;
-  else if (!drop && current?.shadows.drop) base.drop = { kind: 'custom', ...current.shadows.drop };
-  if (fromInner) base.inner = fromInner;
-  else if (!inner && current?.shadows.inner) {
-    base.inner = { kind: 'custom', ...current.shadows.inner };
-  }
-  return base;
 }
 
 function customOf(shadow: ShadowValue, inset: boolean, style: ElementStyle): Shadow {
