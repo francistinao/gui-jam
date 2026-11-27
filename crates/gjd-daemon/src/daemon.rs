@@ -208,9 +208,9 @@ impl From<CommitError> for Failure {
             } => {
                 let at = lines.first().map_or_else(String::new, |(start, end)| {
                     if start == end {
-                        format!("line {start}")
+                        format!("Line {start}")
                     } else {
-                        format!("lines {start} to {end}")
+                        format!("Lines {start} to {end}")
                     }
                 });
                 let action = if blockers.is_empty() {
