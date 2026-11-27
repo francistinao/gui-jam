@@ -206,6 +206,18 @@ describe('splitPage', () => {
     });
   });
 
+  it('takes the load id off the request and drops one that is not an id', () => {
+    expect(splitPage({ type: 'x', pageId: 'page-1', load: 'load-2' }, 'socket-1')).toEqual({
+      pageId: 'page-1',
+      reloaded: false,
+      load: 'load-2',
+      data: { type: 'x' },
+    });
+    expect(splitPage({ type: 'x', pageId: 'page-1', load: 'bad id!' }, 'socket-1').load).toBe(
+      undefined,
+    );
+  });
+
   it('takes the reload flag off the request, and only a real true counts', () => {
     expect(splitPage({ type: 'x', pageId: 'page-1', reloaded: true }, 'socket-1')).toEqual({
       pageId: 'page-1',

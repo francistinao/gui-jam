@@ -50,6 +50,7 @@ describe('Pages', () => {
     const pages = new Pages<string>(
       (runId) => dropped.push(runId),
       (runId) => released.push(runId),
+      () => {},
       clock.timers,
     );
     pages.seen('socket-a', 'page-1');
@@ -75,6 +76,7 @@ describe('Pages', () => {
     const pages = new Pages<string>(
       (runId) => dropped.push(runId),
       (runId) => released.push(runId),
+      () => {},
       clock.timers,
     );
     pages.seen('socket-a', 'page-1');
@@ -98,6 +100,7 @@ describe('Pages', () => {
     const pages = new Pages<string>(
       (runId) => dropped.push(runId),
       (runId) => released.push(runId),
+      () => {},
       clock.timers,
     );
     pages.seen('socket-a', 'page-1');
@@ -116,6 +119,7 @@ describe('Pages', () => {
   it('lets a reloaded page attach to a run that is still going or just finished', async () => {
     const clock = fakeTimers();
     const pages = new Pages<string>(
+      () => {},
       () => {},
       () => {},
       clock.timers,
@@ -142,6 +146,7 @@ describe('Pages', () => {
     const pages = new Pages<string>(
       (runId) => dropped.push(runId),
       (runId) => released.push(runId),
+      () => {},
       clock.timers,
     );
     pages.seen('socket-a', 'page-1');
@@ -164,6 +169,7 @@ describe('Pages', () => {
     const pages = new Pages<string>(
       (runId) => dropped.push(runId),
       (runId) => released.push(runId),
+      () => {},
       clock.timers,
     );
     pages.seen('socket-a', 'page-1');
@@ -189,6 +195,7 @@ describe('Pages', () => {
     const pages = new Pages<string>(
       (runId) => dropped.push(runId),
       (runId) => released.push(runId),
+      () => {},
       clock.timers,
     );
     pages.seen('socket-a', 'page-1');
@@ -212,6 +219,7 @@ describe('Pages', () => {
     const pages = new Pages<string>(
       () => undefined,
       (runId) => released.push(runId),
+      () => {},
       clock.timers,
     );
     pages.seen('socket-a', 'page-1');
@@ -232,6 +240,7 @@ describe('Pages', () => {
     const pages = new Pages<string>(
       () => undefined,
       (runId) => released.push(runId),
+      () => {},
       clock.timers,
     );
     pages.seen('socket-a', 'page-1');
@@ -258,6 +267,7 @@ describe('Pages', () => {
             resolve();
           };
         }),
+      () => {},
       fakeTimers().timers,
     );
     pages.seen('socket-a', 'page-1');
@@ -279,6 +289,7 @@ describe('Pages', () => {
     const pages = new Pages<string>(
       (runId) => events.push(`drop ${runId}`),
       (runId) => events.push(`release ${runId}`),
+      () => {},
       clock.timers,
     );
     pages.seen('socket-a', 'page-1');
@@ -296,6 +307,7 @@ describe('Pages', () => {
     const pages = new Pages<string>(
       (runId) => dropped.push(runId),
       () => undefined,
+      () => {},
       clock.timers,
     );
     pages.seen('socket-a', 'page-1');
@@ -306,5 +318,77 @@ describe('Pages', () => {
     clock.advance(GRACE_MS);
 
     expect(dropped).toEqual(['run-1']);
+  });
+});
+
+describe('Pages fine-tune previews', () => {
+  function tracked() {
+    const discarded: string[] = [];
+    const clock = fakeTimers();
+    const pages = new Pages<string>(
+      () => {},
+      () => {},
+      (changesetId) => discarded.push(changesetId),
+      clock.timers,
+    );
+    return { pages, clock, discarded };
+  }
+
+  it('discards the open preview of a page that stays away, but not one it applied', () => {
+    const { pages, clock, discarded } = tracked();
+    pages.seen('socket-a', 'page-1');
+    pages.previewed('page-1', 'cs-1');
+    pages.previewed('page-1', 'cs-2');
+    pages.seen('socket-b', 'page-2');
+    pages.previewed('page-2', 'cs-3');
+    pages.settled('cs-3');
+
+    pages.left('socket-a');
+    pages.left('socket-b');
+    clock.advance(RETURN_MS);
+
+    expect(discarded).toEqual(['cs-2']);
+    clock.advance(GRACE_MS);
+    expect(discarded).toEqual(['cs-2']);
+  });
+
+  it('discards it as soon as a new page opens while the old one is gone', async () => {
+    const { pages, discarded } = tracked();
+    pages.seen('socket-a', 'page-1');
+    pages.previewed('page-1', 'cs-1');
+    pages.left('socket-a');
+
+    await pages.seen('socket-b', 'page-2');
+
+    expect(discarded).toEqual(['cs-1']);
+  });
+
+  it('keeps it when the same document reconnects within the reload window', () => {
+    const { pages, clock, discarded } = tracked();
+    pages.seen('socket-a', 'page-1', false, 'load-1');
+    pages.previewed('page-1', 'cs-1');
+    pages.reloading();
+    pages.left('socket-a');
+    clock.advance(RELOAD_WINDOW_MS / 2);
+    pages.seen('socket-b', 'page-1', false, 'load-1');
+    clock.advance(GRACE_MS * 2);
+
+    expect(discarded).toEqual([]);
+  });
+
+  it('discards it before the first request of a new document in the same tab', async () => {
+    const { pages, clock, discarded } = tracked();
+    pages.seen('socket-a', 'page-1', false, 'load-1');
+    pages.previewed('page-1', 'cs-1');
+    pages.reloading();
+    pages.left('socket-a');
+    clock.advance(RELOAD_WINDOW_MS / 2);
+
+    await pages.seen('socket-b', 'page-1', true, 'load-2');
+    expect(discarded).toEqual(['cs-1']);
+    pages.previewed('page-1', 'cs-2');
+    await pages.seen('socket-b', 'page-1', true, 'load-2');
+
+    expect(discarded).toEqual(['cs-1']);
   });
 });

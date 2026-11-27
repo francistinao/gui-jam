@@ -153,6 +153,7 @@ function linksTicket(): boolean {
 function createRequester(hot: ToolbarChannel): WidgetHost['request'] {
   const page = pageId();
   const reloaded = pageReloaded();
+  const load = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
   let next = 1;
   const waiting = new Map<string, (reply: GuijamMessage) => void>();
   hot.on('gj:response', (reply) => {
@@ -181,7 +182,7 @@ function createRequester(hot: ToolbarChannel): WidgetHost['request'] {
         clearTimeout(timer);
         resolve(reply);
       });
-      hot.send('gj:request', { ...message, id, pageId: page, reloaded });
+      hot.send('gj:request', { ...message, id, pageId: page, reloaded, load });
     });
 }
 

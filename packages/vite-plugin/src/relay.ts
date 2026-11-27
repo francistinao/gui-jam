@@ -113,6 +113,15 @@ export function requestRunId(data: unknown, requestType: string): string | undef
   return typeof runId === 'string' ? runId : undefined;
 }
 
+export function settledChangesetId(data: unknown): string | undefined {
+  if (typeof data !== 'object' || data === null) return undefined;
+  const { type, payload } = data as { type?: unknown; payload?: unknown };
+  if (type !== 'changeset.commit' && type !== 'changeset.discard') return undefined;
+  if (typeof payload !== 'object' || payload === null) return undefined;
+  const { changesetId } = payload as { changesetId?: unknown };
+  return typeof changesetId === 'string' ? changesetId : undefined;
+}
+
 export function generationRunId(data: unknown): string | undefined {
   return requestRunId(data, 'generate.request');
 }
@@ -128,6 +137,7 @@ const PAGE_ID = /^[\w-]{1,100}$/;
 export interface PageRequest {
   pageId: string;
   reloaded: boolean;
+  load?: string;
   data: unknown;
 }
 
@@ -135,10 +145,15 @@ export function splitPage(raw: unknown, fallback: string): PageRequest {
   if (typeof raw !== 'object' || raw === null || !('pageId' in raw)) {
     return { pageId: fallback, reloaded: false, data: raw };
   }
-  const { pageId, reloaded, ...data } = raw as { pageId: unknown; reloaded?: unknown };
+  const { pageId, reloaded, load, ...data } = raw as {
+    pageId: unknown;
+    reloaded?: unknown;
+    load?: unknown;
+  };
   return {
     pageId: typeof pageId === 'string' && PAGE_ID.test(pageId) ? pageId : fallback,
     reloaded: reloaded === true,
+    ...(typeof load === 'string' && PAGE_ID.test(load) ? { load } : {}),
     data,
   };
 }

@@ -20,6 +20,8 @@ export class Pages<Client> {
   private readonly clientOf = new Map<string, Client>();
   private readonly runsOf = new Map<string, Set<string>>();
   private readonly ownerOf = new Map<string, string>();
+  private readonly previewOf = new Map<string, string>();
+  private readonly loadOf = new Map<string, string>();
   private readonly leaving = new Map<string, unknown>();
   private readonly releasing = new Map<string, unknown>();
   private readonly pending = new Map<string, Promise<GuijamMessage>>();
@@ -29,16 +31,22 @@ export class Pages<Client> {
   constructor(
     private readonly drop: (runId: string) => void,
     private readonly release: (runId: string) => unknown,
+    private readonly discard: (changesetId: string) => unknown,
     private readonly timers: Timers = REAL_TIMERS,
   ) {}
 
-  async seen(client: Client, pageId: string, reloaded = false): Promise<void> {
+  async seen(client: Client, pageId: string, reloaded = false, load?: string): Promise<void> {
     const timer = this.leaving.get(pageId);
     if (timer !== undefined) {
       this.timers.clear(timer);
       this.leaving.delete(pageId);
     }
     const releases: Promise<void>[] = [];
+    if (load !== undefined) {
+      const before = this.loadOf.get(pageId);
+      this.loadOf.set(pageId, load);
+      if (before !== undefined && before !== load) releases.push(this.discardPreview(pageId));
+    }
     for (const [away, waiting] of [...this.releasing]) {
       this.timers.clear(waiting);
       if (away === pageId && reloaded) this.releasing.delete(away);
@@ -72,6 +80,16 @@ export class Pages<Client> {
     this.forgetReply(runId);
   }
 
+  previewed(pageId: string, changesetId: string): void {
+    this.previewOf.set(pageId, changesetId);
+  }
+
+  settled(changesetId: string): void {
+    for (const [pageId, open] of this.previewOf) {
+      if (open === changesetId) this.previewOf.delete(pageId);
+    }
+  }
+
   async attach(runId: string): Promise<GuijamMessage | undefined> {
     const kept = this.finished.get(runId);
     if (kept) return kept.reply;
@@ -102,9 +120,18 @@ export class Pages<Client> {
     );
   }
 
+  private async discardPreview(pageId: string): Promise<void> {
+    const changesetId = this.previewOf.get(pageId);
+    this.previewOf.delete(pageId);
+    if (changesetId !== undefined) await this.discard(changesetId);
+  }
+
   private async releaseRuns(pageId: string): Promise<void> {
     this.releasing.delete(pageId);
-    await Promise.all([...(this.runsOf.get(pageId) ?? [])].map((runId) => this.release(runId)));
+    await Promise.all([
+      this.discardPreview(pageId),
+      ...[...(this.runsOf.get(pageId) ?? [])].map((runId) => this.release(runId)),
+    ]);
   }
 
   private finish(runId: string, reply: GuijamMessage): void {
@@ -125,6 +152,8 @@ export class Pages<Client> {
 
   private forget(pageId: string): void {
     this.leaving.delete(pageId);
+    this.loadOf.delete(pageId);
+    void this.discardPreview(pageId);
     const release = this.releasing.get(pageId);
     if (release !== undefined) {
       this.timers.clear(release);

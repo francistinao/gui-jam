@@ -10,6 +10,7 @@ import {
   replyWindowMs,
   requestId,
   requestRunId,
+  settledChangesetId,
   splitPage,
   terminalLine,
 } from './relay.js';
@@ -73,6 +74,10 @@ export function createBridge(options: BridgeOptions): Bridge {
       daemon
         ?.request({ type: 'preview.release', payload: { runId } })
         .catch(reportFailure(`could not release the preview of run ${runId}`)),
+    (changesetId) =>
+      daemon
+        ?.request({ type: 'changeset.discard', payload: { changesetId } })
+        .catch(reportFailure(`could not discard the preview ${changesetId} of a closed page`)),
   );
 
   function socketId(client: PageClient): string {
@@ -140,8 +145,8 @@ export function createBridge(options: BridgeOptions): Bridge {
   }
 
   async function handle(raw: unknown, client: PageClient): Promise<void> {
-    const { pageId, reloaded, data } = splitPage(raw, socketId(client));
-    await pages.seen(client, pageId, reloaded);
+    const { pageId, reloaded, load, data } = splitPage(raw, socketId(client));
+    await pages.seen(client, pageId, reloaded, load);
     const attaching = requestRunId(data, 'generate.attach');
     if (attaching !== undefined) {
       const kept = await pages.attach(attaching);
@@ -164,7 +169,13 @@ export function createBridge(options: BridgeOptions): Bridge {
     const reply = relay(data);
     const runId = generationRunId(data);
     if (runId !== undefined) pages.started(pageId, runId, reply);
-    client.send('gj:response', await reply);
+    const answered = await reply;
+    const settled = settledChangesetId(data);
+    if (settled !== undefined && answered.type !== 'error') pages.settled(settled);
+    if (answered.type === 'finetune.previewed') {
+      pages.previewed(pageId, answered.payload.changesetId);
+    }
+    client.send('gj:response', answered);
   }
 
   function connect(): (() => void) | undefined {
