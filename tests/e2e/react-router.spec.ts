@@ -12,6 +12,7 @@ import {
 } from './support/daemon.js';
 import { type FixtureServer, openFixture, startFixtureServer } from './support/fixture.js';
 import {
+  dragPadding,
   dragPanel,
   editFoundText,
   editText,
@@ -473,6 +474,16 @@ test('a heading rendered from a data array is edited where the array is written'
 test('the Fill picker applies a theme color and Undo restores it', async ({ page }) => {
   await select(page);
   await pickThemeColor(page, {
+    element: page.getByRole('button', { name: 'Order now' }),
+    file: 'app/components/OrderButton.tsx',
+    path: ORDER_BUTTON,
+  });
+});
+test('dragging a padding handle writes the shorter padding tokens and Undo restores them', async ({
+  page,
+}) => {
+  await select(page);
+  await dragPadding(page, {
     element: page.getByRole('button', { name: 'Order now' }),
     file: 'app/components/OrderButton.tsx',
     path: ORDER_BUTTON,

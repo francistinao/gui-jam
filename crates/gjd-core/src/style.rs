@@ -72,20 +72,37 @@ fn vuetify_tokens(source: &str, line: u64, column: u64) -> Vec<StyleToken> {
         .collect()
 }
 
-const INLINE_GROUPS: [(&str, StyleGroup, &str); 11] = [
+const INLINE_GROUPS: [(&str, StyleGroup, &str); 24] = [
     ("backgroundColor", StyleGroup::Fill, "background-color"),
     ("background", StyleGroup::Fill, "background"),
     ("borderRadius", StyleGroup::Radius, "border-radius"),
     ("color", StyleGroup::Text, "color"),
     ("fontSize", StyleGroup::Text, "font-size"),
     ("fontWeight", StyleGroup::Text, "font-weight"),
+    ("fontFamily", StyleGroup::Text, "font-family"),
+    ("lineHeight", StyleGroup::Text, "line-height"),
+    ("letterSpacing", StyleGroup::Text, "letter-spacing"),
+    ("textAlign", StyleGroup::Text, "text-align"),
     ("border", StyleGroup::Stroke, "border"),
     ("borderColor", StyleGroup::Stroke, "border-color"),
     ("borderWidth", StyleGroup::Stroke, "border-width"),
+    ("borderStyle", StyleGroup::Stroke, "border-style"),
     ("boxShadow", StyleGroup::Effects, "box-shadow"),
     ("opacity", StyleGroup::Opacity, "opacity"),
+    ("padding", StyleGroup::Layout, "padding"),
+    ("paddingTop", StyleGroup::Layout, "padding-top"),
+    ("paddingRight", StyleGroup::Layout, "padding-right"),
+    ("paddingBottom", StyleGroup::Layout, "padding-bottom"),
+    ("paddingLeft", StyleGroup::Layout, "padding-left"),
+    ("gap", StyleGroup::Layout, "gap"),
+    ("rowGap", StyleGroup::Layout, "row-gap"),
+    ("columnGap", StyleGroup::Layout, "column-gap"),
 ];
-const UNITLESS: [&str; 2] = ["opacity", "fontWeight"];
+const UNITLESS: [&str; 3] = ["opacity", "fontWeight", "lineHeight"];
+
+fn inline_group(key: &str) -> Option<&'static (&'static str, StyleGroup, &'static str)> {
+    INLINE_GROUPS.iter().find(|(name, _, _)| *name == key)
+}
 
 fn inline_tokens(object: &StyleObject) -> Vec<StyleToken> {
     object
@@ -93,7 +110,7 @@ fn inline_tokens(object: &StyleObject) -> Vec<StyleToken> {
         .iter()
         .filter_map(|prop| {
             let key = template::camel(&prop.key);
-            let (_, group, property) = INLINE_GROUPS.iter().find(|(name, _, _)| *name == key)?;
+            let (_, group, property) = inline_group(&key)?;
             let value = prop.value.as_ref().map(|value| {
                 let numeric = value.parse::<f64>().is_ok();
                 if numeric && !UNITLESS.contains(&prop.key.as_str()) {
@@ -124,7 +141,7 @@ fn css_tokens(text: &str) -> Vec<StyleToken> {
         .into_iter()
         .filter_map(|(property, value)| {
             let key = template::camel(&property);
-            let (_, group, _) = INLINE_GROUPS.iter().find(|(name, _, _)| *name == key)?;
+            let (_, group, _) = inline_group(&key)?;
             Some(StyleToken {
                 token: format!("{property}: {value}"),
                 group: *group,
@@ -298,6 +315,7 @@ mod tests {
                     Some("brand"),
                     Some("#BE123C")
                 ),
+                ("px-6", StyleGroup::Layout, true, None, Some("24px")),
                 (
                     "hover:bg-red-500",
                     StyleGroup::Fill,

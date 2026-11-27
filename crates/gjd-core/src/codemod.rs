@@ -3,6 +3,7 @@ use crate::contracts::{
     ElementStyle, ElementStyleAdapter, ElementStyleClassSource, ElementStyleStyleSource, FillValue,
     FinetuneProps, JsxValue, ProjectPath, RadiusValue, SrcLoc, StyleGroup,
 };
+use crate::groups::{class_change, has_group_change, style_changes};
 use crate::tailwind::classify;
 use crate::theme::Theme;
 
@@ -26,6 +27,12 @@ pub enum CodemodError {
     InvalidPath(String),
     #[error("the element has no plain text run {0}; use Ask AI to change its text")]
     NoTextRun(u64),
+    #[error("{what} {value} is out of range")]
+    OutOfRange { what: &'static str, value: String },
+    #[error("`{0}` is not a font in this project")]
+    UnknownFont(String),
+    #[error("`{0}` is not a shadow in this project")]
+    UnknownShadow(String),
 }
 
 const FULL_RADIUS: f64 = 9999.0;
@@ -35,7 +42,7 @@ pub fn finetune_ops(
     props: &FinetuneProps,
     theme: &Theme,
 ) -> Result<Vec<EditOp>, CodemodError> {
-    let mut ops = if props.fill.is_none() && props.radius.is_none() {
+    let mut ops = if props.fill.is_none() && props.radius.is_none() && !has_group_change(props) {
         Vec::new()
     } else {
         style_ops(style, props, theme)?
@@ -81,7 +88,7 @@ fn style_ops(
         return finetune_op(style, props, theme).map(|op| vec![op]);
     }
     if style.adapter == ElementStyleAdapter::Vuetify {
-        return vuetify_ops(style, props);
+        return vuetify_ops(style, props, theme);
     }
     if style.style_source == ElementStyleStyleSource::Dynamic {
         return Err(CodemodError::StyleNotEditable);
@@ -100,6 +107,9 @@ fn style_ops(
             "borderRadius",
             radius_style(radius, theme)?,
         )?);
+    }
+    for (prop, value) in style_changes(style, props, theme)? {
+        ops.push(style_op(style, prop, value)?);
     }
     Ok(ops)
 }
@@ -123,8 +133,15 @@ fn attribute_op(
     })
 }
 
-fn vuetify_ops(style: &ElementStyle, props: &FinetuneProps) -> Result<Vec<EditOp>, CodemodError> {
+fn vuetify_ops(
+    style: &ElementStyle,
+    props: &FinetuneProps,
+    theme: &Theme,
+) -> Result<Vec<EditOp>, CodemodError> {
     let mut ops = Vec::new();
+    for (prop, value) in style_changes(style, props, theme)? {
+        ops.push(style_op(style, prop, value)?);
+    }
     if let Some(fill) = &props.fill {
         let color = match fill {
             FillValue::None => None,
@@ -179,12 +196,12 @@ fn style_op(style: &ElementStyle, prop: &str, value: EditOpValue) -> Result<Edit
     })
 }
 
-fn fill_style(fill: &FillValue, theme: &Theme) -> Result<EditOpValue, CodemodError> {
+pub(crate) fn fill_style(fill: &FillValue, theme: &Theme) -> Result<EditOpValue, CodemodError> {
     match fill {
         FillValue::None => Ok(EditOpValue::Null),
         FillValue::Token { name } => theme
             .color(name)
-            .map(|_| EditOpValue::String(format!("var(--color-{})", name.as_str())))
+            .map(|value| EditOpValue::String(format!("var(--color-{}, {value})", name.as_str())))
             .ok_or_else(|| CodemodError::UnknownColor(name.to_string())),
         FillValue::Hex { hex, opacity } => {
             if !(0..=100).contains(opacity) {
@@ -212,10 +229,12 @@ fn radius_style(radius: &RadiusValue, theme: &Theme) -> Result<EditOpValue, Code
         RadiusValue::Token { name } => match name.as_str() {
             "none" => Ok(EditOpValue::Number(0.0)),
             "full" => Ok(EditOpValue::Number(FULL_RADIUS)),
-            other if theme.radius_px(other).is_some() => {
-                Ok(EditOpValue::String(format!("var(--radius-{other})")))
-            }
-            other => Err(CodemodError::UnknownRadius(other.to_owned())),
+            other => match theme.radius_px(other) {
+                Some(px) => Ok(EditOpValue::String(format!(
+                    "var(--radius-{other}, {px}px)"
+                ))),
+                None => Err(CodemodError::UnknownRadius(other.to_owned())),
+            },
         },
         RadiusValue::Px { px } => {
             if !(0..=MAX_RADIUS_PX).contains(px) {
@@ -240,17 +259,21 @@ pub fn finetune_op(
     let mut replaced = Vec::new();
     if let Some(fill) = &props.fill {
         replaced.push(StyleGroup::Fill);
-        add.extend(fill_token(fill, theme)?);
+        add.extend(color_token("bg", fill, theme)?);
     }
     if let Some(radius) = &props.radius {
         replaced.push(StyleGroup::Radius);
         add.push(radius_token(radius, theme)?);
     }
+    let change = class_change(style, props, theme)?;
+    add.extend(change.add);
     let remove = style
         .tokens
         .iter()
         .filter(|token| {
-            token.editable && replaced.contains(&token.group) && !add.contains(&token.token)
+            ((token.editable && replaced.contains(&token.group))
+                || change.remove.contains(&token.token))
+                && !add.contains(&token.token)
         })
         .map(|token| class_item::<EditOpRemoveItem>(&token.token))
         .collect();
@@ -275,11 +298,15 @@ fn class_item<T: TryFrom<String>>(token: &str) -> T {
         .unwrap_or_else(|_| unreachable!("class tokens are non-empty, whitespace-free strings"))
 }
 
-fn fill_token(fill: &FillValue, theme: &Theme) -> Result<Option<String>, CodemodError> {
+pub(crate) fn color_token(
+    prefix: &str,
+    fill: &FillValue,
+    theme: &Theme,
+) -> Result<Option<String>, CodemodError> {
     match fill {
         FillValue::None => Ok(None),
         FillValue::Token { name } => {
-            let token = format!("bg-{}", name.as_str());
+            let token = format!("{prefix}-{}", name.as_str());
             classify(&token, theme)
                 .map(|_| Some(token))
                 .ok_or_else(|| CodemodError::UnknownColor(name.to_string()))
@@ -291,11 +318,16 @@ fn fill_token(fill: &FillValue, theme: &Theme) -> Result<Option<String>, Codemod
             let hex = hex.to_ascii_uppercase();
             let color = theme
                 .color_named(&hex)
+                .or(match hex.as_str() {
+                    "#000000" => Some("black"),
+                    "#FFFFFF" => Some("white"),
+                    _ => None,
+                })
                 .map_or_else(|| format!("[{hex}]"), str::to_owned);
             Ok(Some(if *opacity == 100 {
-                format!("bg-{color}")
+                format!("{prefix}-{color}")
             } else {
-                format!("bg-{color}/{opacity}")
+                format!("{prefix}-{color}/{opacity}")
             }))
         }
     }
@@ -421,6 +453,7 @@ mod tests {
                 serde_json::json!({ "kind": "hex", "hex": "#2563eb", "opacity": 100 }),
             )),
             radius: None,
+            ..Default::default()
         };
 
         assert_eq!(
@@ -438,6 +471,7 @@ mod tests {
                 serde_json::json!({ "kind": "hex", "hex": "#1D4ED8", "opacity": 80 }),
             )),
             radius: None,
+            ..Default::default()
         };
 
         assert_eq!(
@@ -453,6 +487,7 @@ mod tests {
             source: None,
             fill: None,
             radius: Some(radius(serde_json::json!({ "kind": "px", "px": px }))),
+            ..Default::default()
         };
 
         assert_eq!(
@@ -484,6 +519,7 @@ mod tests {
             source: None,
             fill: Some(fill(serde_json::json!({ "kind": "none" }))),
             radius: None,
+            ..Default::default()
         };
 
         assert_eq!(
@@ -501,12 +537,14 @@ mod tests {
                 serde_json::json!({ "kind": "hex", "hex": "#2563EB", "opacity": 101 }),
             )),
             radius: None,
+            ..Default::default()
         };
         let too_round = FinetuneProps {
             content: Vec::new(),
             source: None,
             fill: None,
             radius: Some(radius(serde_json::json!({ "kind": "px", "px": 1000 }))),
+            ..Default::default()
         };
         let unknown = FinetuneProps {
             content: Vec::new(),
@@ -515,6 +553,7 @@ mod tests {
                 serde_json::json!({ "kind": "token", "name": "chartreuse" }),
             )),
             radius: None,
+            ..Default::default()
         };
 
         assert_eq!(
@@ -541,6 +580,7 @@ mod tests {
                 serde_json::json!({ "kind": "token", "name": "brand" }),
             )),
             radius: None,
+            ..Default::default()
         };
 
         assert_eq!(op_for(source, 25, &props), Err(CodemodError::NotEditable));
@@ -583,6 +623,7 @@ mod tests {
                 serde_json::json!({ "kind": "hex", "hex": "#1d4ed8", "opacity": 100 }),
             )),
             radius: Some(radius(serde_json::json!({ "kind": "px", "px": 12 }))),
+            ..Default::default()
         };
         assert_eq!(
             inline_result(source, true, &props).expect("edits"),
@@ -595,6 +636,7 @@ mod tests {
                 serde_json::json!({ "kind": "hex", "hex": "#1d4ed8", "opacity": 50 }),
             )),
             radius: Some(radius(serde_json::json!({ "kind": "full" }))),
+            ..Default::default()
         };
         assert_eq!(
             inline_result(source, true, &faded).expect("edits"),
@@ -609,16 +651,18 @@ mod tests {
             radius: Some(radius(
                 serde_json::json!({ "kind": "token", "name": "card" }),
             )),
+            ..Default::default()
         };
         assert_eq!(
             inline_result(source, true, &tokens).expect("edits"),
-            "export const B = () => <b className=\"p-4\" style={{ backgroundColor: 'var(--color-brand)', borderRadius: 'var(--radius-card)' }}>Gift</b>;"
+            "export const B = () => <b className=\"p-4\" style={{ backgroundColor: 'var(--color-brand, #BE123C)', borderRadius: 'var(--radius-card, 10px)' }}>Gift</b>;"
         );
         let cleared = FinetuneProps {
             content: Vec::new(),
             source: None,
             fill: Some(fill(serde_json::json!({ "kind": "none" }))),
             radius: None,
+            ..Default::default()
         };
         assert_eq!(
             inline_result(source, true, &cleared).expect("edits"),
@@ -647,6 +691,7 @@ mod tests {
                 serde_json::json!({ "kind": "hex", "hex": "#123456", "opacity": 100 }),
             )),
             radius: None,
+            ..Default::default()
         };
         assert_eq!(
             inline_result(source, false, &props).expect("edits"),
@@ -674,6 +719,7 @@ mod tests {
                 serde_json::json!({ "kind": "hex", "hex": "#123456", "opacity": 100 }),
             )),
             radius: None,
+            ..Default::default()
         };
         assert_eq!(
             inline_result(dynamic, false, &props),
@@ -685,6 +731,7 @@ mod tests {
             source: None,
             fill: Some(fill(serde_json::json!({ "kind": "token", "name": "nope" }))),
             radius: None,
+            ..Default::default()
         };
         assert_eq!(
             inline_result(plain, true, &unknown),
@@ -695,6 +742,7 @@ mod tests {
             source: None,
             fill: None,
             radius: Some(radius(serde_json::json!({ "kind": "px", "px": 1000 }))),
+            ..Default::default()
         };
         assert!(matches!(
             inline_result(plain, true, &too_round),
@@ -722,6 +770,7 @@ mod tests {
                 ),
                 ("borderRadius: 8px".to_owned(), Some("8px".to_owned()), true),
                 ("opacity: 0.5".to_owned(), Some("0.5".to_owned()), true),
+                ("padding: 4px".to_owned(), Some("4px".to_owned()), true),
                 ("color: …".to_owned(), None, false),
             ]
         );
@@ -774,6 +823,7 @@ mod tests {
                 serde_json::json!({ "kind": "hex", "hex": "#1d4ed8", "opacity": 100 }),
             )),
             radius: Some(radius(serde_json::json!({ "kind": "px", "px": 12 }))),
+            ..Default::default()
         };
         let vue = "<template>\n  <button class=\"rounded-lg bg-brand px-6\" :class=\"{ on }\">Go</button>\n  <p>Hi</p>\n</template>\n";
         assert_eq!(
@@ -810,6 +860,7 @@ mod tests {
                 serde_json::json!({ "kind": "hex", "hex": "#0f766e", "opacity": 100 }),
             )),
             radius: Some(radius(serde_json::json!({ "kind": "px", "px": px }))),
+            ..Default::default()
         };
         let login = "<template>\n  <VBtn block type=\"submit\" color=\"primary\">로그인</VBtn>\n</template>\n";
         assert_eq!(
@@ -826,6 +877,7 @@ mod tests {
             source: None,
             fill: Some(fill(serde_json::json!({ "kind": "none" }))),
             radius: Some(radius(serde_json::json!({ "kind": "full" }))),
+            ..Default::default()
         };
         let rounded = "<template>\n  <v-btn\n    rounded=\"lg\"\n    color=\"primary\"\n  >Go</v-btn>\n</template>\n";
         assert_eq!(
@@ -839,6 +891,7 @@ mod tests {
                 serde_json::json!({ "kind": "hex", "hex": "#0f766e", "opacity": 50 }),
             )),
             radius: None,
+            ..Default::default()
         };
         assert_eq!(
             template_result(
@@ -918,6 +971,7 @@ mod tests {
                 serde_json::json!({ "kind": "hex", "hex": "#0f766e", "opacity": 100 }),
             )),
             radius: None,
+            ..Default::default()
         };
         let style = inspect_with(
             "src/A.vue",

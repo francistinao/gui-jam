@@ -6,6 +6,7 @@ import {
   appliedMessage,
   badgeSpot,
   boundsOf,
+  type ComputedLike,
   changesIn,
   chooseDrawTarget,
   clamp,
@@ -15,12 +16,15 @@ import {
   closeUpRect,
   containerIndex,
   cssColor,
+  currentOf,
+  draggedSpacing,
   droppedNote,
   editedFiles,
   fillOfToken,
   finetuneProps,
   followedSrc,
   formatElapsed,
+  gapSlots,
   hexOfComputedColor,
   invertChanges,
   isPanelSpot,
@@ -32,13 +36,16 @@ import {
   needsLine,
   nudgePanel,
   OPACITY_RANGE,
+  optimisticCss,
   PANEL_EDGE,
   PANEL_MIN_ROOM,
   type Placement,
   type Point,
+  paddingBands,
   pagePath,
   panelSections,
   parseHex,
+  parseShadows,
   pastDragThreshold,
   placedCopy,
   placeHeldPanel,
@@ -57,6 +64,9 @@ import {
   sketchAnchor,
   sketchingOver,
   sketchOver,
+  snapSpacing,
+  spacingLabel,
+  spacingToken,
   splitPaths,
   stillWorking,
   strokeShortcut,
@@ -84,7 +94,7 @@ const style = (overrides: Partial<ElementStyle>): ElementStyle => ({
   adapter: 'tailwind',
   styleSource: 'none',
   tokens: [],
-  theme: { colors: [], radii: [] },
+  theme: { colors: [], radii: [], fonts: [], textSizes: [], shadows: [], spacing: 4 },
   ...overrides,
 });
 
@@ -163,13 +173,26 @@ describe('panelSections', () => {
       ],
     });
 
-    expect(summary(button)).toEqual(['radius:edit', 'fill:edit', 'text:readonly']);
+    expect(summary(button)).toEqual([
+      'layout:edit',
+      'radius:edit',
+      'fill:edit',
+      'stroke:add',
+      'text:edit',
+      'effects:add',
+      'opacity:edit',
+    ]);
   });
 
-  it('offers fill and radius as additions on an element without them', () => {
+  it('offers every group without tokens as an addition, and keeps layout, text and opacity open', () => {
     expect(summary(style({ tag: 'section', classSource: 'none' }))).toEqual([
+      'layout:edit',
       'radius:add',
       'fill:add',
+      'stroke:add',
+      'text:edit',
+      'effects:add',
+      'opacity:edit',
     ]);
   });
 
@@ -179,7 +202,15 @@ describe('panelSections', () => {
       tokens: [token('hover:bg-red-500', 'fill', false), token('border', 'stroke')],
     });
 
-    expect(summary(conditional)).toEqual(['radius:add', 'fill:readonly', 'stroke:readonly']);
+    expect(summary(conditional)).toEqual([
+      'layout:edit',
+      'radius:add',
+      'fill:readonly',
+      'stroke:edit',
+      'text:edit',
+      'effects:add',
+      'opacity:edit',
+    ]);
   });
 
   it('makes everything read-only and offers nothing when the className is dynamic', () => {
@@ -195,7 +226,15 @@ describe('panelSections', () => {
       styleSource: 'object',
       tokens: [token("backgroundColor: '#fde68a'", 'fill')],
     });
-    expect(summary(inline)).toEqual(['radius:add', 'fill:edit']);
+    expect(summary(inline)).toEqual([
+      'layout:edit',
+      'radius:add',
+      'fill:edit',
+      'stroke:add',
+      'text:edit',
+      'effects:add',
+      'opacity:edit',
+    ]);
 
     const computed = style({ adapter: 'inline', styleSource: 'dynamic', tokens: [] });
     expect(summary(computed)).toEqual([]);
@@ -205,13 +244,15 @@ describe('panelSections', () => {
       adapter: 'vuetify',
       tokens: [token('color="primary"', 'fill')],
     });
-    expect(summary(vuetify)).toEqual(['radius:add', 'fill:edit']);
+    expect(summary(vuetify)).toContain('fill:edit');
+    expect(summary(vuetify)).toContain('layout:edit');
   });
 
   it('leaves text out for elements that cannot hold text', () => {
     const image = style({ tag: 'img', tokens: [token('text-sm', 'text')] });
 
-    expect(summary(image)).toEqual(['radius:add', 'fill:add']);
+    expect(summary(image)).not.toContain('text:edit');
+    expect(summary(image)).toContain('fill:add');
   });
 });
 
@@ -1098,6 +1139,16 @@ describe('finetuneProps', () => {
     expect(finetuneProps({ content: {} })).toEqual({});
   });
 
+  it('sends the new style groups', () => {
+    expect(
+      finetuneProps({
+        text: { size: 18 },
+        layout: { padding: { top: 16 } },
+        opacity: 80,
+      }),
+    ).toEqual({ text: { size: 18 }, layout: { padding: { top: 16 } }, opacity: 80 });
+  });
+
   it('sends the chosen place of found text with its new value', () => {
     expect(
       finetuneProps({
@@ -1316,5 +1367,153 @@ describe('showsSketchToggle', () => {
 
   it('stays away for variants left over on a drawing that went back to sketching', () => {
     expect(showsSketchToggle(owner('idle', 3))).toBe(false);
+  });
+});
+
+const computed = (overrides: Partial<ComputedLike>): ComputedLike => ({
+  backgroundColor: 'rgba(0, 0, 0, 0)',
+  borderTopLeftRadius: '8px',
+  color: 'rgb(255, 255, 255)',
+  fontSize: '16px',
+  fontWeight: '500',
+  lineHeight: '24px',
+  letterSpacing: 'normal',
+  textAlign: 'start',
+  borderTopWidth: '0px',
+  borderTopStyle: 'solid',
+  borderTopColor: 'rgb(0, 0, 0)',
+  boxShadow: 'none',
+  opacity: '1',
+  paddingTop: '12px',
+  paddingRight: '24px',
+  paddingBottom: '12px',
+  paddingLeft: '24px',
+  rowGap: 'normal',
+  columnGap: 'normal',
+  display: 'block',
+  flexDirection: 'row',
+  ...overrides,
+});
+
+describe('currentOf', () => {
+  it('reads typography, padding and flow from computed styles', () => {
+    const current = currentOf(computed({ letterSpacing: '0.4px', display: 'flex', rowGap: '8px' }));
+    expect(current.fontSize).toBe(16);
+    expect(current.fontWeight).toBe(500);
+    expect(current.letterSpacing).toBe(0.025);
+    expect(current.align).toBe('left');
+    expect(current.padding).toEqual({ top: 12, right: 24, bottom: 12, left: 24 });
+    expect(current.gap).toEqual({ row: 8, column: 0 });
+    expect(current.flow).toBe('row');
+    expect(current.opacity).toBe(100);
+    expect(currentOf(computed({ display: 'inline-grid' })).flow).toBe('grid');
+    expect(currentOf(computed({ display: 'flex', flexDirection: 'column' })).flow).toBe('column');
+    expect(currentOf(computed({ lineHeight: 'normal' })).lineHeight).toBeNull();
+  });
+});
+
+describe('parseShadows', () => {
+  it('reads computed and theme shadows and skips transparent and ring layers', () => {
+    expect(
+      parseShadows(
+        'rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgb(59, 130, 246) 0px 0px 0px 2px, rgba(0, 0, 0, 0.1) 0px 4px 6px -1px, rgba(0, 0, 0, 0.05) 0px 2px 4px 0px inset',
+      ),
+    ).toEqual({
+      drop: { x: 0, y: 4, blur: 6, spread: -1, hex: '#000000', opacity: 10 },
+      inner: { x: 0, y: 2, blur: 4, spread: 0, hex: '#000000', opacity: 5 },
+    });
+    expect(
+      parseShadows('0 1px 3px 0 rgb(0 0 0 / 0.1), 0 1px 2px -1px rgb(0 0 0 / 0.1)').drop,
+    ).toEqual({
+      x: 0,
+      y: 1,
+      blur: 3,
+      spread: 0,
+      hex: '#000000',
+      opacity: 10,
+    });
+    expect(parseShadows('none')).toEqual({ drop: null, inner: null });
+  });
+});
+
+describe('optimisticCss', () => {
+  it('turns a draft into CSS properties for the live element', () => {
+    const tokens = style({
+      theme: {
+        colors: [{ name: 'brand', value: '#BE123C' }],
+        radii: [],
+        fonts: [],
+        textSizes: [],
+        shadows: [{ name: 'sm', value: '0 1px 3px 0 rgb(0 0 0 / 0.1)', inset: false }],
+        spacing: 4,
+      },
+    });
+    expect(
+      optimisticCss(
+        {
+          text: { size: 18, align: 'center', color: { kind: 'token', name: 'brand' } },
+          stroke: { kind: 'set', width: 2 },
+          effects: { drop: { kind: 'token', name: 'sm' } },
+          opacity: 50,
+          layout: { padding: { top: 20 }, gap: { column: 8 } },
+        },
+        tokens,
+      ),
+    ).toEqual({
+      'font-size': '18px',
+      'text-align': 'center',
+      color: '#BE123C',
+      'border-width': '2px',
+      'border-style': 'solid',
+      'box-shadow': '0 1px 3px 0 rgb(0 0 0 / 0.1)',
+      opacity: '0.5',
+      'padding-top': '20px',
+      'column-gap': '8px',
+    });
+    expect(optimisticCss({ effects: {} }, tokens)).toEqual({ 'box-shadow': 'none' });
+    expect(optimisticCss({ stroke: { kind: 'none' } }, tokens)).toEqual({ 'border-style': 'none' });
+  });
+});
+
+describe('spacing', () => {
+  it('names the Tailwind token a value lands on', () => {
+    expect(spacingToken('pt', 16, 4)).toBe('pt-4');
+    expect(spacingToken('pt', 14, 4)).toBe('pt-3.5');
+    expect(spacingToken('pt', 13, 4)).toBe('pt-[13px]');
+    expect(spacingToken('pt', 1, 4)).toBe('pt-px');
+    expect(spacingToken('pt', 0, 4)).toBe('pt-0');
+    expect(spacingLabel(16, 'top', style({}))).toBe('16 · pt-4');
+    expect(spacingLabel(8, 'column', style({}))).toBe('8 · gap-x-2');
+    expect(spacingLabel(16, 'top', style({ adapter: 'inline' }))).toBe('16px');
+  });
+
+  it('snaps drags to the spacing step unless fine, and grows padding inward', () => {
+    expect(snapSpacing(17, 4, false)).toBe(16);
+    expect(snapSpacing(17, 4, true)).toBe(17);
+    expect(snapSpacing(-5, 4, false)).toBe(0);
+    expect(draggedSpacing(16, 'top', { x: 0, y: 9 }, 4, false)).toBe(24);
+    expect(draggedSpacing(16, 'bottom', { x: 0, y: 9 }, 4, false)).toBe(8);
+    expect(draggedSpacing(16, 'right', { x: -3, y: 0 }, 4, true)).toBe(19);
+    expect(draggedSpacing(8, 'column', { x: 5, y: 0 }, 4, false)).toBe(12);
+  });
+
+  it('lays padding bands inside the box and gap slots between children', () => {
+    const box = { left: 0, top: 0, width: 100, height: 40 };
+    expect(paddingBands(box, { top: 4, right: 8, bottom: 6, left: 10 })).toEqual({
+      top: { left: 0, top: 0, width: 100, height: 4 },
+      right: { left: 92, top: 0, width: 8, height: 40 },
+      bottom: { left: 0, top: 34, width: 100, height: 6 },
+      left: { left: 0, top: 0, width: 10, height: 40 },
+    });
+    expect(
+      gapSlots([
+        { left: 0, top: 0, width: 40, height: 20 },
+        { left: 48, top: 0, width: 40, height: 20 },
+        { left: 0, top: 30, width: 40, height: 20 },
+      ]),
+    ).toEqual([
+      { axis: 'column', rect: { left: 40, top: 0, width: 8, height: 20 } },
+      { axis: 'row', rect: { left: 0, top: 20, width: 88, height: 10 } },
+    ]);
   });
 });

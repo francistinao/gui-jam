@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { expect, type Locator, type Page, test } from '@playwright/test';
 import { GJD_BINARY, requireDaemonBinary, stopDaemon } from './support/daemon.js';
 import {
+  dragPadding,
   dragPanel,
   editFoundText,
   editText,
@@ -347,6 +348,17 @@ for (const bundler of BUNDLERS) {
       await open(page, next.url);
       await chooseTool(page, 'Select');
       await pickThemeColor(page, {
+        element: page.getByRole('button', { name: 'Order now' }),
+        file: 'app/components/OrderButton.tsx',
+        path: ORDER_BUTTON,
+      });
+    });
+    test('dragging a padding handle writes the shorter padding tokens and Undo restores them', async ({
+      page,
+    }) => {
+      await open(page, next.url);
+      await chooseTool(page, 'Select');
+      await dragPadding(page, {
         element: page.getByRole('button', { name: 'Order now' }),
         file: 'app/components/OrderButton.tsx',
         path: ORDER_BUTTON,

@@ -4,6 +4,7 @@ import type {
   FinetuneProps,
   GenerateDone,
   RadiusValue,
+  ShadowValue,
   StyleGroup,
   StyleToken,
   TextPlace,
@@ -20,9 +21,10 @@ export interface Range {
 export const RADIUS_RANGE: Range = { min: 0, max: 999 };
 export const OPACITY_RANGE: Range = { min: 0, max: 100 };
 
-const WRITABLE: ReadonlySet<StyleGroup> = new Set<StyleGroup>(['radius', 'fill']);
+const ALWAYS_OPEN: ReadonlySet<StyleGroup> = new Set<StyleGroup>(['layout', 'text', 'opacity']);
 
 const SECTION_ORDER: readonly StyleGroup[] = [
+  'layout',
   'radius',
   'fill',
   'stroke',
@@ -109,10 +111,10 @@ export function panelSections(style: ElementStyle): PanelSection[] {
   return SECTION_ORDER.flatMap((group): PanelSection[] => {
     if (group === 'text' && TEXTLESS_TAGS.has(style.tag)) return [];
     const tokens = style.tokens.filter((token) => token.group === group);
-    const writable = WRITABLE.has(group) && !dynamic;
-    if (tokens.length === 0) return writable ? [{ group, mode: 'add', tokens }] : [];
-    const editable = writable && tokens.some((token) => token.editable);
-    return [{ group, mode: editable ? 'edit' : 'readonly', tokens }];
+    if (dynamic) return tokens.length === 0 ? [] : [{ group, mode: 'readonly', tokens }];
+    if (ALWAYS_OPEN.has(group)) return [{ group, mode: 'edit', tokens }];
+    if (tokens.length === 0) return [{ group, mode: 'add', tokens }];
+    return [{ group, mode: tokens.some((token) => token.editable) ? 'edit' : 'readonly', tokens }];
   });
 }
 
@@ -861,9 +863,12 @@ export function followedSrc(
   return { src: `${selection.file}:${line}:${selection.column}`, touched };
 }
 
-export interface DraftValues {
-  fill?: FillValue;
-  radius?: RadiusValue;
+export type StyleDraft = Pick<
+  FinetuneProps,
+  'fill' | 'radius' | 'text' | 'stroke' | 'effects' | 'opacity' | 'layout'
+>;
+
+export interface Draft extends StyleDraft {
   content?: Record<number, string>;
   source?: { place: TextPlace; value: string };
 }
@@ -875,13 +880,15 @@ export function shownText(text: string | null): string | undefined {
   return collapsed ? [...collapsed].slice(0, MAX_SHOWN_TEXT).join('') : undefined;
 }
 
-export function finetuneProps({ fill, radius, content, source }: DraftValues): FinetuneProps {
+export function finetuneProps({ content, source, ...groups }: Draft): FinetuneProps {
   const [first, ...rest] = Object.entries(content ?? {})
     .map(([run, value]) => ({ run: Number(run), value }))
     .sort((a, b) => a.run - b.run);
+  const set = Object.fromEntries(
+    Object.entries(groups).filter(([, value]) => value !== undefined),
+  ) as StyleDraft;
   return {
-    ...(fill ? { fill } : {}),
-    ...(radius ? { radius } : {}),
+    ...set,
     ...(first ? { content: [first, ...rest] } : {}),
     ...(source
       ? {
@@ -906,4 +913,353 @@ export function keyedParts<T>(parts: readonly T[]): { key: string; part: T }[] {
     keyed.push({ key: `${base}#${count}`, part });
   }
   return keyed;
+}
+
+export type Side = 'top' | 'right' | 'bottom' | 'left';
+export const SIDES: readonly Side[] = ['top', 'right', 'bottom', 'left'];
+export type TextAlign = 'left' | 'center' | 'right' | 'justify';
+export type Flow = 'row' | 'column' | 'grid';
+
+export interface Shadow {
+  x: number;
+  y: number;
+  blur: number;
+  spread: number;
+  hex: string;
+  opacity: number;
+}
+
+export interface Current {
+  fill: HexColor | null;
+  radiusPx: number | null;
+  color: HexColor | null;
+  fontSize: number | null;
+  fontWeight: number | null;
+  lineHeight: number | null;
+  letterSpacing: number;
+  align: TextAlign;
+  border: { width: number; style: string; color: HexColor | null };
+  shadows: { drop: Shadow | null; inner: Shadow | null };
+  opacity: number;
+  padding: Record<Side, number>;
+  gap: { row: number; column: number };
+  flow: Flow | null;
+}
+
+export type ComputedLike = Pick<
+  CSSStyleDeclaration,
+  | 'backgroundColor'
+  | 'borderTopLeftRadius'
+  | 'color'
+  | 'fontSize'
+  | 'fontWeight'
+  | 'lineHeight'
+  | 'letterSpacing'
+  | 'textAlign'
+  | 'borderTopWidth'
+  | 'borderTopStyle'
+  | 'borderTopColor'
+  | 'boxShadow'
+  | 'opacity'
+  | 'paddingTop'
+  | 'paddingRight'
+  | 'paddingBottom'
+  | 'paddingLeft'
+  | 'rowGap'
+  | 'columnGap'
+  | 'display'
+  | 'flexDirection'
+>;
+
+function pixels(css: string): number | null {
+  const value = Number.parseFloat(css);
+  return Number.isFinite(value) ? value : null;
+}
+
+function rounded(value: number, places = 2): number {
+  const scale = 10 ** places;
+  return Math.round(value * scale) / scale;
+}
+
+function topLevel(css: string, separator: string): string[] {
+  const parts: string[] = [];
+  let depth = 0;
+  let part = '';
+  for (const char of css) {
+    if (char === '(') depth += 1;
+    if (char === ')') depth -= 1;
+    if (depth === 0 && (separator === ' ' ? /\s/.test(char) : char === separator)) {
+      if (part.trim()) parts.push(part.trim());
+      part = '';
+    } else part += char;
+  }
+  if (part.trim()) parts.push(part.trim());
+  return parts;
+}
+
+function colorOf(word: string): HexColor | null {
+  const hex = parseHex(word);
+  if (hex && word.trim().startsWith('#')) return { hex, opacity: 100 };
+  return hexOfComputedColor(word);
+}
+
+export function parseShadows(css: string): Current['shadows'] {
+  const shadows: Current['shadows'] = { drop: null, inner: null };
+  if (!css || css === 'none') return shadows;
+  for (const layer of topLevel(css, ',')) {
+    const words = topLevel(layer, ' ');
+    const inset = words.includes('inset');
+    const color = words.map(colorOf).find((found) => found !== null) ?? {
+      hex: '#000000',
+      opacity: 100,
+    };
+    const lengths = words
+      .filter((word) => /^-?[\d.]+(px)?$/.test(word))
+      .map((word) => Number.parseFloat(word));
+    const [x = 0, y = 0, blur = 0, spread = 0] = lengths;
+    if (color.opacity === 0 || (x === 0 && y === 0 && blur === 0)) continue;
+    const shadow = { x, y, blur, spread, ...color };
+    if (inset) shadows.inner ??= shadow;
+    else shadows.drop ??= shadow;
+  }
+  return shadows;
+}
+
+export function currentOf(computed: ComputedLike): Current {
+  const fontSize = pixels(computed.fontSize);
+  const spacing = pixels(computed.letterSpacing);
+  const align = computed.textAlign;
+  const flow: Flow | null =
+    computed.display === 'grid' || computed.display === 'inline-grid'
+      ? 'grid'
+      : computed.display === 'flex' || computed.display === 'inline-flex'
+        ? computed.flexDirection.startsWith('column')
+          ? 'column'
+          : 'row'
+        : null;
+  return {
+    fill: hexOfComputedColor(computed.backgroundColor),
+    radiusPx: pixels(computed.borderTopLeftRadius),
+    color: hexOfComputedColor(computed.color),
+    fontSize,
+    fontWeight: pixels(computed.fontWeight),
+    lineHeight: pixels(computed.lineHeight),
+    letterSpacing: spacing && fontSize ? rounded(spacing / fontSize, 3) : 0,
+    align:
+      align === 'center' || align === 'justify'
+        ? align
+        : align === 'right' || align === 'end'
+          ? 'right'
+          : 'left',
+    border: {
+      width: pixels(computed.borderTopWidth) ?? 0,
+      style: computed.borderTopStyle,
+      color: hexOfComputedColor(computed.borderTopColor),
+    },
+    shadows: parseShadows(computed.boxShadow),
+    opacity: Math.round((pixels(computed.opacity) ?? 1) * 100),
+    padding: {
+      top: pixels(computed.paddingTop) ?? 0,
+      right: pixels(computed.paddingRight) ?? 0,
+      bottom: pixels(computed.paddingBottom) ?? 0,
+      left: pixels(computed.paddingLeft) ?? 0,
+    },
+    gap: { row: pixels(computed.rowGap) ?? 0, column: pixels(computed.columnGap) ?? 0 },
+    flow,
+  };
+}
+
+function fillCss(fill: FillValue, style: ElementStyle | null): string | null {
+  switch (fill.kind) {
+    case 'hex':
+      return cssColor({ hex: fill.hex, opacity: fill.opacity });
+    case 'token':
+      return style?.theme.colors.find((color) => color.name === fill.name)?.value ?? null;
+    case 'none':
+      return 'transparent';
+  }
+}
+
+function radiusCss(radius: RadiusValue, style: ElementStyle | null): string | null {
+  switch (radius.kind) {
+    case 'px':
+      return `${radius.px}px`;
+    case 'full':
+      return '9999px';
+    case 'token': {
+      const px = style?.theme.radii.find((entry) => entry.name === radius.name)?.px;
+      return px === undefined ? null : `${px}px`;
+    }
+  }
+}
+
+export function shadowCss(shadow: ShadowValue, inset: boolean, style: ElementStyle | null): string {
+  if (shadow.kind === 'token') {
+    return (
+      style?.theme.shadows.find((entry) => entry.name === shadow.name && entry.inset === inset)
+        ?.value ?? 'none'
+    );
+  }
+  const color = cssColor({ hex: shadow.hex, opacity: shadow.opacity });
+  const css = `${shadow.x}px ${shadow.y}px ${shadow.blur}px ${shadow.spread}px ${color}`;
+  return inset ? `inset ${css}` : css;
+}
+
+export function optimisticCss(draft: Draft, style: ElementStyle | null): Record<string, string> {
+  const css: Record<string, string> = {};
+  const put = (property: string, value: string | null) => {
+    if (value !== null) css[property] = value;
+  };
+  if (draft.fill) put('background-color', fillCss(draft.fill, style));
+  if (draft.radius) put('border-radius', radiusCss(draft.radius, style));
+  const { text, stroke, effects, layout } = draft;
+  if (text) {
+    if (text.family) put('font-family', `var(--font-${text.family})`);
+    if (text.weight !== undefined) put('font-weight', String(text.weight));
+    if (text.size !== undefined) put('font-size', `${text.size}px`);
+    if (text.lineHeight !== undefined) put('line-height', `${text.lineHeight}px`);
+    if (text.letterSpacing !== undefined) put('letter-spacing', `${text.letterSpacing}em`);
+    if (text.align) put('text-align', text.align);
+    if (text.color) put('color', fillCss(text.color, style));
+  }
+  if (stroke?.kind === 'none') put('border-style', 'none');
+  if (stroke?.kind === 'set') {
+    if (stroke.width !== undefined) {
+      put('border-width', `${stroke.width}px`);
+      if (!stroke.style) put('border-style', 'solid');
+    }
+    if (stroke.style) put('border-style', stroke.style);
+    if (stroke.color) put('border-color', fillCss(stroke.color, style));
+  }
+  if (effects) {
+    const layers = [
+      effects.drop ? shadowCss(effects.drop, false, style) : null,
+      effects.inner ? shadowCss(effects.inner, true, style) : null,
+    ].filter((layer): layer is string => layer !== null && layer !== 'none');
+    put('box-shadow', layers.length > 0 ? layers.join(', ') : 'none');
+  }
+  if (draft.opacity !== undefined) put('opacity', String(draft.opacity / 100));
+  for (const side of SIDES) {
+    const value = layout?.padding?.[side];
+    if (value !== undefined) put(`padding-${side}`, `${value}px`);
+  }
+  if (layout?.gap?.row !== undefined) put('row-gap', `${layout.gap.row}px`);
+  if (layout?.gap?.column !== undefined) put('column-gap', `${layout.gap.column}px`);
+  return css;
+}
+
+function trimmed(value: number): string {
+  return String(rounded(value, 3));
+}
+
+export function spacingToken(prefix: string, px: number, step: number): string {
+  if (px === 0) return `${prefix}-0`;
+  if (px === 1) return `${prefix}-px`;
+  const steps = px / step;
+  return Number.isInteger(rounded(steps * 2, 3))
+    ? `${prefix}-${trimmed(steps)}`
+    : `${prefix}-[${trimmed(px)}px]`;
+}
+
+const SIDE_PREFIX: Record<Side, string> = { top: 'pt', right: 'pr', bottom: 'pb', left: 'pl' };
+
+export function spacingLabel(
+  px: number,
+  target: Side | 'row' | 'column',
+  style: ElementStyle,
+): string {
+  if (style.adapter !== 'tailwind') return `${trimmed(px)}px`;
+  const prefix = target === 'row' ? 'gap-y' : target === 'column' ? 'gap-x' : SIDE_PREFIX[target];
+  return `${trimmed(px)} · ${spacingToken(prefix, px, style.theme.spacing || 4)}`;
+}
+
+export const SPACING_RANGE: Range = { min: 0, max: 999 };
+
+export function snapSpacing(raw: number, step: number, fine: boolean): number {
+  const snapped = fine || step <= 0 ? Math.round(raw) : Math.round(raw / step) * step;
+  return clamp(snapped, SPACING_RANGE);
+}
+
+export function draggedSpacing(
+  start: number,
+  side: Side | 'row' | 'column',
+  delta: { x: number; y: number },
+  step: number,
+  fine: boolean,
+): number {
+  const moved =
+    side === 'top' || side === 'row'
+      ? delta.y
+      : side === 'bottom'
+        ? -delta.y
+        : side === 'left' || side === 'column'
+          ? delta.x
+          : -delta.x;
+  return snapSpacing(start + moved, step, fine);
+}
+
+export const OPPOSITE: Record<Side, Side> = {
+  top: 'bottom',
+  bottom: 'top',
+  left: 'right',
+  right: 'left',
+};
+
+export function paddingBands(box: Rect, padding: Record<Side, number>): Record<Side, Rect> {
+  return {
+    top: { left: box.left, top: box.top, width: box.width, height: padding.top },
+    bottom: {
+      left: box.left,
+      top: box.top + box.height - padding.bottom,
+      width: box.width,
+      height: padding.bottom,
+    },
+    left: { left: box.left, top: box.top, width: padding.left, height: box.height },
+    right: {
+      left: box.left + box.width - padding.right,
+      top: box.top,
+      width: padding.right,
+      height: box.height,
+    },
+  };
+}
+
+export interface GapSlot {
+  axis: 'row' | 'column';
+  rect: Rect;
+}
+
+export function gapSlots(children: readonly Rect[]): GapSlot[] {
+  const slots: GapSlot[] = [];
+  for (let index = 1; index < children.length; index += 1) {
+    const before = children[index - 1];
+    const after = children[index];
+    if (!before || !after) continue;
+    const top = Math.max(before.top, after.top);
+    const bottom = Math.min(before.top + before.height, after.top + after.height);
+    if (after.left >= before.left + before.width - 1 && bottom > top) {
+      slots.push({
+        axis: 'column',
+        rect: {
+          left: before.left + before.width,
+          top,
+          width: after.left - (before.left + before.width),
+          height: bottom - top,
+        },
+      });
+    } else if (after.top >= before.top + before.height - 1) {
+      const start = Math.min(before.left, after.left);
+      const end = Math.max(before.left + before.width, after.left + after.width);
+      slots.push({
+        axis: 'row',
+        rect: {
+          left: start,
+          top: before.top + before.height,
+          width: end - start,
+          height: after.top - (before.top + before.height),
+        },
+      });
+    }
+  }
+  return slots;
 }

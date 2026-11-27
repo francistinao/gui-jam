@@ -1,8 +1,10 @@
+use std::num::NonZeroU64;
+
 use gjd_core::contracts::{
-    ElementStyle, FillValue, FillValueHex, FillValueName, FinetuneProps, RadiusValue,
-    RadiusValueName,
+    ElementStyle, FillValue, FillValueHex, FillValueName, FinetuneProps, LayoutValue, PaddingValue,
+    RadiusValue, RadiusValueName, TextValue,
 };
-use gjd_core::tailwind::PALETTE;
+use gjd_core::tailwind::{FONT_WEIGHTS, PALETTE};
 
 const FILLER: [&str; 30] = [
     "make",
@@ -47,6 +49,24 @@ const FULL_RADIUS: [&str; 7] = [
 ];
 const NO_RADIUS: [&str; 4] = ["square", "squared", "sharp", "sharp-cornered"];
 const RADIUS_WORDS: [&str; 3] = ["radius", "corners", "corner"];
+const PADDING_WORDS: [&str; 1] = ["padding"];
+const WEIGHT_WORDS: [&str; 3] = ["weight", "font-weight", "font"];
+
+fn weight_word(word: &str) -> Option<i64> {
+    let word = word.strip_prefix("font-").unwrap_or(word);
+    FONT_WEIGHTS
+        .iter()
+        .find(|(name, _)| *name == word && *name != "black")
+        .map(|(_, weight)| *weight)
+}
+
+fn weight(value: i64) -> Option<TextValue> {
+    let weight = NonZeroU64::new(u64::try_from(value).ok()?)?;
+    Some(TextValue {
+        weight: Some(weight),
+        ..TextValue::default()
+    })
+}
 
 fn words(prompt: &str) -> Vec<String> {
     prompt
@@ -120,6 +140,8 @@ pub fn parse_property_edits(prompt: &str, style: &ElementStyle) -> Option<Finetu
     let words = words(prompt);
     let mut fill = None;
     let mut radius = None;
+    let mut text = None;
+    let mut padding = None;
     let mut index = 0;
     while let Some(word) = words.get(index).map(String::as_str) {
         let next = words.get(index + 1).map(String::as_str);
@@ -127,13 +149,22 @@ pub fn parse_property_edits(prompt: &str, style: &ElementStyle) -> Option<Finetu
             .checked_sub(1)
             .and_then(|at| words.get(at))
             .map(String::as_str);
+        let near = |list: &[&str]| {
+            next.is_some_and(|next| list.contains(&next))
+                || previous.is_some_and(|previous| list.contains(&previous))
+        };
         if let Some(px) = pixels(word) {
-            let about_radius = next.is_some_and(|next| RADIUS_WORDS.contains(&next))
-                || previous.is_some_and(|previous| RADIUS_WORDS.contains(&previous));
-            if !about_radius {
+            if near(&RADIUS_WORDS) {
+                set(&mut radius, radius_of(px, style)?)?;
+            } else if near(&PADDING_WORDS) {
+                set(&mut padding, f64::from(u16::try_from(px).ok()?))?;
+            } else if near(&WEIGHT_WORDS) && px % 100 == 0 && (100..=900).contains(&px) {
+                set(&mut text, weight(px)?)?;
+            } else {
                 return None;
             }
-            set(&mut radius, radius_of(px, style)?)?;
+        } else if let Some(value) = weight_word(word) {
+            set(&mut text, weight(value)?)?;
         } else if let Some(value) = color(word, style) {
             set(&mut fill, value)?;
         } else if FULL_RADIUS.contains(&word) {
@@ -145,17 +176,33 @@ pub fn parse_property_edits(prompt: &str, style: &ElementStyle) -> Option<Finetu
                     name: RadiusValueName::try_from("none".to_owned()).ok()?,
                 },
             )?;
-        } else if !FILLER.contains(&word) && !RADIUS_WORDS.contains(&word) {
+        } else if !FILLER.contains(&word)
+            && !RADIUS_WORDS.contains(&word)
+            && !PADDING_WORDS.contains(&word)
+            && !WEIGHT_WORDS.contains(&word)
+        {
             return None;
         }
         index += 1;
     }
-    (fill.is_some() || radius.is_some()).then_some(FinetuneProps {
-        fill,
-        radius,
-        content: Vec::new(),
-        source: None,
-    })
+    let layout = padding.map(|px| LayoutValue {
+        padding: Some(PaddingValue {
+            top: Some(px),
+            right: Some(px),
+            bottom: Some(px),
+            left: Some(px),
+        }),
+        gap: None,
+    });
+    (fill.is_some() || radius.is_some() || text.is_some() || layout.is_some()).then_some(
+        FinetuneProps {
+            fill,
+            radius,
+            text,
+            layout,
+            ..Default::default()
+        },
+    )
 }
 
 #[cfg(test)]
@@ -212,12 +259,40 @@ mod tests {
     }
 
     #[test]
+    fn reads_weights_and_padding_it_can_write_exactly() {
+        assert_eq!(
+            parsed("make it bold"),
+            Some(json!({ "text": { "weight": 700 } }))
+        );
+        assert_eq!(
+            parsed("font-semibold"),
+            Some(json!({ "text": { "weight": 600 } }))
+        );
+        assert_eq!(
+            parsed("font weight 300"),
+            Some(json!({ "text": { "weight": 300 } }))
+        );
+        assert_eq!(
+            parsed("padding 16px"),
+            Some(
+                json!({ "layout": { "padding": { "top": 16.0, "right": 16.0, "bottom": 16.0, "left": 16.0 } } })
+            )
+        );
+        assert_eq!(
+            parsed("black"),
+            Some(json!({ "fill": { "kind": "token", "name": "black" } }))
+        );
+    }
+
+    #[test]
     fn leaves_anything_else_to_the_model() {
         for prompt in [
             "make it blue with a soft shadow",
             "make it feel premium",
             "blue or red",
-            "padding 8px",
+            "more padding",
+            "padding 8px and a shadow",
+            "bolder",
             "what color is this?",
             "",
         ] {

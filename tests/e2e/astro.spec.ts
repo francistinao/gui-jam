@@ -7,6 +7,7 @@ import { type AstroServer, startAstro } from './support/astro.js';
 import { GJD_BINARY, requireDaemonBinary, stopDaemon } from './support/daemon.js';
 import { openFixture } from './support/fixture.js';
 import {
+  dragPadding,
   dragPanel,
   editFoundText,
   editText,
@@ -345,6 +346,17 @@ test('the Fill picker applies a theme color and Undo restores it', async ({ page
   await openFixture(page, astro.url);
   await chooseTool(page, 'Select');
   await pickThemeColor(page, {
+    element: page.getByRole('button', { name: 'Order now' }),
+    file: 'src/components/OrderButton.astro',
+    path: ORDER_BUTTON,
+  });
+});
+test('dragging a padding handle writes the shorter padding tokens and Undo restores them', async ({
+  page,
+}) => {
+  await openFixture(page, astro.url);
+  await chooseTool(page, 'Select');
+  await dragPadding(page, {
     element: page.getByRole('button', { name: 'Order now' }),
     file: 'src/components/OrderButton.astro',
     path: ORDER_BUTTON,

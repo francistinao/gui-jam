@@ -436,6 +436,29 @@ export async function pickThemeColor(page: Page, component: Component): Promise<
   await expect.poll(() => readFile(component.path, 'utf8')).toBe(before);
 }
 
+export async function dragPadding(page: Page, component: Component): Promise<void> {
+  const before = await readFile(component.path, 'utf8');
+  await component.element.click();
+  const panel = finetunePanel(page, component);
+  const bottom = page.getByRole('slider', { name: 'Padding bottom' });
+  await expect(bottom).toHaveAttribute('aria-valuetext', '12 · pb-3', { timeout: READY_MS });
+
+  await bottom.focus();
+  await page.keyboard.press('ArrowUp');
+  await page.keyboard.press('ArrowUp');
+
+  await expect(bottom).toHaveAttribute('aria-valuetext', '20 · pb-5');
+  await expect(component.element).toHaveCSS('padding-bottom', '20px', { timeout: READY_MS });
+  expect(await readFile(component.path, 'utf8')).toBe(before);
+  await panel.getByRole('button', { name: 'Apply' }).click();
+
+  const toast = applied(page, component);
+  await expect(toast).toBeVisible();
+  expect(await readFile(component.path, 'utf8')).toContain('px-6 pt-3 pb-5');
+  await toast.getByRole('button', { name: 'Undo' }).click();
+  await expect.poll(() => readFile(component.path, 'utf8')).toBe(before);
+}
+
 export interface FoundText extends Component {
   caption: string;
 }

@@ -5,6 +5,7 @@ import { Button } from './figui/button';
 import { JobBadges } from './JobBadges';
 import type { Rect } from './model';
 import { PromptPanel } from './PromptPanel';
+import { SpacingHandles } from './SpacingHandles';
 import { type Store, useStore } from './store';
 
 function Outline({ rect, dashed }: { rect: Rect; dashed?: boolean }) {
@@ -72,6 +73,7 @@ export function App({ store, controller }: { store: Store<WidgetState>; controll
       {group.map((rect) => (
         <Outline key={`${rect.src}@${rect.left},${rect.top}`} rect={rect} dashed />
       ))}
+      <SpacingHandles store={store} controller={controller} />
       {mode === 'prompt' ? (
         <PromptPanel store={store} controller={controller} />
       ) : (

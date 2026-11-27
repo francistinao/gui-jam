@@ -1,18 +1,16 @@
 import type { ElementStyle, StyleGroup, StyleToken } from '@guijam/contracts-ts';
-import { Minus, Pencil } from 'lucide-react';
-import { useEffect, useState } from 'react';
-import { ColorPicker } from './ColorPicker';
+import { Pencil } from 'lucide-react';
+import type { ReactNode } from 'react';
 import { ContentEditor, hasTextContent } from './ContentEditor';
 import type { Controller, Draft, WidgetState } from './controller';
 import { Button } from './figui/button';
 import { InputGroup, InputGroupAddon } from './figui/input-group';
 import { NumericInput, NumericInputRoot, NumericScrubArea } from './figui/numeric-input';
 import { Tab, Tabs, TabsList, TabsPanel } from './figui/tabs';
-import { TextInput } from './figui/text-input';
 import {
+  type Current,
   clamp,
   fillOfToken,
-  OPACITY_RANGE,
   type PanelSection,
   panelSections,
   parseHex,
@@ -20,10 +18,21 @@ import {
   radiusOfToken,
 } from './model';
 import { CodeChanges, Popover, PopoverHeader, SKETCH_LABEL } from './Popover';
+import {
+  ColorField,
+  type EditorProps,
+  EffectsEditor,
+  LayoutEditor,
+  OpacityEditor,
+  otherTokens,
+  StrokeEditor,
+  TextEditor,
+} from './StyleEditors';
 import { type Store, useStore } from './store';
 import { TicketField } from './TicketField';
 
 const GROUP_LABELS: Record<StyleGroup, string> = {
+  layout: 'Layout',
   radius: 'Radius',
   fill: 'Fill',
   stroke: 'Stroke',
@@ -43,37 +52,7 @@ function baseToken(tokens: readonly StyleToken[]): StyleToken | undefined {
   return tokens.find((token) => token.editable) ?? tokens[0];
 }
 
-function HexField({ value, onCommit }: { value: string; onCommit(hex: string): void }) {
-  const [text, setText] = useState(value.slice(1));
-  useEffect(() => setText(value.slice(1)), [value]);
-  return (
-    <TextInput
-      aria-label="Fill hex"
-      value={text}
-      className="w-16 uppercase"
-      onChange={(event) => {
-        setText(event.target.value);
-        const hex = parseHex(event.target.value);
-        if (hex) onCommit(hex);
-      }}
-      onBlur={() => {
-        if (!parseHex(text)) setText(value.slice(1));
-      }}
-    />
-  );
-}
-
-function RadiusEditor({
-  style,
-  draft,
-  current,
-  controller,
-}: {
-  style: ElementStyle;
-  draft: Draft;
-  current: WidgetState['current'];
-  controller: Controller;
-}) {
+function RadiusEditor({ style, draft, current, controller }: EditorProps) {
   const base = baseToken(style.tokens.filter((token) => token.group === 'radius'));
   const radius = draft.radius;
   const px =
@@ -145,17 +124,7 @@ function RadiusEditor({
   );
 }
 
-function FillEditor({
-  style,
-  draft,
-  current,
-  controller,
-}: {
-  style: ElementStyle;
-  draft: Draft;
-  current: WidgetState['current'];
-  controller: Controller;
-}) {
+function FillEditor({ style, draft, current, controller }: EditorProps) {
   const fill = draft.fill;
   const base = baseToken(style.tokens.filter((token) => token.group === 'fill'));
   const shown = fillOfToken(base) ?? current?.fill ?? null;
@@ -168,57 +137,19 @@ function FillEditor({
         ? (themeValue(fill.name) ?? DEFAULT_FILL)
         : (shown?.hex ?? DEFAULT_FILL);
   const opacity = fill?.kind === 'hex' ? fill.opacity : (shown?.opacity ?? 100);
-  const removed = fill?.kind === 'none';
   const tokenLabel =
     fill === undefined ? base?.themeToken : fill.kind === 'token' ? fill.name : undefined;
   return (
     <div className="flex flex-col gap-2">
-      <div className="flex items-center gap-2">
-        <InputGroup className={removed ? 'opacity-50' : undefined}>
-          <InputGroupAddon>
-            <ColorPicker
-              hex={hex}
-              opacity={opacity}
-              colors={style.theme.colors}
-              token={tokenLabel}
-              onColor={(next, alpha) =>
-                controller.edit({ fill: { kind: 'hex', hex: next, opacity: alpha } })
-              }
-              onToken={(name) => controller.edit({ fill: { kind: 'token', name } })}
-            />
-          </InputGroupAddon>
-          <HexField
-            value={hex}
-            onCommit={(next) => controller.edit({ fill: { kind: 'hex', hex: next, opacity } })}
-          />
-          <NumericInputRoot
-            value={opacity}
-            min={OPACITY_RANGE.min}
-            max={OPACITY_RANGE.max}
-            onValueChange={(next) => {
-              if (next !== null) {
-                controller.edit({
-                  fill: { kind: 'hex', hex, opacity: clamp(Math.round(next), OPACITY_RANGE) },
-                });
-              }
-            }}
-          >
-            <NumericInput aria-label="Fill opacity" className="w-9" />
-          </NumericInputRoot>
-          <InputGroupAddon>%</InputGroupAddon>
-        </InputGroup>
-        {tokenLabel ? (
-          <span className="typography-body-medium text-grey-500">{tokenLabel}</span>
-        ) : null}
-        <Button
-          variant="ghost"
-          size="icon"
-          aria-label="Remove fill"
-          onClick={() => controller.edit({ fill: { kind: 'none' } })}
-        >
-          <Minus aria-hidden="true" />
-        </Button>
-      </div>
+      <ColorField
+        label="Fill"
+        style={style}
+        color={{ hex, opacity }}
+        token={tokenLabel}
+        removed={fill?.kind === 'none'}
+        onChange={(next) => controller.edit({ fill: next })}
+        onRemove={() => controller.edit({ fill: { kind: 'none' } })}
+      />
       {style.theme.colors.length > 0 ? (
         <div className="flex flex-wrap gap-1">
           {style.theme.colors.map((color) => (
@@ -239,6 +170,44 @@ function FillEditor({
   );
 }
 
+const EDITORS: Record<StyleGroup, (props: EditorProps) => ReactNode> = {
+  layout: LayoutEditor,
+  radius: RadiusEditor,
+  fill: FillEditor,
+  stroke: StrokeEditor,
+  text: TextEditor,
+  effects: EffectsEditor,
+  opacity: OpacityEditor,
+};
+
+function added(group: StyleGroup, style: ElementStyle, current: Current | null): Draft {
+  switch (group) {
+    case 'fill':
+      return { fill: { kind: 'hex', hex: current?.fill?.hex ?? DEFAULT_FILL, opacity: 100 } };
+    case 'radius':
+      return { radius: { kind: 'px', px: current?.radiusPx || DEFAULT_RADIUS_PX } };
+    case 'stroke':
+      return {
+        stroke: {
+          kind: 'set',
+          width: 1,
+          style: 'solid',
+          color: { kind: 'hex', hex: '#000000', opacity: 100 },
+        },
+      };
+    case 'effects':
+      return {
+        effects: {
+          drop: style.theme.shadows.some((entry) => entry.name === 'sm' && !entry.inset)
+            ? { kind: 'token', name: 'sm' }
+            : { kind: 'custom', x: 0, y: 4, blur: 8, spread: 0, hex: '#000000', opacity: 20 },
+        },
+      };
+    default:
+      return {};
+  }
+}
+
 function Section({
   section,
   style,
@@ -249,12 +218,11 @@ function Section({
   section: PanelSection;
   style: ElementStyle;
   draft: Draft;
-  current: WidgetState['current'];
+  current: Current | null;
   controller: Controller;
 }) {
   const label = GROUP_LABELS[section.group];
-  const drafted =
-    (section.group === 'fill' && draft.fill) || (section.group === 'radius' && draft.radius);
+  const drafted = section.group in draft && draft[section.group as keyof Draft] !== undefined;
   if (section.mode === 'readonly') {
     return (
       <section aria-label={label} className="flex items-start gap-3 py-2">
@@ -273,24 +241,24 @@ function Section({
           variant="ghost"
           size="icon"
           aria-label={`Add ${label.toLowerCase()}`}
-          onClick={() =>
-            controller.edit(
-              section.group === 'fill'
-                ? { fill: { kind: 'hex', hex: current?.fill?.hex ?? DEFAULT_FILL, opacity: 100 } }
-                : { radius: { kind: 'px', px: current?.radiusPx || DEFAULT_RADIUS_PX } },
-            )
-          }
+          onClick={() => controller.edit(added(section.group, style, current))}
         >
           +
         </Button>
       </section>
     );
   }
-  const Editor = section.group === 'fill' ? FillEditor : RadiusEditor;
+  const Editor = EDITORS[section.group];
+  const others = otherTokens(style, section.group);
   return (
     <section aria-label={label} className="flex flex-col gap-2 py-2">
       <h3 className="typography-body-medium font-[500]">{label}</h3>
       <Editor style={style} draft={draft} current={current} controller={controller} />
+      {others.length > 0 ? (
+        <code className="typography-body-small break-all text-grey-500">
+          {others.map((token) => token.token).join(' ')}
+        </code>
+      ) : null}
     </section>
   );
 }

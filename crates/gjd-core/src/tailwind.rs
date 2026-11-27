@@ -49,22 +49,45 @@ const CORNERS: [(&str, &str); 14] = [
 const BORDER_SIDES: [&str; 8] = ["x", "y", "t", "r", "b", "l", "s", "e"];
 const BORDER_STYLES: [&str; 6] = ["solid", "dashed", "dotted", "double", "hidden", "none"];
 const BORDER_TABLE_UTILITIES: [&str; 3] = ["spacing", "collapse", "separate"];
-const TEXT_SIZES: [&str; 13] = [
-    "xs", "sm", "base", "lg", "xl", "2xl", "3xl", "4xl", "5xl", "6xl", "7xl", "8xl", "9xl",
-];
-const FONT_WEIGHTS: [&str; 9] = [
-    "thin",
-    "extralight",
-    "light",
-    "normal",
-    "medium",
-    "semibold",
-    "bold",
-    "extrabold",
-    "black",
+pub const FONT_WEIGHTS: [(&str, i64); 9] = [
+    ("thin", 100),
+    ("extralight", 200),
+    ("light", 300),
+    ("normal", 400),
+    ("medium", 500),
+    ("semibold", 600),
+    ("bold", 700),
+    ("extrabold", 800),
+    ("black", 900),
 ];
 const FONT_FAMILIES: [&str; 3] = ["sans", "serif", "mono"];
 const SHADOW_SIZES: [&str; 8] = ["2xs", "xs", "sm", "md", "lg", "xl", "2xl", "none"];
+const INSET_SHADOW_SIZES: [&str; 4] = ["2xs", "xs", "sm", "none"];
+const TEXT_ALIGNS: [&str; 6] = ["left", "center", "right", "justify", "start", "end"];
+const LEADING: [(&str, &str); 6] = [
+    ("none", "1"),
+    ("tight", "1.25"),
+    ("snug", "1.375"),
+    ("normal", "1.5"),
+    ("relaxed", "1.625"),
+    ("loose", "2"),
+];
+const PADDING: [(&str, &str); 9] = [
+    ("p", "padding"),
+    ("px", "padding-x"),
+    ("py", "padding-y"),
+    ("pt", "padding-top"),
+    ("pr", "padding-right"),
+    ("pb", "padding-bottom"),
+    ("pl", "padding-left"),
+    ("ps", "padding-start"),
+    ("pe", "padding-end"),
+];
+const GAPS: [(&str, &str); 3] = [
+    ("gap-x-", "column-gap"),
+    ("gap-y-", "row-gap"),
+    ("gap-", "gap"),
+];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParsedToken<'t> {
@@ -136,8 +159,11 @@ pub fn classify(utility: &str, theme: &Theme) -> Option<Classified> {
     if let Some(rest) = utility.strip_prefix("shadow") {
         return shadow(rest, theme);
     }
-    if utility.starts_with("inset-shadow") {
-        return Some(classified(StyleGroup::Effects, "inset-shadow", None, None));
+    if let Some(rest) = utility.strip_prefix("inset-shadow") {
+        return match rest.strip_prefix('-') {
+            Some(value) => shadow_value(value, theme, true),
+            None => Some(classified(StyleGroup::Effects, "inset-shadow", None, None)),
+        };
     }
     if utility.starts_with("drop-shadow") {
         return Some(classified(StyleGroup::Effects, "drop-shadow", None, None));
@@ -148,7 +174,74 @@ pub fn classify(utility: &str, theme: &Theme) -> Option<Classified> {
     if let Some(value) = utility.strip_prefix("opacity-") {
         return opacity(value);
     }
-    None
+    if let Some(value) = utility.strip_prefix("leading-") {
+        return leading(value, theme);
+    }
+    if let Some(value) = utility.strip_prefix("tracking-") {
+        return tracking(value, theme);
+    }
+    if let Some((prefix, property)) = GAPS.iter().find(|(prefix, _)| utility.starts_with(prefix)) {
+        return Some(spacing(property, &utility[prefix.len()..], theme));
+    }
+    let (prefix, value) = utility.split_once('-')?;
+    let (_, property) = PADDING.iter().find(|(known, _)| *known == prefix)?;
+    Some(spacing(property, value, theme))
+}
+
+fn spacing(property: &'static str, value: &str, theme: &Theme) -> Classified {
+    let px = match value {
+        "px" => Some("1px".to_owned()),
+        _ => match arbitrary(value) {
+            Some(inner) => Some(inner.to_owned()),
+            None => value
+                .parse::<f64>()
+                .ok()
+                .filter(|steps| *steps >= 0.0)
+                .map(|steps| format!("{}px", trimmed(steps * theme.spacing()))),
+        },
+    };
+    classified(StyleGroup::Layout, property, None, px)
+}
+
+#[must_use]
+pub fn trimmed(value: f64) -> String {
+    let rounded = (value * 1000.0).round() / 1000.0;
+    if rounded.fract() == 0.0 {
+        format!("{rounded:.0}")
+    } else {
+        rounded.to_string()
+    }
+}
+
+fn leading(value: &str, theme: &Theme) -> Option<Classified> {
+    let found = if let Some((_, ratio)) = LEADING.iter().find(|(name, _)| *name == value) {
+        Some((*ratio).to_owned())
+    } else if let Some(inner) = arbitrary(value) {
+        Some(inner.to_owned())
+    } else {
+        let steps = value.parse::<f64>().ok()?;
+        Some(format!("{}px", trimmed(steps * theme.spacing())))
+    };
+    Some(classified(StyleGroup::Text, "line-height", None, found))
+}
+
+fn tracking(value: &str, theme: &Theme) -> Option<Classified> {
+    if let Some(em) = theme.tracking_em(value) {
+        return Some(classified(
+            StyleGroup::Text,
+            "letter-spacing",
+            Some(value),
+            Some(format!("{}em", trimmed(em))),
+        ));
+    }
+    arbitrary(value).map(|inner| {
+        classified(
+            StyleGroup::Text,
+            "letter-spacing",
+            None,
+            Some(inner.to_owned()),
+        )
+    })
 }
 
 struct ColorRef {
@@ -308,9 +401,22 @@ fn stroke(rest: &str, theme: &Theme) -> Option<Classified> {
 }
 
 fn text(value: &str, theme: &Theme) -> Option<Classified> {
+    if TEXT_ALIGNS.contains(&value) {
+        return Some(classified(
+            StyleGroup::Text,
+            "align",
+            Some(value),
+            Some(value.to_owned()),
+        ));
+    }
     let base = without_modifier(value);
-    if TEXT_SIZES.contains(&base) {
-        return Some(classified(StyleGroup::Text, "size", Some(base), None));
+    if let Some(px) = theme.text_px(base) {
+        return Some(classified(
+            StyleGroup::Text,
+            "size",
+            Some(base),
+            Some(format!("{}px", trimmed(px))),
+        ));
     }
     if let Some(inner) = arbitrary(base)
         && is_length(inner)
@@ -326,8 +432,13 @@ fn text(value: &str, theme: &Theme) -> Option<Classified> {
 }
 
 fn font(value: &str, theme: &Theme) -> Option<Classified> {
-    if FONT_WEIGHTS.contains(&value) {
-        return Some(classified(StyleGroup::Text, "weight", Some(value), None));
+    if let Some((_, weight)) = FONT_WEIGHTS.iter().find(|(name, _)| *name == value) {
+        return Some(classified(
+            StyleGroup::Text,
+            "weight",
+            Some(value),
+            Some(weight.to_string()),
+        ));
     }
     if let Some(inner) = arbitrary(value)
         && is_integer(inner)
@@ -348,14 +459,37 @@ fn shadow(rest: &str, theme: &Theme) -> Option<Classified> {
         return Some(classified(StyleGroup::Effects, "shadow", None, None));
     }
     let value = rest.strip_prefix('-')?;
-    if SHADOW_SIZES.contains(&value) {
-        return Some(classified(StyleGroup::Effects, "shadow", Some(value), None));
+    shadow_value(value, theme, false)
+}
+
+fn shadow_value(value: &str, theme: &Theme, inset: bool) -> Option<Classified> {
+    let (property, color_property, sizes) = if inset {
+        (
+            "inset-shadow",
+            "inset-shadow-color",
+            &INSET_SHADOW_SIZES[..],
+        )
+    } else {
+        ("shadow", "shadow-color", &SHADOW_SIZES[..])
+    };
+    if sizes.contains(&value) {
+        let found = if value == "none" {
+            Some("none".to_owned())
+        } else {
+            theme.shadow(value, inset).map(str::to_owned)
+        };
+        return Some(classified(
+            StyleGroup::Effects,
+            property,
+            Some(value),
+            found,
+        ));
     }
     if let Some(found) = color(value, theme) {
-        return Some(found.into_classified(StyleGroup::Effects, "shadow-color"));
+        return Some(found.into_classified(StyleGroup::Effects, color_property));
     }
     arbitrary(value)
-        .map(|inner| classified(StyleGroup::Effects, "shadow", None, Some(inner.to_owned())))
+        .map(|inner| classified(StyleGroup::Effects, property, None, Some(inner.to_owned())))
 }
 
 fn ring(rest: &str, theme: &Theme) -> Option<Classified> {
@@ -576,7 +710,12 @@ mod tests {
         );
         assert_eq!(
             summary("text-sm/6"),
-            Some((StyleGroup::Text, "size", Some("sm".to_owned()), None))
+            Some((
+                StyleGroup::Text,
+                "size",
+                Some("sm".to_owned()),
+                Some("14px".to_owned())
+            ))
         );
         assert_eq!(
             summary("text-[15px]"),
@@ -588,22 +727,127 @@ mod tests {
                 StyleGroup::Text,
                 "weight",
                 Some("semibold".to_owned()),
-                None
+                Some("600".to_owned())
             ))
         );
         assert_eq!(
             summary("font-display"),
             Some((StyleGroup::Text, "family", Some("display".to_owned()), None))
         );
-        assert_eq!(summary("text-left"), None);
         assert_eq!(summary("font-unknown"), None);
+        for unclassified in ["text-[length:var(--x)]", "text-(--x)", "text-[var(--x)]"] {
+            assert_eq!(summary(unclassified), None, "{unclassified}");
+        }
+    }
+
+    #[test]
+    fn reads_alignment_line_height_and_letter_spacing_as_text() {
+        assert_eq!(
+            summary("text-center"),
+            Some((
+                StyleGroup::Text,
+                "align",
+                Some("center".to_owned()),
+                Some("center".to_owned())
+            ))
+        );
+        assert_eq!(
+            summary("leading-6").map(|s| (s.1, s.3)),
+            Some(("line-height", Some("24px".to_owned())))
+        );
+        assert_eq!(
+            summary("leading-tight").map(|s| s.3),
+            Some(Some("1.25".to_owned()))
+        );
+        assert_eq!(
+            summary("leading-[22px]").map(|s| s.3),
+            Some(Some("22px".to_owned()))
+        );
+        assert_eq!(
+            summary("tracking-wide"),
+            Some((
+                StyleGroup::Text,
+                "letter-spacing",
+                Some("wide".to_owned()),
+                Some("0.025em".to_owned())
+            ))
+        );
+        assert_eq!(
+            summary("tracking-[0.02em]").map(|s| s.3),
+            Some(Some("0.02em".to_owned()))
+        );
+    }
+
+    #[test]
+    fn reads_padding_and_gap_in_pixels_from_the_spacing_scale() {
+        let layout = |utility: &str| summary(utility).map(|s| (s.0, s.1, s.3));
+        assert_eq!(
+            layout("px-6"),
+            Some((StyleGroup::Layout, "padding-x", Some("24px".to_owned())))
+        );
+        assert_eq!(
+            layout("p-3.5"),
+            Some((StyleGroup::Layout, "padding", Some("14px".to_owned())))
+        );
+        assert_eq!(
+            layout("pt-px"),
+            Some((StyleGroup::Layout, "padding-top", Some("1px".to_owned())))
+        );
+        assert_eq!(
+            layout("pb-[13px]"),
+            Some((
+                StyleGroup::Layout,
+                "padding-bottom",
+                Some("13px".to_owned())
+            ))
+        );
+        assert_eq!(
+            layout("ps-4"),
+            Some((StyleGroup::Layout, "padding-start", Some("16px".to_owned())))
+        );
+        assert_eq!(
+            layout("p-(--gutter)"),
+            Some((StyleGroup::Layout, "padding", None))
+        );
+        assert_eq!(
+            layout("gap-3"),
+            Some((StyleGroup::Layout, "gap", Some("12px".to_owned())))
+        );
+        assert_eq!(
+            layout("gap-x-2"),
+            Some((StyleGroup::Layout, "column-gap", Some("8px".to_owned())))
+        );
+        assert_eq!(
+            layout("gap-y-[10px]"),
+            Some((StyleGroup::Layout, "row-gap", Some("10px".to_owned())))
+        );
+        let custom = Theme::from_css(["@theme { --spacing: 0.5rem; }"]);
+        assert_eq!(
+            classify("p-2", &custom).and_then(|c| c.value),
+            Some("16px".to_owned())
+        );
     }
 
     #[test]
     fn classifies_shadows_rings_and_opacity() {
         assert_eq!(
-            summary("shadow-sm"),
-            Some((StyleGroup::Effects, "shadow", Some("sm".to_owned()), None))
+            summary("shadow-sm").map(|s| (s.1, s.2)),
+            Some(("shadow", Some("sm".to_owned())))
+        );
+        assert_eq!(
+            summary("shadow-sm").and_then(|s| s.3).as_deref(),
+            Some("0 1px 3px 0 rgb(0 0 0 / 0.1), 0 1px 2px -1px rgb(0 0 0 / 0.1)")
+        );
+        assert_eq!(
+            summary("inset-shadow-sm").map(|s| (s.1, s.3)),
+            Some((
+                "inset-shadow",
+                Some("inset 0 2px 4px rgb(0 0 0 / 0.05)".to_owned())
+            ))
+        );
+        assert_eq!(
+            summary("inset-shadow-black/20").map(|s| s.1),
+            Some("inset-shadow-color")
         );
         assert_eq!(
             summary("shadow-black/20"),
@@ -626,8 +870,15 @@ mod tests {
     }
 
     #[test]
-    fn leaves_layout_and_spacing_unclassified() {
-        for utility in ["px-6", "flex", "gap-3", "mt-auto", "inset-0"] {
+    fn leaves_layout_utilities_other_than_padding_and_gap_unclassified() {
+        for utility in [
+            "flex",
+            "mt-auto",
+            "inset-0",
+            "place-items-center",
+            "pointer-events-none",
+            "perspective-near",
+        ] {
             assert_eq!(summary(utility), None, "{utility}");
         }
     }

@@ -10,10 +10,12 @@ export type EditOp =
 export type ProjectPath = string;
 export type ContentHash = string;
 export type JsxValue = JsxStringValue | JsxExpressionValue;
-export type StyleGroup = 'fill' | 'radius' | 'stroke' | 'text' | 'effects' | 'opacity';
+export type StyleGroup = 'fill' | 'radius' | 'stroke' | 'text' | 'effects' | 'opacity' | 'layout';
 export type ContentPart = TextPart | CodePart | FoundPart | ElementPart;
 export type FillValue = FillToken | FillHex | FillNone;
 export type RadiusValue = RadiusToken | RadiusPx | RadiusFull;
+export type StrokeValue = StrokeNone | StrokeSet;
+export type ShadowValue = ShadowToken | ShadowCustom;
 export type GuijamMessage =
   | PluginHelloMessage
   | HelloOkMessage
@@ -317,6 +319,10 @@ export interface StyleToken {
 export interface ThemeTokens {
   colors: ThemeColor[];
   radii: ThemeRadius[];
+  fonts: string[];
+  textSizes: ThemeRadius[];
+  shadows: ThemeShadow[];
+  spacing: number;
 }
 export interface ThemeColor {
   name: string;
@@ -325,6 +331,11 @@ export interface ThemeColor {
 export interface ThemeRadius {
   name: string;
   px: number;
+}
+export interface ThemeShadow {
+  name: string;
+  value: string;
+  inset: boolean;
 }
 export interface TextPart {
   kind: 'text';
@@ -354,6 +365,11 @@ export interface ElementPart {
 export interface FinetuneProps {
   fill?: FillValue;
   radius?: RadiusValue;
+  text?: TextValue;
+  stroke?: StrokeValue;
+  effects?: EffectsValue;
+  opacity?: number;
+  layout?: LayoutValue;
   source?: {
     file: string;
     line: number;
@@ -384,6 +400,55 @@ export interface RadiusPx {
 }
 export interface RadiusFull {
   kind: 'full';
+}
+export interface TextValue {
+  family?: string;
+  weight?: number;
+  size?: number;
+  lineHeight?: number;
+  letterSpacing?: number;
+  align?: 'left' | 'center' | 'right' | 'justify';
+  color?: FillValue;
+}
+export interface StrokeNone {
+  kind: 'none';
+}
+export interface StrokeSet {
+  kind: 'set';
+  width?: number;
+  style?: 'solid' | 'dashed' | 'dotted';
+  color?: FillValue;
+}
+export interface EffectsValue {
+  drop?: ShadowValue;
+  inner?: ShadowValue;
+}
+export interface ShadowToken {
+  kind: 'token';
+  name: string;
+}
+export interface ShadowCustom {
+  kind: 'custom';
+  x: number;
+  y: number;
+  blur: number;
+  spread: number;
+  hex: string;
+  opacity: number;
+}
+export interface LayoutValue {
+  padding?: PaddingValue;
+  gap?: GapValue;
+}
+export interface PaddingValue {
+  top?: number;
+  right?: number;
+  bottom?: number;
+  left?: number;
+}
+export interface GapValue {
+  row?: number;
+  column?: number;
 }
 export interface TextEdit {
   run: number;

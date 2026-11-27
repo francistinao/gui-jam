@@ -1,11 +1,9 @@
 import type {
   CodeChange,
   ElementStyle,
-  FillValue,
   GenerateDone,
   GenerateProgress,
   GuijamMessage,
-  RadiusValue,
   Route,
   Sketch,
   TextPlace,
@@ -27,26 +25,29 @@ import type { WidgetHost } from './host';
 import {
   addStroke,
   appliedMessage,
+  type Current,
   changesIn,
   classifyGesture,
   containerIndex,
-  cssColor,
+  currentOf,
+  type Draft,
   editedFiles,
   finetuneProps,
   followedSrc,
-  type HexColor,
-  hexOfComputedColor,
   intersects,
   invertChanges,
   MAX_JOBS,
   MAX_TARGETS,
   nearestIndex,
   nextJobNumber,
+  OPPOSITE,
+  optimisticCss,
   type PanelSpot,
   type Point,
   placedCopy,
   type Rect,
   redoStroke,
+  type Side,
   type SketchState,
   samplePoints,
   shiftedLine,
@@ -90,12 +91,7 @@ export interface Selection {
   instance?: number;
 }
 
-export interface Draft {
-  fill?: FillValue;
-  radius?: RadiusValue;
-  content?: Record<number, string>;
-  source?: { place: TextPlace; value: string };
-}
+export type { Draft } from './model';
 
 export interface Notice {
   kind: 'info' | 'error';
@@ -180,7 +176,7 @@ export interface WidgetState {
   panelAt: PanelSpot | null;
   group: (Rect & { src: string })[];
   style: ElementStyle | null;
-  current: { fill: HexColor | null; radiusPx: number | null } | null;
+  current: Current | null;
   draft: Draft;
   preview: { changesetId: string; changes: CodeChange[] } | null;
   busy: boolean;
@@ -343,13 +339,8 @@ function touchedBy(bounds: Rect, exclude: Element): string[] {
   return [...new Set(sources)].slice(0, 20);
 }
 
-function readCurrent(element: Element): WidgetState['current'] {
-  const computed = getComputedStyle(element);
-  const radius = Number.parseFloat(computed.borderTopLeftRadius);
-  return {
-    fill: hexOfComputedColor(computed.backgroundColor),
-    radiusPx: Number.isFinite(radius) ? radius : null,
-  };
+function readCurrent(element: Element): Current {
+  return currentOf(getComputedStyle(element));
 }
 
 function failure(reply: GuijamMessage): Notice {
@@ -383,7 +374,7 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
   let previousFocus: string | null = null;
   const runs = new Map<string, string>();
   const committed = new Map<string, CodeChange[]>();
-  const styled = new Set<HTMLElement>();
+  const styled = new Map<HTMLElement, Set<string>>();
   const domPreview = new DomPreview<HTMLElement>();
 
   host.onEvent((message) => {
@@ -520,51 +511,27 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
     if (notice) noticeTimer = setTimeout(() => store.set({ notice: null }), durationMs);
   }
 
-  function optimisticFill(fill: FillValue | undefined, style: ElementStyle | null): string | null {
-    if (!fill) return null;
-    switch (fill.kind) {
-      case 'hex':
-        return cssColor({ hex: fill.hex, opacity: fill.opacity });
-      case 'token':
-        return style?.theme.colors.find((color) => color.name === fill.name)?.value ?? null;
-      case 'none':
-        return 'transparent';
-    }
-  }
-
-  function optimisticRadius(
-    radius: RadiusValue | undefined,
-    style: ElementStyle | null,
-  ): string | null {
-    if (!radius) return null;
-    switch (radius.kind) {
-      case 'px':
-        return `${radius.px}px`;
-      case 'full':
-        return '9999px';
-      case 'token': {
-        const px = style?.theme.radii.find((entry) => entry.name === radius.name)?.px;
-        return px === undefined ? null : `${px}px`;
-      }
-    }
-  }
-
   function applyOptimistic(draft: Draft, selection: Selection): void {
-    const { style } = store.get();
-    const fill = optimisticFill(draft.fill, style);
-    const radius = optimisticRadius(draft.radius, style);
+    const css = optimisticCss(draft, store.get().style);
     for (const element of elementsAt(selection.src)) {
       if (SERVER_RENDERED.test(selection.file)) domPreview.remember(element);
-      if (fill !== null) element.style.backgroundColor = fill;
-      if (radius !== null) element.style.borderRadius = radius;
-      styled.add(element);
+      const set = styled.get(element) ?? new Set<string>();
+      for (const [property, value] of Object.entries(css)) {
+        element.style.setProperty(property, value);
+        set.add(property);
+      }
+      styled.set(element, set);
     }
+  }
+
+  function refreshCurrent(selection: Selection): void {
+    const element = elementsAt(selection.src)[selection.instance ?? 0];
+    if (element) store.set({ current: readCurrent(element) });
   }
 
   function clearOptimistic(): void {
-    for (const element of styled) {
-      element.style.removeProperty('background-color');
-      element.style.removeProperty('border-radius');
+    for (const [element, properties] of styled) {
+      for (const property of properties) element.style.removeProperty(property);
     }
     styled.clear();
   }
@@ -576,6 +543,8 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
     const sequence = editSequence;
     store.set({ draft: next });
     applyOptimistic(next, selection);
+    const element = elementsAt(selection.src)[selection.instance ?? 0];
+    if (element && next.layout) store.set({ anchor: rectOf(element) });
     clearTimeout(previewTimer);
     previewTimer = setTimeout(() => {
       previewTimer = undefined;
@@ -1563,6 +1532,42 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
       setDraft({ ...store.get().draft, ...change });
     },
 
+    selectedElement(): Element | undefined {
+      const { selection } = store.get();
+      return selection ? elementsAt(selection.src)[selection.instance ?? 0] : undefined;
+    },
+
+    childRects(): Rect[] {
+      const element = controllerApi.selectedElement();
+      if (!element) return [];
+      return [...element.children]
+        .filter((child) => {
+          const computed = getComputedStyle(child);
+          return (
+            computed.display !== 'none' &&
+            computed.position !== 'absolute' &&
+            computed.position !== 'fixed'
+          );
+        })
+        .map(rectOf)
+        .filter((rect) => rect.width > 0 || rect.height > 0);
+    },
+
+    editSpacing(target: Side | 'row' | 'column', value: number, mirror = false): void {
+      const { draft } = store.get();
+      const layout = draft.layout ?? {};
+      if (target === 'row' || target === 'column') {
+        setDraft({ ...draft, layout: { ...layout, gap: { ...layout.gap, [target]: value } } });
+        return;
+      }
+      const padding = {
+        ...layout.padding,
+        [target]: value,
+        ...(mirror ? { [OPPOSITE[target]]: value } : {}),
+      };
+      setDraft({ ...draft, layout: { ...layout, padding } });
+    },
+
     editText(run: number, value: string): void {
       const { draft, style } = store.get();
       const original = style?.content?.find((part) => part.kind === 'text' && part.run === run);
@@ -1638,6 +1643,7 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
         clearPanel();
         return;
       }
+      refreshCurrent(selection);
       await inspect(selection, true);
     },
 
@@ -1665,6 +1671,7 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
       };
       store.set({ selection: moved });
       await inspect(moved, true);
+      refreshCurrent(moved);
     },
 
     async close(): Promise<void> {

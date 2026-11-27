@@ -39,11 +39,13 @@ Then start your dev server as usual, for example `npm run dev`. The GUIJam toolb
 
 | Tool | What to do |
 |---|---|
-| **Select** | Click any element. Tweak its fill and corner radius in a Figma-style panel, then **Apply**. |
+| **Select** | Click any element. Tweak its layout, fill, radius, stroke, typography, shadows and opacity in a Figma-style panel, or drag the pink handles on the element to change its padding and gap, then **Apply**. |
 | **Select** (sketch) | Click an element, then **Sketch what you want for this component**. Draw over it and describe the change: the sketch goes to the AI with your prompt, and the AI changes that component to match. |
 | **Draw** | Circle an element and describe the change. Pick one of three live variants and **Use** it. Up to three drawings can generate at once, each behind a numbered badge. |
 | **Draw** (sketch) | Sketch a card, a section or an icon where you want it. GUIJam works out the component and where it goes. |
 | **Ask** | Ask a question about what you see, such as "what's the path of this image?" |
+
+Padding and gap handles snap to your spacing scale (`p-4`, `p-5`…). Hold `Shift` to move them by one pixel, or `Alt` to change the opposite side too. They also take the arrow keys.
 
 Every applied change shows an **Undo** for 10 seconds, and `Alt+Shift+M` hides the toolbar. Drag any panel by its header to move it out of the way (double-click the header to put it back), and once a drawing's variants show, the eye next to the close button hides your strokes so you can see the variant.
 
@@ -135,9 +137,9 @@ With Laravel's `@vite` directive, Inertia, or any server that renders the HTML i
 
 - **Source-mapped elements.** Every element knows the file, line and column that rendered it, in JSX, Vue, Svelte and Astro templates, including polymorphic components such as `asChild` buttons and Vue component usages.
 - **Live previews, never written early.** Previews are served from memory through Vite's module graph or, in Next.js, through files GUIJam keeps in `.guijam/`. Switching between variants never changes your source files.
-- **Fine-tune like a design tool.** The panel reads the element's real classes and styles, prefers your theme tokens, and writes a one-line change.
+- **Fine-tune like a design tool.** The panel reads the element's real classes and styles: padding and gap, fill, radius, stroke, typography, drop and inner shadows, and opacity. It prefers your theme tokens (`text-lg`, `shadow-sm`, `p-4`), writes the shortest form (`px-6 pt-4 pb-3`), and changes one line, with no AI.
 - **Three variants per request, as they arrive.** GUIJam asks your CLI for three takes at once, one per run, and shows each the moment it is ready. The first one previews right away; you can switch, Use or Discard before the others land. The wait it quotes comes from your own recent runs with the same tool and model.
-- **Exact edits without AI.** Prompts like "make it blue and pill-shaped" become a precise edit instantly, with no model call. Ask for AI variations when you want them.
+- **Exact edits without AI.** Prompts like "make it blue and pill-shaped", "bold" or "padding 16px" become a precise edit instantly, with no model call. Ask for AI variations when you want them.
 - **Answers, not just edits.** Ask about an element and get an answer that points at the files involved.
 - **References across the page.** "Use the image from the navbar here" works, because GUIJam indexes your project's assets and the page you are looking at.
 - **Sketch to UI.** Rough out a layout or an icon. GUIJam sends the sketch and a screenshot of the page, then places the new markup in the right component. A self-contained piece becomes one component file, split into atoms and molecules only when its parts are reused.

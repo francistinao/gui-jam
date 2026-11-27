@@ -130,7 +130,7 @@
       ]
     },
     "StyleGroup": {
-      "enum": ["fill", "radius", "stroke", "text", "effects", "opacity"]
+      "enum": ["fill", "radius", "stroke", "text", "effects", "opacity", "layout"]
     },
     "StyleToken": {
       "type": "object",
@@ -166,7 +166,7 @@
     },
     "ThemeTokens": {
       "type": "object",
-      "required": ["colors", "radii"],
+      "required": ["colors", "radii", "fonts", "textSizes", "shadows", "spacing"],
       "additionalProperties": false,
       "properties": {
         "colors": {
@@ -180,7 +180,38 @@
           "items": {
             "$ref": "#/$defs/ThemeRadius"
           }
+        },
+        "fonts": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "textSizes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ThemeRadius"
+          }
+        },
+        "shadows": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ThemeShadow"
+          }
+        },
+        "spacing": {
+          "description": "Pixels in one spacing step.",
+          "type": "number",
+          "minimum": 0
         }
+      }
+    },
+    "ThemeShadow": {
+      "type": "object",
+      "required": ["name", "value", "inset"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string" },
+        "value": { "type": "string" },
+        "inset": { "type": "boolean" }
       }
     },
     "ThemeColor": {

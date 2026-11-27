@@ -100,8 +100,12 @@ test('fine-tunes a fill live, applies one line, and undo restores the exact byte
     'aria-pressed',
     'true',
   );
-  await expect(panel.getByRole('region', { name: 'Text' })).toContainText('font-medium text-white');
-  await expect(panel.getByRole('region', { name: 'Stroke' })).toHaveCount(0);
+  const text = panel.getByRole('region', { name: 'Text' });
+  await expect(text.getByRole('combobox', { name: 'Font weight' })).toHaveValue('500');
+  await expect(text).toContainText('white');
+  await expect(
+    panel.getByRole('region', { name: 'Stroke' }).getByRole('button', { name: 'Add stroke' }),
+  ).toBeVisible();
 
   const before = await fileSnapshot(ORDER_BUTTON);
   await fill.getByRole('textbox', { name: 'Fill hex' }).fill('1d4ed8');
@@ -143,7 +147,7 @@ test('fine-tunes a fill live, applies one line, and undo restores the exact byte
   );
 });
 
-test('shows conditional and unwritable groups read-only, and the click never reaches the page', async ({
+test('opens the stroke and text editors from the source, and the click never reaches the page', async ({
   page,
 }) => {
   await startSelecting(page);
@@ -151,8 +155,8 @@ test('shows conditional and unwritable groups read-only, and the click never rea
   const panel = await pick(page, counter, 'src/components/Counter.tsx');
 
   const stroke = panel.getByRole('region', { name: 'Stroke' });
-  await expect(stroke).toContainText('border border-espresso');
-  await expect(stroke.getByRole('textbox')).toHaveCount(0);
+  await expect(stroke).toContainText('espresso');
+  await expect(stroke.getByLabel('Stroke width')).toHaveValue('1');
   await expect(panel.getByRole('region', { name: 'Text' })).toContainText('font-semibold');
   await expect(
     panel.getByRole('region', { name: 'Fill' }).getByRole('button', { name: 'Add fill' }),

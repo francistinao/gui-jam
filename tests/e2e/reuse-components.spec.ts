@@ -251,7 +251,7 @@ test('a quick style tweak stays on the fast tier with no component list', async 
     page,
     page.getByRole('button', { name: 'Order now' }),
     ORDER_BUTTON_FILE,
-    'make it bold',
+    'make it bolder',
   );
 
   await expect(tiles(prompt)).toHaveCount(3, { timeout: READY_MS });

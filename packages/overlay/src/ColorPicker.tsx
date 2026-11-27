@@ -168,6 +168,7 @@ function HexInput({ hex, onChange }: { hex: string; onChange(next: string): void
 }
 
 export function ColorPicker({
+  label = 'Fill',
   hex,
   opacity,
   colors,
@@ -175,6 +176,7 @@ export function ColorPicker({
   onColor,
   onToken,
 }: {
+  label?: string;
   hex: string;
   opacity: number;
   colors: readonly ThemeColor[];
@@ -203,7 +205,7 @@ export function ColorPicker({
     <Popover.Root>
       <Popover.Trigger
         ref={trigger}
-        aria-label="Fill color"
+        aria-label={`${label} color`}
         className="grid cursor-pointer place-items-center rounded-sm border-0 bg-transparent p-0 focus-visible:outline-2 focus-visible:outline-blue-500"
       >
         <ColorChit color={hex} opacity={opacity} />
@@ -219,7 +221,7 @@ export function ColorPicker({
           <Popover.Popup
             data-interactive=""
             data-color-picker=""
-            aria-label="Fill color picker"
+            aria-label={`${label} color picker`}
             className="flex w-60 flex-col gap-3 rounded-[13px] bg-white-1000 p-3 text-black-800 shadow-500 ring-1 ring-black-100 outline-none"
           >
             <SaturationArea hsv={hsv} onChange={change} />
