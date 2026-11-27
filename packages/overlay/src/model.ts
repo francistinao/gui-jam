@@ -1695,3 +1695,121 @@ export function relativeTime(at: number, now: number): string {
   if (elapsed < 7 * DAY_MS) return format.format(-Math.round(elapsed / DAY_MS), 'day');
   return new Date(at).toLocaleDateString('en', { month: 'short', day: 'numeric' });
 }
+
+export const FONT_WEIGHTS: readonly [number, string][] = [
+  [100, 'Thin'],
+  [200, 'Extra light'],
+  [300, 'Light'],
+  [400, 'Regular'],
+  [500, 'Medium'],
+  [600, 'Semibold'],
+  [700, 'Bold'],
+  [800, 'Extra bold'],
+  [900, 'Black'],
+];
+
+function shortPx(value: number): string {
+  return String(Math.round(value * 10) / 10);
+}
+
+function hexLabel({ hex, opacity }: HexColor): string {
+  return opacity < 100 ? `${hex.toUpperCase()} ${opacity}%` : hex.toUpperCase();
+}
+
+function colorLabel(
+  fill: FillValue | undefined,
+  token: StyleToken | undefined,
+  computed: HexColor | null,
+): string {
+  if (fill)
+    return fill.kind === 'none' ? 'None' : fill.kind === 'token' ? fill.name : hexLabel(fill);
+  if (token?.themeToken) return token.themeToken;
+  return computed && computed.opacity > 0 ? hexLabel(computed) : 'None';
+}
+
+function shadowLabel(kind: string, shadow: ShadowValue | undefined): string | null {
+  if (!shadow || shadow.kind === 'none') return null;
+  return shadow.kind === 'token' ? `${kind} shadow ${shadow.name}` : `${kind} shadow`;
+}
+
+function radiusLabel(
+  style: ElementStyle,
+  current: Current,
+  radius: RadiusValue | undefined,
+): string {
+  if (radius?.kind === 'full') return 'full';
+  if (radius?.kind === 'px') return shortPx(radius.px);
+  const name =
+    radius?.kind === 'token' ? radius.name : baseToken(style, 'radius', 'radius')?.themeToken;
+  if (name === 'full') return 'full';
+  const px =
+    radius?.kind === 'token'
+      ? style.theme.radii.find((entry) => entry.name === radius.name)?.px
+      : current.radiusPx;
+  const value = px === null || px === undefined ? null : shortPx(px);
+  return [name, value].filter(Boolean).join(' · ') || '0';
+}
+
+export function sectionSummary(
+  group: StyleGroup,
+  style: ElementStyle,
+  current: Current | null,
+  draft: StyleDraft,
+): string {
+  if (!current) return '';
+  switch (group) {
+    case 'layout': {
+      const padding = SIDES.map((side) =>
+        shortPx(draft.layout?.padding?.[side] ?? current.padding[side]),
+      ).join(' ');
+      if (!current.flow) return padding;
+      const row = draft.layout?.gap?.row ?? current.gap.row;
+      const column = draft.layout?.gap?.column ?? current.gap.column;
+      const gap = row === column ? shortPx(row) : `${shortPx(row)} ${shortPx(column)}`;
+      return `${padding} · gap ${gap}`;
+    }
+    case 'radius':
+      return radiusLabel(style, current, draft.radius);
+    case 'fill':
+      return colorLabel(draft.fill, baseToken(style, 'fill', 'color'), current.fill);
+    case 'stroke': {
+      const stroke = draft.stroke;
+      if (stroke?.kind === 'none') return 'None';
+      const width = stroke?.width ?? current.border.width;
+      const line = stroke?.style ?? current.border.style;
+      if (width === 0 || line === 'none') return 'None';
+      const color = colorLabel(
+        stroke?.color,
+        baseToken(style, 'stroke', 'color'),
+        current.border.color,
+      );
+      return `${shortPx(width)} ${line} ${color}`;
+    }
+    case 'text': {
+      const text = draft.text ?? {};
+      const size = text.size ?? current.fontSize;
+      const line = text.lineHeight ?? current.lineHeight;
+      const weight =
+        text.weight ??
+        Number(baseToken(style, 'text', 'weight')?.value ?? current.fontWeight ?? 400);
+      const name = FONT_WEIGHTS.find(([value]) => value === weight)?.[1] ?? String(weight);
+      const sizes =
+        size === null
+          ? null
+          : line === null
+            ? shortPx(size)
+            : `${shortPx(size)} / ${shortPx(line)}`;
+      return [sizes, name].filter(Boolean).join(' · ');
+    }
+    case 'effects': {
+      const base = effectsBase(style, current);
+      const shadows = [
+        shadowLabel('Drop', draft.effects?.drop ?? base.drop),
+        shadowLabel('Inner', draft.effects?.inner ?? base.inner),
+      ].filter(Boolean);
+      return shadows.length > 0 ? shadows.join(' · ') : 'None';
+    }
+    case 'opacity':
+      return `${draft.opacity ?? current.opacity}%`;
+  }
+}

@@ -7,6 +7,7 @@ import {
   waitForDaemon,
   widgetRequests,
 } from './support/daemon.js';
+import { openSection } from './support/finetune.js';
 import {
   FIXTURE_DIR,
   type FixtureServer,
@@ -88,7 +89,7 @@ test.afterAll(async () => {
 
 test('typography edits preview live and write theme tokens', async ({ page }) => {
   const { button, panel } = await selectOrderButton(page);
-  const text = panel.getByRole('region', { name: 'Text' });
+  const text = await openSection(panel, 'Text');
 
   await text.getByLabel('Font size').fill('18');
   await text.getByRole('combobox', { name: 'Font weight' }).selectOption('700');
@@ -113,7 +114,7 @@ test('adds a stroke, a shadow preset and opacity without the AI', async ({ page 
     .getByRole('region', { name: 'Effects' })
     .getByRole('button', { name: 'Add effects' })
     .click();
-  await panel.getByRole('region', { name: 'Opacity' }).getByLabel('Element opacity').fill('50');
+  await (await openSection(panel, 'Opacity')).getByLabel('Element opacity').fill('50');
 
   await expect(button).toHaveCSS('border-top-width', '1px');
   await expect(button).toHaveCSS('opacity', '0.5');

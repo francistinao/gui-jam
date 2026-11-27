@@ -11,7 +11,7 @@ import {
   sketchingOver,
   strokeShortcut,
 } from './model';
-import { load, loadStyle, save, saveStyle } from './persist';
+import { load, loadSections, loadStyle, save, saveSections, saveStyle } from './persist';
 import { createSelectLayer } from './select-layer';
 import { createStore } from './store';
 import css from './styles.css?inline';
@@ -70,7 +70,7 @@ export function mount(host: WidgetHost): Widget {
   layer.append(container);
   host.shadowRoot.append(layer);
 
-  const store = createStore<WidgetState>(initialState);
+  const store = createStore<WidgetState>({ ...initialState, openSections: loadSections() });
   const controller = createController(host, store);
   const selectLayer = createSelectLayer({
     hostElement: host.hostElement,
@@ -206,6 +206,14 @@ export function mount(host: WidgetHost): Widget {
     if (style === copied.copied && pasting === copied.pasting) return;
     copied = { copied: style, pasting };
     saveStyle(style && pasting ? { copied: style, pasting } : null);
+  });
+
+  let sections = store.get().openSections;
+  store.subscribe(() => {
+    const { openSections } = store.get();
+    if (openSections === sections) return;
+    sections = openSections;
+    saveSections(openSections);
   });
 
   createRoot(container).render(<App store={store} controller={controller} />);

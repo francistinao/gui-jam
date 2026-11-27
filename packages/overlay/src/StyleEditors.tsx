@@ -20,6 +20,7 @@ import {
   clamp,
   type Draft,
   effectsBase,
+  FONT_WEIGHTS,
   type HexColor,
   OPACITY_RANGE,
   parseHex,
@@ -32,17 +33,6 @@ import {
   type TextAlign,
 } from './model';
 
-const WEIGHTS: readonly [number, string][] = [
-  [100, 'Thin'],
-  [200, 'Extra light'],
-  [300, 'Light'],
-  [400, 'Regular'],
-  [500, 'Medium'],
-  [600, 'Semibold'],
-  [700, 'Bold'],
-  [800, 'Extra bold'],
-  [900, 'Black'],
-];
 const ALIGNS: readonly [TextAlign, string, typeof AlignLeft][] = [
   ['left', 'Align left', AlignLeft],
   ['center', 'Align center', AlignCenter],
@@ -274,10 +264,10 @@ export function TextEditor({ style, draft, current, controller }: EditorProps) {
           value={weight}
           onChange={(event) => edit({ weight: Number(event.target.value) })}
         >
-          {WEIGHTS.some(([value]) => value === weight) ? null : (
+          {FONT_WEIGHTS.some(([value]) => value === weight) ? null : (
             <option value={weight}>{weight}</option>
           )}
-          {WEIGHTS.map(([value, name]) => (
+          {FONT_WEIGHTS.map(([value, name]) => (
             <option key={value} value={value}>
               {name}
             </option>

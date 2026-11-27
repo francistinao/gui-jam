@@ -7,6 +7,7 @@ import {
   waitForDaemon,
   widgetRequests,
 } from './support/daemon.js';
+import { openSection } from './support/finetune.js';
 import {
   FIXTURE_DIR,
   type FixtureServer,
@@ -88,8 +89,8 @@ test('fine-tunes a fill live, applies one line, and undo restores the exact byte
   await startSelecting(page);
   const button = page.getByRole('button', { name: 'Order now' });
   const panel = await pick(page, button, 'src/components/OrderButton.tsx');
-  const fill = panel.getByRole('region', { name: 'Fill' });
-  const radius = panel.getByRole('region', { name: 'Radius' });
+  const fill = await openSection(panel, 'Fill');
+  const radius = await openSection(panel, 'Radius');
 
   await expect(fill.getByRole('textbox', { name: 'Fill hex' })).toHaveValue('BE123C');
   await expect(fill.getByRole('button', { name: 'Fill brand' })).toHaveAttribute(
@@ -100,7 +101,7 @@ test('fine-tunes a fill live, applies one line, and undo restores the exact byte
     'aria-pressed',
     'true',
   );
-  const text = panel.getByRole('region', { name: 'Text' });
+  const text = await openSection(panel, 'Text');
   await expect(text.getByRole('combobox', { name: 'Font weight' })).toHaveValue('500');
   await expect(text).toContainText('white');
   await expect(
@@ -154,7 +155,7 @@ test('opens the stroke and text editors from the source, and the click never rea
   const counter = page.getByRole('button', { name: /Cups ordered/ });
   const panel = await pick(page, counter, 'src/components/Counter.tsx');
 
-  const stroke = panel.getByRole('region', { name: 'Stroke' });
+  const stroke = await openSection(panel, 'Stroke');
   await expect(stroke).toContainText('espresso');
   await expect(stroke.getByLabel('Stroke width')).toHaveValue('1');
   await expect(panel.getByRole('region', { name: 'Text' })).toContainText('font-semibold');
@@ -176,6 +177,7 @@ test('edits every instance of a repeated element, and closing reverts unsaved tw
   await expect(panel.getByRole('note')).toHaveText(
     'Used 3× on this page. Changes apply to every instance.',
   );
+  await openSection(panel, 'Fill');
   await panel.getByRole('textbox', { name: 'Fill hex' }).fill('1D4ED8');
   for (const add of await addButtons.all())
     await expect(add).toHaveCSS('background-color', BLUE_RGB);
@@ -194,6 +196,7 @@ test('refuses to apply over a developer edit made after the preview', async ({ p
   await startSelecting(page);
   const button = page.getByRole('button', { name: 'Order now' });
   const panel = await pick(page, button, 'src/components/OrderButton.tsx');
+  await openSection(panel, 'Fill');
   await panel.getByRole('textbox', { name: 'Fill hex' }).fill('1D4ED8');
   await expect(panel.getByRole('button', { name: 'Apply' })).toBeEnabled();
   const developerVersion = replaceOnce(originals.get(ORDER_BUTTON) ?? '', 'px-6', 'px-8');
@@ -214,15 +217,12 @@ test('an element with an inline style is fine-tuned in its style object', async 
   await startSelecting(page);
   const gift = page.getByText('Gift cards for every occasion');
   const panel = await pick(page, gift, 'src/App.tsx');
-  const fill = panel.getByRole('region', { name: 'Fill' });
+  const fill = await openSection(panel, 'Fill');
   await expect(fill.getByRole('textbox', { name: 'Fill hex' })).toHaveValue('FDE68A');
   const before = await readFile(APP, 'utf8');
 
   await fill.getByRole('textbox', { name: 'Fill hex' }).fill('1d4ed8');
-  await panel
-    .getByRole('region', { name: 'Radius' })
-    .getByRole('button', { name: 'Radius full' })
-    .click();
+  await (await openSection(panel, 'Radius')).getByRole('button', { name: 'Radius full' }).click();
 
   await expect(gift).toHaveCSS('background-color', BLUE_RGB);
   await expect(gift).toHaveCSS('border-top-left-radius', '9999px');

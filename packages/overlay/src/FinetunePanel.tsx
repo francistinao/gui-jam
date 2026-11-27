@@ -1,5 +1,5 @@
 import type { ElementStyle, StyleGroup, StyleToken } from '@guijam/contracts-ts';
-import { Pencil } from 'lucide-react';
+import { ChevronRight, Pencil } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { ContentEditor, hasTextContent } from './ContentEditor';
 import type { Controller, Draft, WidgetState } from './controller';
@@ -17,6 +17,7 @@ import {
   parseHex,
   RADIUS_RANGE,
   radiusOfToken,
+  sectionSummary,
 } from './model';
 import { CodeChanges, Popover, PopoverHeader, SKETCH_LABEL } from './Popover';
 import {
@@ -205,12 +206,14 @@ function Section({
   style,
   draft,
   current,
+  open,
   controller,
 }: {
   section: PanelSection;
   style: ElementStyle;
   draft: Draft;
   current: Current | null;
+  open: boolean;
   controller: Controller;
 }) {
   const label = GROUP_LABELS[section.group];
@@ -233,7 +236,10 @@ function Section({
           variant="ghost"
           size="icon"
           aria-label={`Add ${label.toLowerCase()}`}
-          onClick={() => controller.edit(added(section.group, style, current))}
+          onClick={() => {
+            controller.toggleSection(section.group, true);
+            controller.edit(added(section.group, style, current));
+          }}
         >
           +
         </Button>
@@ -243,14 +249,34 @@ function Section({
   const Editor = EDITORS[section.group];
   const others = otherTokens(style, section.group);
   return (
-    <section aria-label={label} className="flex flex-col gap-2 py-2">
-      <h3 className="typography-body-medium font-[500]">{label}</h3>
-      <Editor style={style} draft={draft} current={current} controller={controller} />
-      {others.length > 0 ? (
-        <code className="typography-body-small break-all text-grey-500">
-          {others.map((token) => token.token).join(' ')}
-        </code>
-      ) : null}
+    <section aria-label={label}>
+      <details
+        open={open}
+        onToggle={(event) => controller.toggleSection(section.group, event.currentTarget.open)}
+        className="group"
+      >
+        <summary className="flex cursor-pointer list-none items-center gap-2 py-2 [&::-webkit-details-marker]:hidden">
+          <ChevronRight
+            aria-hidden="true"
+            className="size-3 shrink-0 text-grey-500 transition-transform group-open:rotate-90"
+          />
+          <h3 className="typography-body-medium shrink-0 font-[500]">{label}</h3>
+          <span className="typography-body-small min-w-0 truncate text-grey-500">
+            {sectionSummary(section.group, style, current, draft)}
+          </span>
+          {drafted ? (
+            <span className="typography-body-small ml-auto shrink-0 text-orange-600">Edited</span>
+          ) : null}
+        </summary>
+        <div className="flex flex-col gap-2 pb-2">
+          <Editor style={style} draft={draft} current={current} controller={controller} />
+          {others.length > 0 ? (
+            <code className="typography-body-small break-all text-grey-500">
+              {others.map((token) => token.token).join(' ')}
+            </code>
+          ) : null}
+        </div>
+      </details>
     </section>
   );
 }
@@ -265,6 +291,7 @@ export function FinetunePanel({ store, controller }: PanelProps) {
   const busy = useStore(store, (state) => state.busy);
   const ticket = useStore(store, (state) => state.ticket);
   const panelAt = useStore(store, (state) => state.panelAt);
+  const openSections = useStore(store, (state) => state.openSections);
 
   if (!selection || !anchor) return null;
   const unsaved = preview !== null || Object.keys(draft).length > 0;
@@ -282,11 +309,10 @@ export function FinetunePanel({ store, controller }: PanelProps) {
         badge="Fine-tune"
         selection={selection}
         controller={controller}
-      >
-        <Button variant="ghost" onClick={() => void controller.askAI()}>
-          Ask AI
-        </Button>
-      </PopoverHeader>
+      />
+      <Button size="large" className="mb-2 w-full" onClick={() => void controller.askAI()}>
+        Ask AI
+      </Button>
       <Button
         variant="secondary"
         size="large"
@@ -340,6 +366,7 @@ export function FinetunePanel({ store, controller }: PanelProps) {
                 style={style}
                 draft={draft}
                 current={current}
+                open={openSections.includes(section.group)}
                 controller={controller}
               />
             ))

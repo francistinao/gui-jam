@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect, type Locator, type Page, test } from '@playwright/test';
 import { GJD_BINARY, requireDaemonBinary, stopDaemon } from './support/daemon.js';
+import { openSection } from './support/finetune.js';
 import { openFixture } from './support/fixture.js';
 import {
   dragPadding,
@@ -107,9 +108,7 @@ test('fine-tuning a nuxt component previews live, applies and undoes', async ({ 
   const button = page.getByRole('button', { name: 'Order now' });
   await button.click();
   const panel = page.getByRole('dialog', { name: 'Fine-tune app/components/OrderButton.vue' });
-  const hex = panel
-    .getByRole('region', { name: 'Fill' })
-    .getByRole('textbox', { name: 'Fill hex' });
+  const hex = (await openSection(panel, 'Fill')).getByRole('textbox', { name: 'Fill hex' });
   await expect(hex).toHaveValue('BE123C', { timeout: 30_000 });
 
   await hex.fill('1d4ed8');

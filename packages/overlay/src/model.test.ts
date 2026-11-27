@@ -64,6 +64,7 @@ import {
   type SketchOwner,
   type SketchState,
   type SketchToggleOwner,
+  sectionSummary,
   shiftedLine,
   shownText,
   showsSketchToggle,
@@ -1737,5 +1738,53 @@ describe('panels and the toolbar', () => {
       toolbar,
     );
     expect(intersects({ left: placement.left, top: placement.top, ...panel }, toolbar)).toBe(false);
+  });
+});
+
+describe('sectionSummary', () => {
+  const button = style({
+    tokens: [
+      { ...token('bg-white', 'fill'), property: 'color', themeToken: 'white' },
+      { ...token('rounded-card', 'radius'), property: 'radius', themeToken: 'card' },
+      { ...token('shadow-sm', 'effects'), property: 'shadow', themeToken: 'sm' },
+    ],
+  });
+  const flex = currentOf(
+    computed({ display: 'flex', rowGap: '12px', columnGap: '12px', borderTopLeftRadius: '10px' }),
+  );
+  const line = (group: Parameters<typeof sectionSummary>[0], draft = {}) =>
+    sectionSummary(group, button, flex, draft);
+
+  it('reads source tokens and computed values in one line', () => {
+    expect(line('layout')).toBe('12 24 12 24 · gap 12');
+    expect(line('radius')).toBe('card · 10');
+    expect(line('fill')).toBe('white');
+    expect(line('stroke')).toBe('None');
+    expect(line('text')).toBe('16 / 24 · Medium');
+    expect(line('effects')).toBe('Drop shadow sm');
+    expect(line('opacity')).toBe('100%');
+  });
+
+  it('shows the draft before the source', () => {
+    expect(line('layout', { layout: { padding: { top: 16 }, gap: { column: 8 } } })).toBe(
+      '16 24 12 24 · gap 12 8',
+    );
+    expect(line('radius', { radius: { kind: 'px', px: 6 } })).toBe('6');
+    expect(line('fill', { fill: { kind: 'hex', hex: '#1d4ed8', opacity: 50 } })).toBe(
+      '#1D4ED8 50%',
+    );
+    expect(
+      line('stroke', {
+        stroke: { kind: 'set', width: 1, style: 'dashed', color: { kind: 'token', name: 'ink' } },
+      }),
+    ).toBe('1 dashed ink');
+    expect(line('text', { text: { size: 20, weight: 700 } })).toBe('20 / 24 · Bold');
+    expect(line('effects', { effects: { drop: { kind: 'none' } } })).toBe('None');
+    expect(line('opacity', { opacity: 40 })).toBe('40%');
+  });
+
+  it('leaves out gap outside flex and grid, and says nothing before the element is read', () => {
+    expect(sectionSummary('layout', button, currentOf(computed({})), {})).toBe('12 24 12 24');
+    expect(sectionSummary('fill', button, null, {})).toBe('');
   });
 });

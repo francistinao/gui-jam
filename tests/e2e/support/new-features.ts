@@ -1,5 +1,6 @@
 import { readFile, writeFile } from 'node:fs/promises';
 import { expect, type Locator, type Page } from '@playwright/test';
+import { openSection } from './finetune.js';
 import { callsOf, pairWith, startBridge, unpair } from './jira-bridge.js';
 import { along, covered, type Point } from './strokes.js';
 
@@ -416,6 +417,7 @@ export async function pickThemeColor(page: Page, component: Component): Promise<
   const before = await readFile(component.path, 'utf8');
   await component.element.click();
   const panel = finetunePanel(page, component);
+  await openSection(panel, 'Fill');
   await panel.getByRole('button', { name: 'Fill color' }).click();
   const colors = page.getByRole('dialog', { name: 'Fill color picker' });
 

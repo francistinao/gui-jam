@@ -199,6 +199,7 @@ export interface WidgetState {
   copied: CopiedStyle | null;
   pasting: StyleGroup[] | null;
   historyVersion: number;
+  openSections: StyleGroup[];
 }
 
 export const initialState: WidgetState = {
@@ -225,6 +226,7 @@ export const initialState: WidgetState = {
   copied: null,
   pasting: null,
   historyVersion: 0,
+  openSections: [],
 };
 
 export function rectOf(element: Element): Rect {
@@ -1822,6 +1824,16 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
       const { selection } = store.get();
       if (selection) await inspect(selection, true);
       rebaseDraft();
+    },
+
+    toggleSection(group: StyleGroup, open: boolean): void {
+      const { openSections } = store.get();
+      if (openSections.includes(group) === open) return;
+      store.set({
+        openSections: open
+          ? [...openSections, group]
+          : openSections.filter((entry) => entry !== group),
+      });
     },
 
     outline(src: string | null): void {

@@ -175,3 +175,31 @@ export function loadStyle(): SavedStyle | null {
     return null;
   }
 }
+
+export const SECTIONS_KEY = 'guijam:sections';
+
+export function parseSections(text: string | null): StyleGroup[] {
+  if (!text) return [];
+  try {
+    const value: unknown = JSON.parse(text);
+    return Array.isArray(value) ? [...new Set(value.filter(isGroup))] : [];
+  } catch {
+    return [];
+  }
+}
+
+export function saveSections(groups: readonly StyleGroup[]): void {
+  try {
+    sessionStorage.setItem(SECTIONS_KEY, JSON.stringify(groups));
+  } catch {
+    return;
+  }
+}
+
+export function loadSections(): StyleGroup[] {
+  try {
+    return parseSections(sessionStorage.getItem(SECTIONS_KEY));
+  } catch {
+    return [];
+  }
+}

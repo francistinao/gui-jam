@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect, type Locator, type Page, test } from '@playwright/test';
 import { GJD_BINARY, requireDaemonBinary, stopDaemon } from './support/daemon.js';
+import { openSection } from './support/finetune.js';
 import {
   dragPadding,
   dragPanel,
@@ -139,7 +140,7 @@ for (const bundler of BUNDLERS) {
       await chooseTool(page, 'Select');
       const button = page.getByRole('button', { name: 'Order now' });
       const panel = await pick(page, button, 'app/components/OrderButton.tsx');
-      const fill = panel.getByRole('region', { name: 'Fill' });
+      const fill = await openSection(panel, 'Fill');
       await expect(fill.getByRole('textbox', { name: 'Fill hex' })).toHaveValue('BE123C');
       const before = await readFile(ORDER_BUTTON, 'utf8');
 
@@ -167,7 +168,7 @@ for (const bundler of BUNDLERS) {
       await chooseTool(page, 'Select');
       const gift = page.getByText('Gift cards for every occasion');
       const panel = await pick(page, gift, 'app/page.tsx');
-      const fill = panel.getByRole('region', { name: 'Fill' });
+      const fill = await openSection(panel, 'Fill');
       await expect(fill.getByRole('textbox', { name: 'Fill hex' })).toHaveValue('FDE68A');
       const before = await readFile(PAGE, 'utf8');
 

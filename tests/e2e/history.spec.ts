@@ -7,6 +7,7 @@ import {
   waitForDaemon,
   widgetRequests,
 } from './support/daemon.js';
+import { openSection } from './support/finetune.js';
 import {
   FIXTURE_DIR,
   type FixtureServer,
@@ -54,6 +55,7 @@ async function apply(page: Page, target: Locator, change: (panel: Locator) => Pr
 }
 
 async function fill(panel: Locator, hex: string): Promise<void> {
+  await openSection(panel, 'Fill');
   await panel.getByRole('textbox', { name: 'Fill hex' }).fill(hex);
 }
 
@@ -89,8 +91,8 @@ test('undoes an older change and keeps a later one in the same file', async ({ p
   await open(page, 'older');
   await apply(page, page.getByText(GIFT), (panel) => fill(panel, '1d4ed8'));
   const afterGift = await readFile(APP, 'utf8');
-  await apply(page, page.getByRole('heading', { name: HEADING }), (panel) =>
-    panel.getByRole('region', { name: 'Text' }).getByLabel('Font size').fill('40'),
+  await apply(page, page.getByRole('heading', { name: HEADING }), async (panel) =>
+    (await openSection(panel, 'Text')).getByLabel('Font size').fill('40'),
   );
 
   await openHistory(page);

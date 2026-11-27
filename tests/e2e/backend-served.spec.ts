@@ -8,6 +8,7 @@ import {
   waitForDaemon,
   widgetRequests,
 } from './support/daemon.js';
+import { openSection } from './support/finetune.js';
 import {
   FIXTURE_DIR,
   type FixtureServer,
@@ -95,6 +96,7 @@ test('a page rendered by another server gets the toolbar and loads the widget fr
   await button.click();
   const panel = page.getByRole('dialog', { name: 'Fine-tune src/components/OrderButton.tsx' });
   await expect(panel.getByText('Reading the element…')).toHaveCount(0);
+  await openSection(panel, 'Fill');
   await panel.getByRole('textbox', { name: 'Fill hex' }).fill('1d4ed8');
   await expect(button).toHaveCSS('background-color', BLUE_RGB);
 

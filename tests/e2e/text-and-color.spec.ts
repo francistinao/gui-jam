@@ -10,6 +10,7 @@ import {
   waitForDaemon,
   widgetRequests,
 } from './support/daemon.js';
+import { openSection } from './support/finetune.js';
 import {
   FIXTURE_DIR,
   type FixtureServer,
@@ -319,6 +320,7 @@ test('the Fill picker sets an exact color in RGB, previews it, and Apply and Und
   const before = await fileSnapshot(ORDER_BUTTON);
   await orderNow(page).click();
   const panel = finetune(page, ORDER_BUTTON_FILE);
+  await openSection(panel, 'Fill');
   await panel.getByRole('button', { name: 'Fill color' }).click();
   const colors = picker(page);
   await expect(colors).toBeVisible();
@@ -357,6 +359,7 @@ test('dragging the color square and the hue and opacity sliders changes the colo
   const before = await fileSnapshot(ORDER_BUTTON);
   await orderNow(page).click();
   const panel = finetune(page, ORDER_BUTTON_FILE);
+  await openSection(panel, 'Fill');
   await panel.getByRole('button', { name: 'Fill color' }).click();
   const colors = picker(page);
   const hex = colors.getByRole('textbox', { name: 'Hex' });
@@ -414,6 +417,7 @@ test('the eyedropper picks a color from the screen, and canceling it changes not
   await startSelecting(page);
   await orderNow(page).click();
   const panel = finetune(page, ORDER_BUTTON_FILE);
+  await openSection(panel, 'Fill');
   await panel.getByRole('button', { name: 'Fill color' }).click();
   const colors = picker(page);
 

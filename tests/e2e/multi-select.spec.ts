@@ -10,6 +10,7 @@ import {
   waitForDaemon,
   widgetRequests,
 } from './support/daemon.js';
+import { openSection } from './support/finetune.js';
 import {
   FIXTURE_DIR,
   type FixtureServer,
@@ -393,8 +394,7 @@ test('Shift+click reverts unsaved Fine-tune tweaks, and Edit prompt lets the gro
 }) => {
   await startSelecting(page);
   await orderNow(page).click();
-  await finetune(page, ORDER_BUTTON_FILE)
-    .getByRole('region', { name: 'Radius' })
+  await (await openSection(finetune(page, ORDER_BUTTON_FILE), 'Radius'))
     .getByRole('button', { name: 'Radius full' })
     .click();
   await expect(orderNow(page)).toHaveCSS('border-top-left-radius', '9999px');

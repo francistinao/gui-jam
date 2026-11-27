@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Job } from './controller';
-import { parseSaved, parseStyle, serialize } from './persist';
+import { parseSaved, parseSections, parseStyle, serialize } from './persist';
 
 const job = (id: string, status: 'idle' | 'running' | 'ready' = 'ready'): Job =>
   ({
@@ -243,5 +243,14 @@ describe('parseStyle', () => {
         JSON.stringify({ version: 1, copied: { tag: 'p', file: 'a', values: {} }, pasting: [] }),
       ),
     ).toBeNull();
+  });
+});
+
+describe('parseSections', () => {
+  it('keeps known groups once and ignores anything else', () => {
+    expect(parseSections('["text","layout","text","margin",3]')).toEqual(['text', 'layout']);
+    expect(parseSections('{"text":true}')).toEqual([]);
+    expect(parseSections('not json')).toEqual([]);
+    expect(parseSections(null)).toEqual([]);
   });
 });

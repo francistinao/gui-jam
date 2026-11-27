@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { expect, type Locator, type Page, test } from '@playwright/test';
 import { type AstroServer, startAstro } from './support/astro.js';
 import { GJD_BINARY, requireDaemonBinary, stopDaemon } from './support/daemon.js';
+import { openSection } from './support/finetune.js';
 import { openFixture } from './support/fixture.js';
 import {
   dragPadding,
@@ -143,7 +144,7 @@ test('fine-tuning an astro template previews in the page, applies without a relo
   await mark(page);
   const button = page.getByRole('button', { name: 'Order now' });
   const panel = await pick(page, button, 'src/components/OrderButton.astro');
-  const fill = panel.getByRole('region', { name: 'Fill' });
+  const fill = await openSection(panel, 'Fill');
   await expect(fill.getByRole('textbox', { name: 'Fill hex' })).toHaveValue('BE123C');
   const before = await readFile(ORDER_BUTTON, 'utf8');
 
@@ -181,6 +182,7 @@ test('an inline style in an astro page previews in place and closing restores it
   let panel = await pick(page, gift, 'src/pages/index.astro');
   const hex = () =>
     panel.getByRole('region', { name: 'Fill' }).getByRole('textbox', { name: 'Fill hex' });
+  await openSection(panel, 'Fill');
   await expect(hex()).toHaveValue('FDE68A');
   const before = await readFile(INDEX, 'utf8');
 
@@ -211,7 +213,7 @@ test('a react island inside astro previews through hot reload', async ({ page })
   await mark(page);
   const tally = page.getByRole('button', { name: /Cups today/ });
   const panel = await pick(page, tally, 'src/components/Tally.tsx');
-  const fill = panel.getByRole('region', { name: 'Fill' });
+  const fill = await openSection(panel, 'Fill');
 
   await fill.getByRole('textbox', { name: 'Fill hex' }).fill('1d4ed8');
   await expect(tally).toHaveCSS('background-color', BLUE_RGB);

@@ -8,6 +8,7 @@ import {
   waitForDaemon,
   widgetRequests,
 } from './support/daemon.js';
+import { openSection } from './support/finetune.js';
 import {
   FIXTURE_DIR,
   type FixtureServer,
@@ -302,6 +303,7 @@ test('drawing right after Sketch, while unsaved tweaks revert, lands on the sket
   const button = page.getByRole('button', { name: 'Order now' });
   await button.click();
   const finetune = page.getByRole('dialog', { name: `Fine-tune ${ORDER_BUTTON_FILE}` });
+  await openSection(finetune, 'Fill');
   await finetune.getByRole('textbox', { name: 'Fill hex' }).fill('1D4ED8');
   await expect(finetune.getByRole('button', { name: 'Apply' })).toBeEnabled();
   const box = await button.boundingBox();

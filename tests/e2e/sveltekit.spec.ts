@@ -10,6 +10,7 @@ import {
   waitForDaemon,
   widgetRequests,
 } from './support/daemon.js';
+import { openSection } from './support/finetune.js';
 import { type FixtureServer, openFixture, startFixtureServer } from './support/fixture.js';
 import {
   dragPadding,
@@ -137,7 +138,7 @@ test('fine-tuning a svelte element edits its class, previews live and undoes exa
   await select(page);
   const button = page.getByRole('button', { name: 'Order now' });
   const panel = await pick(page, button, 'src/lib/OrderButton.svelte');
-  const fill = panel.getByRole('region', { name: 'Fill' });
+  const fill = await openSection(panel, 'Fill');
   await expect(fill.getByRole('textbox', { name: 'Fill hex' })).toHaveValue('BE123C');
   const before = await readFile(ORDER_BUTTON, 'utf8');
 
@@ -163,6 +164,7 @@ test('an inline style attribute in svelte markup is edited as CSS', async ({ pag
   await select(page);
   const gift = page.getByText('Gift cards for every occasion');
   const panel = await pick(page, gift, 'src/routes/+page.svelte');
+  await openSection(panel, 'Fill');
   await expect(
     panel.getByRole('region', { name: 'Fill' }).getByRole('textbox', { name: 'Fill hex' }),
   ).toHaveValue('FDE68A');

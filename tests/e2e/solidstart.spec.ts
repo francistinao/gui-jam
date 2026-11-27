@@ -10,6 +10,7 @@ import {
   waitForDaemon,
   widgetRequests,
 } from './support/daemon.js';
+import { openSection } from './support/finetune.js';
 import { type FixtureServer, openFixture, startFixtureServer } from './support/fixture.js';
 import {
   dragPadding,
@@ -150,7 +151,7 @@ test('fine-tuning a component used by a route previews live and undoes exactly',
   await select(page);
   const button = page.getByRole('button', { name: 'Order now' });
   const panel = await pick(page, button, 'src/components/OrderButton.tsx');
-  const fill = panel.getByRole('region', { name: 'Fill' });
+  const fill = await openSection(panel, 'Fill');
   await expect(fill.getByRole('textbox', { name: 'Fill hex' })).toHaveValue('BE123C');
   const before = await readFile(ORDER_BUTTON, 'utf8');
 
@@ -181,7 +182,7 @@ test('a route module previews without a reload and its style object is edited', 
   });
   const gift = page.getByText('Gift cards for every occasion');
   const panel = await pick(page, gift, 'src/routes/index.tsx');
-  const fill = panel.getByRole('region', { name: 'Fill' });
+  const fill = await openSection(panel, 'Fill');
   await expect(fill.getByRole('textbox', { name: 'Fill hex' })).toHaveValue('FDE68A');
   const before = await readFile(HOME, 'utf8');
 
@@ -213,7 +214,7 @@ test('after client-side navigation the toolbar stays and the new route is editab
   await expect(note).toHaveAttribute('data-gj-src', 'src/routes/menu.tsx:10:7');
 
   const panel = await pick(page, note, 'src/routes/menu.tsx');
-  const fill = panel.getByRole('region', { name: 'Fill' });
+  const fill = await openSection(panel, 'Fill');
   await fill.getByRole('textbox', { name: 'Fill hex' }).fill('1d4ed8');
   await expect(note).toHaveCSS('background-color', BLUE_RGB);
   await panel.getByRole('button', { name: 'Close' }).click();
