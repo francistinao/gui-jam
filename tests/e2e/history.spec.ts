@@ -205,3 +205,24 @@ test('History survives a reload, toggles with Alt+Shift+H and closes with Esc', 
   await page.keyboard.press('Escape');
   await expect(history(page)).toHaveCount(0);
 });
+
+test('History stays open with its tab across a full reload until it is closed', async ({
+  page,
+}) => {
+  await open(page, 'stays');
+  await openHistory(page);
+  await history(page).getByRole('tab', { name: 'All pages' }).click();
+
+  await page.reload();
+
+  await expect(history(page)).toBeVisible();
+  await expect(history(page).getByRole('tab', { name: 'All pages' })).toHaveAttribute(
+    'aria-selected',
+    'true',
+  );
+  await page.keyboard.press('Escape');
+  await expect(history(page)).toHaveCount(0);
+  await page.reload();
+  await expect(toolbar(page)).toBeVisible();
+  await expect(history(page)).toHaveCount(0);
+});

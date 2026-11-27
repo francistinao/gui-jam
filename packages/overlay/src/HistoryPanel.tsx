@@ -1,6 +1,6 @@
 import type { HistoryEntry } from '@guijam/contracts-ts';
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
-import type { Controller, WidgetState } from './controller';
+import { type Controller, HISTORY_KEY, type WidgetState } from './controller';
 import { Button } from './figui/button';
 import { Tab, Tabs, TabsList } from './figui/tabs';
 import { onUrlChange } from './JobBadges';
@@ -10,6 +10,24 @@ import type { Store } from './store';
 import { pageKey } from './tracker';
 
 type Filter = 'page' | 'all';
+
+export function savedHistoryTab(): Filter | null {
+  try {
+    const value = sessionStorage.getItem(HISTORY_KEY);
+    return value === null ? null : value === 'all' ? 'all' : 'page';
+  } catch {
+    return null;
+  }
+}
+
+export function saveHistoryTab(tab: Filter | null): void {
+  try {
+    if (tab) sessionStorage.setItem(HISTORY_KEY, tab);
+    else sessionStorage.removeItem(HISTORY_KEY);
+  } catch {
+    return;
+  }
+}
 
 function currentKey(): string {
   return pageKey(window.location);
@@ -80,7 +98,7 @@ export function HistoryPanel({
   controller: Controller;
 }) {
   const here = useSyncExternalStore(onUrlChange, currentKey);
-  const [filter, setFilter] = useState<Filter>('page');
+  const [filter, setFilter] = useState<Filter>(() => savedHistoryTab() ?? 'page');
   const [entries, setEntries] = useState<HistoryEntry[]>([]);
   const [more, setMore] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -143,7 +161,13 @@ export function HistoryPanel({
         onClose={close}
         controller={controller}
       />
-      <Tabs value={filter} onValueChange={(next) => setFilter(next as Filter)}>
+      <Tabs
+        value={filter}
+        onValueChange={(next) => {
+          setFilter(next as Filter);
+          saveHistoryTab(next as Filter);
+        }}
+      >
         <TabsList>
           <Tab value="page">This page</Tab>
           <Tab value="all">All pages</Tab>
