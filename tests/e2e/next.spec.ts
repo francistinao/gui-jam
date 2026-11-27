@@ -12,12 +12,20 @@ import {
   editText,
   hideAndShowSketch,
   jiraLoop,
+  pasteStyle,
   pickThemeColor,
   promptForTwo,
   sketchWithUndo,
 } from './support/new-features.js';
 import { type Bundler, type NextServer, startNext } from './support/next.js';
 import { searchPath } from './support/process.js';
+import { type References, startReferences } from './support/references.js';
+import {
+  collapsedPanel,
+  historyRoundTrip,
+  linksAndFigma,
+  styleGroups,
+} from './support/release-qa.js';
 
 const NEXT_DIR = fileURLToPath(new URL('../../fixtures/small-next-tailwind4/', import.meta.url));
 const FAKE_CLI_DIR = fileURLToPath(new URL('../fake-cli/', import.meta.url));
@@ -80,6 +88,8 @@ async function circle(page: Page, element: Locator): Promise<void> {
   await page.mouse.up();
 }
 
+let references: References;
+
 for (const bundler of BUNDLERS) {
   test.describe(`next.js with ${bundler}`, () => {
     let next: NextServer;
@@ -87,6 +97,7 @@ for (const bundler of BUNDLERS) {
 
     test.beforeAll(async () => {
       await requireDaemonBinary();
+      references = await startReferences();
       await stopDaemon(NEXT_DIR);
       workDir = await mkdtemp(join(tmpdir(), `guijam-next-${bundler}-`));
       process.env.GUIJAM_GJD_BIN = GJD_BINARY;
@@ -105,6 +116,7 @@ for (const bundler of BUNDLERS) {
     });
 
     test.afterAll(async () => {
+      await references?.stop();
       await next?.stop();
       await stopDaemon(NEXT_DIR);
       delete process.env.GUIJAM_GJD_BIN;
@@ -364,6 +376,66 @@ for (const bundler of BUNDLERS) {
         file: 'app/components/OrderButton.tsx',
         path: ORDER_BUTTON,
       });
+    });
+    test('Text, opacity, stroke and a shadow write classes and Undo restores them', async ({
+      page,
+    }) => {
+      await open(page, next.url);
+      await chooseTool(page, 'Select');
+      await styleGroups(page, {
+        element: page.getByRole('button', { name: 'Order now' }),
+        file: 'app/components/OrderButton.tsx',
+        path: ORDER_BUTTON,
+      });
+    });
+    test('History undoes an older change, keeps the newer one and redoes it', async ({ page }) => {
+      await open(page, next.url);
+      await chooseTool(page, 'Select');
+      await historyRoundTrip(page, {
+        element: page.getByRole('button', { name: 'Order now' }),
+        file: 'app/components/OrderButton.tsx',
+        path: ORDER_BUTTON,
+      });
+    });
+    test('the panel leads with Ask AI and keeps style sections folded', async ({ page }) => {
+      await open(page, next.url);
+      await chooseTool(page, 'Select');
+      await collapsedPanel(page, {
+        element: page.getByRole('button', { name: 'Order now' }),
+        file: 'app/components/OrderButton.tsx',
+        path: ORDER_BUTTON,
+      });
+    });
+    test('a page link and a Figma frame both reach the AI', async ({ page }) => {
+      await open(page, next.url);
+      await chooseTool(page, 'Select');
+      await linksAndFigma(
+        page,
+        {
+          element: page.getByRole('button', { name: 'Order now' }),
+          file: 'app/components/OrderButton.tsx',
+          path: ORDER_BUTTON,
+        },
+        references,
+        process.env.GUIJAM_FAKE_CLAUDE_LOG ?? '',
+      );
+    });
+    test('Copy style pastes the button style and Undo restores it', async ({ page }) => {
+      await open(page, next.url);
+      await chooseTool(page, 'Select');
+      await pasteStyle(
+        page,
+        {
+          element: page.getByRole('button', { name: 'Order now' }),
+          file: 'app/components/OrderButton.tsx',
+          path: ORDER_BUTTON,
+        },
+        {
+          element: page.getByText('Gift cards for every occasion'),
+          file: 'app/page.tsx',
+          path: PAGE,
+        },
+      );
     });
   });
 }

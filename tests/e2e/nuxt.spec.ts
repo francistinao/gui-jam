@@ -19,6 +19,14 @@ import {
 } from './support/new-features.js';
 import { type NuxtServer, startNuxt } from './support/nuxt.js';
 import { searchPath } from './support/process.js';
+import { type References, startReferences } from './support/references.js';
+import {
+  collapsedPanel,
+  historyRoundTrip,
+  linksAndFigma,
+  pasteStyleOntoClasses,
+  styleGroups,
+} from './support/release-qa.js';
 
 const NUXT_DIR = fileURLToPath(new URL('../../fixtures/small-nuxt-tailwind4/', import.meta.url));
 const FAKE_CLI_DIR = fileURLToPath(new URL('../fake-cli/', import.meta.url));
@@ -32,6 +40,7 @@ const LIGHT_BLUE_RGB = 'rgb(37, 99, 235)';
 test.describe.configure({ timeout: 120_000 });
 
 let nuxt: NuxtServer;
+let references: References;
 let workDir: string;
 let original: string;
 let originalApp: string;
@@ -66,6 +75,7 @@ async function chooseTool(page: Page, name: 'Select' | 'Draw'): Promise<void> {
 
 test.beforeAll(async () => {
   await requireDaemonBinary();
+  references = await startReferences();
   await stopDaemon(NUXT_DIR);
   workDir = await mkdtemp(join(tmpdir(), 'guijam-nuxt-'));
   original = await readFile(ORDER_BUTTON, 'utf8');
@@ -84,6 +94,7 @@ test.afterEach(async ({ page }) => {
 });
 
 test.afterAll(async () => {
+  await references?.stop();
   await nuxt?.stop();
   await stopDaemon(NUXT_DIR);
   await rm(workDir, { recursive: true, force: true });
@@ -255,4 +266,60 @@ test('dragging a padding handle writes the shorter padding tokens and Undo resto
     file: 'app/components/OrderButton.vue',
     path: ORDER_BUTTON,
   });
+});
+test('Text, opacity, stroke and a shadow write classes and Undo restores them', async ({
+  page,
+}) => {
+  await openFixture(page, nuxt.url);
+  await chooseTool(page, 'Select');
+  await styleGroups(page, {
+    element: page.getByRole('button', { name: 'Order now' }),
+    file: 'app/components/OrderButton.vue',
+    path: ORDER_BUTTON,
+  });
+});
+test('History undoes an older change, keeps the newer one and redoes it', async ({ page }) => {
+  await openFixture(page, nuxt.url);
+  await chooseTool(page, 'Select');
+  await historyRoundTrip(page, {
+    element: page.getByRole('button', { name: 'Order now' }),
+    file: 'app/components/OrderButton.vue',
+    path: ORDER_BUTTON,
+  });
+});
+test('the panel leads with Ask AI and keeps style sections folded', async ({ page }) => {
+  await openFixture(page, nuxt.url);
+  await chooseTool(page, 'Select');
+  await collapsedPanel(page, {
+    element: page.getByRole('button', { name: 'Order now' }),
+    file: 'app/components/OrderButton.vue',
+    path: ORDER_BUTTON,
+  });
+});
+test('a page link and a Figma frame both reach the AI', async ({ page }) => {
+  await openFixture(page, nuxt.url);
+  await chooseTool(page, 'Select');
+  await linksAndFigma(
+    page,
+    {
+      element: page.getByRole('button', { name: 'Order now' }),
+      file: 'app/components/OrderButton.vue',
+      path: ORDER_BUTTON,
+    },
+    references,
+    join(workDir, 'runs.jsonl'),
+  );
+});
+test('Copy style pastes the button style and Undo restores it', async ({ page }) => {
+  await openFixture(page, nuxt.url);
+  await chooseTool(page, 'Select');
+  await pasteStyleOntoClasses(
+    page,
+    {
+      element: page.getByRole('button', { name: 'Order now' }),
+      file: 'app/components/OrderButton.vue',
+      path: ORDER_BUTTON,
+    },
+    { element: page.getByRole('heading', { level: 1 }), file: 'app/app.vue', path: APP },
+  );
 });

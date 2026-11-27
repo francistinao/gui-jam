@@ -146,6 +146,9 @@ test('Enter and Space on a section header open and close it', async ({ page }) =
 test('an opened section stays open on the next element and after a reload', async ({ page }) => {
   const panel = await selectButton(page);
   await openSection(panel, 'Text');
+  await expect
+    .poll(() => page.evaluate(() => sessionStorage.getItem('guijam:sections') ?? ''))
+    .toContain('text');
 
   const gift = await select(page, page.getByText(GIFT), 'Fine-tune src/App.tsx');
   await expect(details(gift, 'Text')).toHaveAttribute('open');

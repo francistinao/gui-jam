@@ -20,6 +20,13 @@ import {
   sketchWithUndo,
 } from './support/new-features.js';
 import { searchPath } from './support/process.js';
+import { type References, startReferences } from './support/references.js';
+import {
+  collapsedPanel,
+  historyRoundTrip,
+  linksAndFigma,
+  styleGroups,
+} from './support/release-qa.js';
 
 const ASTRO_DIR = fileURLToPath(new URL('../../fixtures/small-astro-tailwind4/', import.meta.url));
 const FAKE_CLI_DIR = fileURLToPath(new URL('../fake-cli/', import.meta.url));
@@ -36,6 +43,7 @@ const ESPRESSO_RGB = 'rgb(59, 36, 24)';
 test.describe.configure({ timeout: 90_000 });
 
 let astro: AstroServer;
+let references: References;
 let workDir: string;
 const originals = new Map<string, string>();
 const savedPath = process.env.PATH;
@@ -86,6 +94,7 @@ async function circle(page: Page, element: Locator): Promise<void> {
 
 test.beforeAll(async () => {
   await requireDaemonBinary();
+  references = await startReferences();
   await stopDaemon(ASTRO_DIR);
   workDir = await mkdtemp(join(tmpdir(), 'guijam-astro-'));
   process.env.GUIJAM_GJD_BIN = GJD_BINARY;
@@ -105,6 +114,7 @@ test.afterEach(async ({ page }) => {
 });
 
 test.afterAll(async () => {
+  await references?.stop();
   await astro?.stop();
   await stopDaemon(ASTRO_DIR);
   delete process.env.GUIJAM_GJD_BIN;
@@ -364,6 +374,49 @@ test('dragging a padding handle writes the shorter padding tokens and Undo resto
     file: 'src/components/OrderButton.astro',
     path: ORDER_BUTTON,
   });
+});
+test('Text, opacity, stroke and a shadow write classes and Undo restores them', async ({
+  page,
+}) => {
+  await openFixture(page, astro.url);
+  await chooseTool(page, 'Select');
+  await styleGroups(page, {
+    element: page.getByRole('button', { name: 'Order now' }),
+    file: 'src/components/OrderButton.astro',
+    path: ORDER_BUTTON,
+  });
+});
+test('History undoes an older change, keeps the newer one and redoes it', async ({ page }) => {
+  await openFixture(page, astro.url);
+  await chooseTool(page, 'Select');
+  await historyRoundTrip(page, {
+    element: page.getByRole('button', { name: 'Order now' }),
+    file: 'src/components/OrderButton.astro',
+    path: ORDER_BUTTON,
+  });
+});
+test('the panel leads with Ask AI and keeps style sections folded', async ({ page }) => {
+  await openFixture(page, astro.url);
+  await chooseTool(page, 'Select');
+  await collapsedPanel(page, {
+    element: page.getByRole('button', { name: 'Order now' }),
+    file: 'src/components/OrderButton.astro',
+    path: ORDER_BUTTON,
+  });
+});
+test('a page link and a Figma frame both reach the AI', async ({ page }) => {
+  await openFixture(page, astro.url);
+  await chooseTool(page, 'Select');
+  await linksAndFigma(
+    page,
+    {
+      element: page.getByRole('button', { name: 'Order now' }),
+      file: 'src/components/OrderButton.astro',
+      path: ORDER_BUTTON,
+    },
+    references,
+    process.env.GUIJAM_FAKE_CLAUDE_LOG ?? '',
+  );
 });
 test('Copy style pastes a button style onto an inline-styled paragraph and Undo restores it', async ({
   page,
