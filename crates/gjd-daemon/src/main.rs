@@ -201,7 +201,18 @@ fn figma(command: &FigmaCommand) -> Result<String, String> {
             "No Figma token was saved.".to_owned()
         }),
         FigmaCommand::Status { json } => {
-            let saved = figma::load();
+            let saved = match figma::load() {
+                Ok(saved) => saved,
+                Err(error) if *json => {
+                    return Ok(serde_json::json!({
+                        "token": null,
+                        "accepted": null,
+                        "error": error.to_string(),
+                    })
+                    .to_string());
+                }
+                Err(error) => return Ok(format!("{error}. {}", error.action())),
+            };
             let checked = saved.as_ref().map(|(token, _)| figma::check(token));
             if *json {
                 return Ok(serde_json::json!({

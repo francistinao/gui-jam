@@ -2860,7 +2860,9 @@ impl Daemon {
             .map(figma::target)
             .collect::<Result<Vec<_>, _>>()
             .map_err(|error| figma_failure(&error))?;
-        let (token, _) = figma::load().ok_or_else(|| figma_failure(&figma::FigmaError::NoToken))?;
+        let (token, _) = figma::load()
+            .map_err(|error| figma_failure(&error))?
+            .ok_or_else(|| figma_failure(&figma::FigmaError::NoToken))?;
         let mut frames = Vec::with_capacity(targets.len());
         for target in targets {
             progress.detail(format!("Figma · {} · reading the frame", target.node));

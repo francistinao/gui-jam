@@ -69,7 +69,7 @@ Run these in your app's folder.
 | `npx guijam provider use <id>` | Switches the AI tool: `claude-code`, `codex`, `opencode`, `qwen-code` or `gemini-cli`. |
 | `npx guijam provider use opencode --model <id>` | With OpenCode, also picks the model, such as `deepseek/deepseek-chat`. |
 | `npx guijam provider use <id> --effort <level>` | Fixes how hard the AI tool thinks: `low`, `medium` or `high`. Without it, GUIJam uses low for small edits and questions and medium for sketches and open-ended changes. Claude Code and Codex use it. |
-| `npx guijam figma login` | Saves a Figma personal access token so GUIJam can read frames you link. It is checked with Figma, then kept in the macOS Keychain or Windows Credential Manager, or in `~/.config/guijam/figma-token` (readable only by you) on Linux. |
+| `npx guijam figma login` | Saves a Figma personal access token so GUIJam can read frames you link. It is checked with Figma, then kept in Windows Credential Manager, or in `~/.config/guijam/figma-token` (readable only by you) on macOS and Linux. |
 | `npx guijam figma status` | Shows whether a token is saved and Figma accepts it. Add `--json` for scripts. |
 | `npx guijam figma logout` | Forgets the saved Figma token. |
 | `npx guijam --help` | Shows every command and option. |

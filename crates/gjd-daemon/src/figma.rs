@@ -105,6 +105,8 @@ pub enum FigmaError {
     Network(String),
     #[error("Figma's answer couldn't be read")]
     Unreadable,
+    #[error("the saved Figma token couldn't be read ({0})")]
+    Store(String),
     #[error("this frame is too large to read")]
     TooLarge,
 }
@@ -117,6 +119,7 @@ impl FigmaError {
             Self::WholeFile => {
                 "In Figma, right-click the frame, choose Copy link to selection, and paste that link."
             }
+            Self::Store(_) => "Run npx guijam figma login to save the token again.",
             Self::NoToken | Self::Refused => {
                 "Run npx guijam figma login with a personal access token that can read this file."
             }
@@ -177,7 +180,7 @@ fn token_file() -> Option<PathBuf> {
     config::config_path().map(|config| config.with_file_name(TOKEN_FILE))
 }
 
-#[cfg(any(target_os = "macos", target_os = "windows"))]
+#[cfg(target_os = "windows")]
 mod keychain {
     use std::sync::Once;
 
@@ -189,11 +192,6 @@ mod keychain {
     fn store() {
         static ONCE: Once = Once::new();
         ONCE.call_once(|| {
-            #[cfg(target_os = "macos")]
-            if let Ok(store) = apple_native_keyring_store::keychain::Store::new() {
-                keyring_core::set_default_store(store);
-            }
-            #[cfg(target_os = "windows")]
             if let Ok(store) = windows_native_keyring_store::Store::new() {
                 keyring_core::set_default_store(store);
             }
@@ -228,7 +226,8 @@ mod keychain {
     }
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+#[cfg(not(target_os = "windows"))]
+#[allow(clippy::unnecessary_wraps)]
 mod keychain {
     pub fn get() -> Result<Option<String>, String> {
         Ok(None)
@@ -243,32 +242,37 @@ mod keychain {
     }
 }
 
-fn read_file(path: &Path) -> Option<Token> {
-    std::fs::read_to_string(path)
-        .ok()
-        .and_then(|text| Token::new(&text))
+fn read_file(path: &Path) -> Result<Option<Token>, String> {
+    match std::fs::read_to_string(path) {
+        Ok(text) => Ok(Token::new(&text)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error.to_string()),
+    }
 }
 
-#[must_use]
-pub fn load() -> Option<(Token, Stored)> {
+pub fn load() -> Result<Option<(Token, Stored)>, FigmaError> {
     if let Some(token) = std::env::var(TOKEN_ENV)
         .ok()
         .and_then(|value| Token::new(&value))
     {
-        return Some((token, Stored::Env));
+        return Ok(Some((token, Stored::Env)));
     }
-    if let Ok(Some(value)) = keychain::get()
-        && let Some(token) = Token::new(&value)
+    if let Some(token) = keychain::get()
+        .map_err(FigmaError::Store)?
+        .and_then(|value| Token::new(&value))
     {
-        return Some((token, Stored::Keychain));
+        return Ok(Some((token, Stored::Keychain)));
     }
-    token_file()
-        .and_then(|path| read_file(&path))
-        .map(|token| (token, Stored::File))
+    let Some(path) = token_file() else {
+        return Ok(None);
+    };
+    Ok(read_file(&path)
+        .map_err(FigmaError::Store)?
+        .map(|token| (token, Stored::File)))
 }
 
 pub fn save(token: &Token) -> Result<Stored, String> {
-    if cfg!(any(target_os = "macos", target_os = "windows")) {
+    if cfg!(target_os = "windows") {
         keychain::set(token.header())?;
         return Ok(Stored::Keychain);
     }
@@ -463,7 +467,7 @@ struct Outline<'d> {
 
 impl Outline<'_> {
     fn push(&mut self, line: String) -> bool {
-        let cost = escape(&line).len() + 1;
+        let cost = escape_text(&line).len() + 1;
         if self.lines.len() >= MAX_LINES || self.chars + cost > MAX_CHARS {
             self.cut = true;
             return false;
@@ -500,7 +504,13 @@ impl Outline<'_> {
 
     fn describe(&self, node: &Value, kind: &str) -> String {
         let name = node.get("name").and_then(Value::as_str).unwrap_or("");
-        let mut parts = vec![format!("{kind} \"{name}\"")];
+        let named_by_text =
+            kind == "TEXT" && node.get("characters").and_then(Value::as_str) == Some(name);
+        let mut parts = vec![if named_by_text {
+            kind.to_owned()
+        } else {
+            format!("{kind} \"{name}\"")
+        }];
         if let Some(bounds) = node.get("absoluteBoundingBox")
             && let (Some(width), Some(height)) = (number(bounds, "width"), number(bounds, "height"))
         {
@@ -536,8 +546,11 @@ impl Outline<'_> {
         }
         parts.extend(effects(node));
         if let Some(radii) = node.get("rectangleCornerRadii").and_then(Value::as_array) {
-            let radii: Vec<String> = radii.iter().filter_map(Value::as_f64).map(px).collect();
-            parts.push(format!("radius {}", radii.join(" ")));
+            let radii: Vec<f64> = radii.iter().filter_map(Value::as_f64).collect();
+            if radii.iter().any(|radius| *radius > 0.0) {
+                let radii: Vec<String> = radii.into_iter().map(px).collect();
+                parts.push(format!("radius {}", radii.join(" ")));
+            }
         } else if let Some(radius) = number(node, "cornerRadius").filter(|radius| *radius > 0.0) {
             parts.push(format!("radius {}", px(radius)));
         }
@@ -758,6 +771,12 @@ fn read_from(api: &str, target: &Target, token: &Token, images: bool) -> Result<
     })
 }
 
+fn escape_text(text: &str) -> String {
+    text.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
 fn escape(text: &str) -> String {
     text.replace('&', "&amp;")
         .replace('<', "&lt;")
@@ -790,13 +809,17 @@ pub fn render(frames: Vec<Frame>, first_image: usize) -> Rendered {
         let size = frame.size.map_or_else(String::new, |(width, height)| {
             format!(", {}×{}", px(width), px(height))
         });
-        let _ = writeln!(out, "Frame: \"{}\"{size}", escape(&frame.name));
+        let _ = writeln!(out, "Frame: \"{}\"{size}", escape_text(&frame.name));
         if let Some(image) = frame.image {
             let number = first_image + rendered.images.len();
             let _ = writeln!(out, "Image {number} is a render of this frame.");
             rendered.images.push(image);
         }
-        let _ = writeln!(out, "Layers (exact values):\n{}", escape(&frame.outline));
+        let _ = writeln!(
+            out,
+            "Layers (exact values):\n{}",
+            escape_text(&frame.outline)
+        );
         out.push_str("Not in the frame: breakpoints, hover and focus states unless they are variants, motion.\n</figma>\n");
         if let Some(note) = frame.note {
             rendered
@@ -981,6 +1004,51 @@ mod tests {
                 .contains("Image 2 is a render of this frame.")
         );
         assert_eq!(rendered.images.len(), 1);
+    }
+
+    #[test]
+    fn the_outline_skips_repeated_text_names_and_square_corners() {
+        let document = serde_json::json!({
+            "type": "FRAME",
+            "name": "Card",
+            "rectangleCornerRadii": [0, 0, 0, 0],
+            "children": [
+                { "type": "TEXT", "name": "Book a tour", "characters": "Book a tour" },
+                { "type": "TEXT", "name": "Title", "characters": "Plan your day" },
+                { "type": "RECTANGLE", "name": "Tab", "rectangleCornerRadii": [0, 8, 0, 0] }
+            ]
+        });
+
+        let (text, cut) = super::outline(
+            &document,
+            &serde_json::Value::Null,
+            &serde_json::Value::Null,
+        );
+
+        assert!(!cut);
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(lines[0], "FRAME \"Card\"");
+        assert!(lines[1].starts_with("  TEXT · text \"Book a tour\""));
+        assert!(lines[2].starts_with("  TEXT \"Title\" · text \"Plan your day\""));
+        assert_eq!(lines[3], "  RECTANGLE \"Tab\" · radius 0 8 0 0");
+    }
+
+    #[test]
+    fn the_frame_block_escapes_markup_but_keeps_quotes_readable() {
+        assert_eq!(
+            super::escape_text("TEXT \"Say <b>hi</b> & go\""),
+            "TEXT \"Say &lt;b&gt;hi&lt;/b&gt; &amp; go\""
+        );
+    }
+
+    #[test]
+    fn a_token_file_that_cannot_be_read_is_an_error_not_a_missing_token() {
+        let folder = tempfile::tempdir().expect("folder");
+        assert_eq!(
+            super::read_file(&folder.path().join("figma-token")),
+            Ok(None)
+        );
+        assert!(super::read_file(folder.path()).is_err());
     }
 
     #[test]
