@@ -17,7 +17,9 @@ import {
   parseHex,
   RADIUS_RANGE,
   radiusOfToken,
+  type Screen,
   sectionSummary,
+  variantOwners,
 } from './model';
 import { CodeChanges, Popover, PopoverHeader, SKETCH_LABEL } from './Popover';
 import {
@@ -30,6 +32,7 @@ import {
   StrokeEditor,
   TextEditor,
 } from './StyleEditors';
+import { useScreen } from './screen';
 import { type Store, useStore } from './store';
 import { TicketField } from './TicketField';
 
@@ -207,6 +210,7 @@ function Section({
   draft,
   current,
   open,
+  screen,
   controller,
 }: {
   section: PanelSection;
@@ -214,6 +218,7 @@ function Section({
   draft: Draft;
   current: Current | null;
   open: boolean;
+  screen: Screen;
   controller: Controller;
 }) {
   const label = GROUP_LABELS[section.group];
@@ -248,6 +253,22 @@ function Section({
   }
   const Editor = EDITORS[section.group];
   const others = otherTokens(style, section.group);
+  const owners = variantOwners(style, section.group, screen);
+  if (owners.length > 0) {
+    return (
+      <section aria-label={label} className="flex flex-col gap-1 py-2">
+        <div className="flex items-center gap-2">
+          <h3 className="typography-body-medium shrink-0 font-[500]">{label}</h3>
+          <span className="typography-body-small min-w-0 truncate text-grey-500">
+            {sectionSummary(section.group, style, current, draft)}
+          </span>
+        </div>
+        <p role="note" className="typography-body-small rounded-md bg-grey-100 p-2 text-grey-700">
+          {`At this width, ${owners.join(' and ')} ${owners.length === 1 ? 'sets' : 'set'} this. Change it in your code or with Ask AI.`}
+        </p>
+      </section>
+    );
+  }
   return (
     <section aria-label={label}>
       <details
@@ -292,6 +313,7 @@ export function FinetunePanel({ store, controller }: PanelProps) {
   const ticket = useStore(store, (state) => state.ticket);
   const panelAt = useStore(store, (state) => state.panelAt);
   const openSections = useStore(store, (state) => state.openSections);
+  const screen = useScreen();
 
   if (!selection || !anchor) return null;
   const unsaved = preview !== null || Object.keys(draft).length > 0;
@@ -367,6 +389,7 @@ export function FinetunePanel({ store, controller }: PanelProps) {
                 draft={draft}
                 current={current}
                 open={openSections.includes(section.group)}
+                screen={screen}
                 controller={controller}
               />
             ))

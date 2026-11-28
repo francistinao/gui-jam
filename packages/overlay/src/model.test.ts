@@ -27,6 +27,7 @@ import {
   followedSrc,
   formatElapsed,
   gapSlots,
+  heldSpacing,
   hexOfComputedColor,
   intersects,
   invertChanges,
@@ -82,6 +83,8 @@ import {
   toggleTarget,
   undoStroke,
   unionRect,
+  variantActive,
+  variantOwners,
   withoutInstalled,
 } from './model';
 
@@ -1812,5 +1815,49 @@ describe('sectionSummary', () => {
   it('leaves out gap outside flex and grid, and says nothing before the element is read', () => {
     expect(sectionSummary('layout', button, currentOf(computed({})), {})).toBe('12 24 12 24');
     expect(sectionSummary('fill', button, null, {})).toBe('');
+  });
+});
+
+describe('breakpoint guard', () => {
+  const phone = { width: 390, dark: false };
+  const desktop = { width: 1280, dark: false };
+  const layout = (raw: string, property: string, variants: string[]) => ({
+    ...token(raw, 'layout'),
+    property,
+    variants,
+    editable: variants.length === 0,
+  });
+  const hero = style({
+    tokens: [
+      layout('pt-14', 'padding-top', []),
+      layout('pb-20', 'padding-bottom', []),
+      layout('sm:pb-28', 'padding-bottom', ['sm']),
+      layout('md:gap-x-6', 'column-gap', ['md']),
+      { ...token('hover:bg-brand', 'fill'), variants: ['hover'], editable: false },
+    ],
+  });
+
+  it('knows which media variants apply at a width', () => {
+    expect(variantActive('md', desktop)).toBe(true);
+    expect(variantActive('md', phone)).toBe(false);
+    expect(variantActive('max-md', phone)).toBe(true);
+    expect(variantActive('max-md', desktop)).toBe(false);
+    expect(variantActive('min-[900px]', desktop)).toBe(true);
+    expect(variantActive('min-[60rem]', phone)).toBe(false);
+    expect(variantActive('max-[600px]', phone)).toBe(true);
+    expect(variantActive('dark', { width: 390, dark: true })).toBe(true);
+    expect(variantActive('hover', desktop)).toBe(false);
+    expect(variantActive('tablet', desktop)).toBe(false);
+  });
+
+  it('names the breakpoint classes that set a group now, and leaves state variants alone', () => {
+    expect(variantOwners(hero, 'layout', desktop)).toEqual(['sm:pb-28', 'md:gap-x-6']);
+    expect(variantOwners(hero, 'layout', phone)).toEqual([]);
+    expect(variantOwners(hero, 'fill', desktop)).toEqual([]);
+  });
+
+  it('holds only the sides and gaps those classes set', () => {
+    expect([...heldSpacing(hero, desktop)].sort()).toEqual(['bottom', 'column']);
+    expect(heldSpacing(hero, phone).size).toBe(0);
   });
 });

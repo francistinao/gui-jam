@@ -5,6 +5,7 @@ import {
   draggedSpacing,
   type GapSlot,
   gapSlots,
+  heldSpacing,
   type Point,
   paddingBands,
   panelSections,
@@ -16,6 +17,7 @@ import {
   snapSpacing,
   spacingLabel,
 } from './model';
+import { useScreen } from './screen';
 import { type Store, useStore } from './store';
 
 type Target = Side | 'row' | 'column';
@@ -178,6 +180,7 @@ export function SpacingHandles({
   const draft = useStore(store, (state) => state.draft);
   const gone = useStore(store, (state) => state.selectionGone);
   const src = useStore(store, (state) => state.selection?.src);
+  const screen = useScreen();
   useEffect(() => {
     const element = src ? controller.selectedElement() : undefined;
     if (!element) return;
@@ -207,9 +210,12 @@ export function SpacingHandles({
     column: draft.layout?.gap?.column ?? current.gap.column,
   };
   const slots = current.flow ? gapSlots(controller.childRects()) : [];
+  const held = heldSpacing(style, screen);
   const axes = (['column', 'row'] as const)
+    .filter((axis) => !held.has(axis))
     .map((axis) => slots.find((slot) => slot.axis === axis))
     .filter((slot): slot is GapSlot => slot !== undefined);
+  const sides = SIDES.filter((side) => !held.has(side));
   return (
     <>
       {SIDES.map((side) => (
@@ -228,7 +234,7 @@ export function SpacingHandles({
           style={slot.rect}
         />
       ))}
-      {SIDES.map((side) => (
+      {sides.map((side) => (
         <Handle
           key={side}
           target={side}

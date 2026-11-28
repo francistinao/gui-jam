@@ -67,10 +67,12 @@ import {
   type Tool,
   toggleTarget,
   undoStroke,
+  variantOwners,
   withoutInstalled,
 } from './model';
 import { collectPageOutline } from './page-outline';
 import type { Saved } from './persist';
+import { currentScreen } from './screen';
 import { captureSketch, captureView } from './sketch';
 import type { Store } from './store';
 import {
@@ -391,6 +393,7 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
   let previewing: Promise<void> = Promise.resolve();
   let noticeTimer: ReturnType<typeof setTimeout> | undefined;
   let editSequence = 0;
+  let lastWidth = window.innerWidth;
   let selectSequence = 0;
   let previousFocus: string | null = null;
   const runs = new Map<string, string>();
@@ -1174,7 +1177,9 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
     await openFinetune(element);
     const { style, current, selection } = store.get();
     if (!style || !current || selection?.src !== selectionOf(element)?.src) return;
-    const draft = pastedDraft(pickedValues(copied.values, pasting), current, style);
+    const screen = currentScreen();
+    const open = pasting.filter((group) => variantOwners(style, group, screen).length === 0);
+    const draft = pastedDraft(pickedValues(copied.values, open), current, style);
     if (Object.keys(draft).length === 0) {
       notify({ kind: 'info', message: 'Already matches the copied style.' });
       return;
@@ -1920,6 +1925,11 @@ export function createController(host: WidgetHost, store: Store<WidgetState>) {
       }
       const element = selection ? elementsAt(selection.src)[0] : undefined;
       if (element) store.set({ anchor: rectOf(element) });
+      const { width } = currentScreen();
+      if (selection && width !== lastWidth && Object.keys(store.get().draft).length === 0) {
+        refreshCurrent(selection);
+      }
+      lastWidth = width;
     },
   };
   return controllerApi;

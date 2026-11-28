@@ -1828,3 +1828,74 @@ export function sectionSummary(
       return `${draft.opacity ?? current.opacity}%`;
   }
 }
+
+export interface Screen {
+  width: number;
+  dark: boolean;
+}
+
+const BREAKPOINTS: Readonly<Record<string, number>> = {
+  sm: 640,
+  md: 768,
+  lg: 1024,
+  xl: 1280,
+  '2xl': 1536,
+};
+
+function lengthPx(value: string): number | null {
+  const match = /^(\d+(?:\.\d+)?)(px|rem)$/.exec(value);
+  if (!match) return null;
+  return Number(match[1]) * (match[2] === 'rem' ? 16 : 1);
+}
+
+function breakpointPx(name: string): number | null {
+  const named = BREAKPOINTS[name];
+  if (named !== undefined) return named;
+  return name.startsWith('[') && name.endsWith(']') ? lengthPx(name.slice(1, -1)) : null;
+}
+
+export function variantActive(variant: string, screen: Screen): boolean {
+  if (variant === 'dark') return screen.dark;
+  const min = variant.startsWith('min-') ? breakpointPx(variant.slice(4)) : breakpointPx(variant);
+  if (min !== null && !variant.startsWith('max-')) return screen.width >= min;
+  const max = variant.startsWith('max-') ? breakpointPx(variant.slice(4)) : null;
+  return max !== null && screen.width < max;
+}
+
+export function variantOwners(style: ElementStyle, group: StyleGroup, screen: Screen): string[] {
+  return style.tokens
+    .filter(
+      (token) =>
+        token.group === group &&
+        token.variants.length > 0 &&
+        token.variants.every((variant) => variantActive(variant, screen)),
+    )
+    .map((token) => token.token);
+}
+
+const HELD_BY: Readonly<Record<Side | GapSlot['axis'], readonly string[]>> = {
+  top: ['padding', 'padding-y', 'padding-top'],
+  right: ['padding', 'padding-x', 'padding-right'],
+  bottom: ['padding', 'padding-y', 'padding-bottom'],
+  left: ['padding', 'padding-x', 'padding-left'],
+  row: ['gap', 'row-gap'],
+  column: ['gap', 'column-gap'],
+};
+
+export function heldSpacing(style: ElementStyle, screen: Screen): Set<Side | GapSlot['axis']> {
+  const properties = new Set(
+    style.tokens
+      .filter(
+        (token) =>
+          token.group === 'layout' &&
+          token.variants.length > 0 &&
+          token.variants.every((variant) => variantActive(variant, screen)),
+      )
+      .map((token) => token.property),
+  );
+  return new Set(
+    (Object.keys(HELD_BY) as (Side | GapSlot['axis'])[]).filter((target) =>
+      HELD_BY[target].some((property) => properties.has(property)),
+    ),
+  );
+}
