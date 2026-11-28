@@ -478,3 +478,146 @@ fn status_never_prints_the_token_or_the_account() {
         );
     }
 }
+
+fn gjd_within(
+    args: &[&str],
+    config: &std::path::Path,
+    api: Option<&Fake>,
+    stdin: Option<&str>,
+) -> (Option<i32>, String) {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_gjd"));
+    command
+        .args(args)
+        .env_remove(figma::TOKEN_ENV)
+        .env("XDG_CONFIG_HOME", config)
+        .env("HOME", config)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    if let Some(api) = api {
+        command.env(figma::API_ENV, format!("{}/api", api.base));
+    }
+    let mut child = command.spawn().expect("gjd started");
+    if let Some(text) = stdin {
+        child
+            .stdin
+            .take()
+            .expect("stdin")
+            .write_all(text.as_bytes())
+            .expect("token written");
+    } else {
+        drop(child.stdin.take());
+    }
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while child.try_wait().expect("polled").is_none() {
+        if std::time::Instant::now() > deadline {
+            let _ = child.kill();
+            return (None, "gjd did not finish within 20 s".to_owned());
+        }
+        thread::sleep(std::time::Duration::from_millis(100));
+    }
+    let output = child.wait_with_output().expect("collected");
+    (
+        output.status.code(),
+        format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        ),
+    )
+}
+
+#[cfg(unix)]
+#[test]
+fn login_keeps_the_token_in_a_file_only_the_owner_can_read() {
+    use std::os::unix::fs::PermissionsExt;
+    let api = serve(|_| json_reply(200, &json!({ "id": "1" })));
+    let config = tempfile::tempdir().expect("config dir");
+
+    let (code, text) = gjd_within(&["figma", "login"], config.path(), Some(&api), Some(SECRET));
+
+    assert_eq!(code, Some(0), "{text}");
+    assert!(!text.contains(SECRET), "{text}");
+    let file = config.path().join("guijam").join("figma-token");
+    let mode = std::fs::metadata(&file)
+        .expect("token file")
+        .permissions()
+        .mode()
+        & 0o777;
+    assert_eq!(mode, 0o600);
+    assert_eq!(
+        std::fs::read_to_string(&file).expect("readable").trim(),
+        SECRET
+    );
+    assert!(
+        api.seen()
+            .iter()
+            .all(|call| call.token.as_deref() == Some(SECRET))
+    );
+
+    let (code, text) = gjd_within(&["figma", "logout"], config.path(), Some(&api), None);
+    assert_eq!(code, Some(0), "{text}");
+    assert!(!file.exists());
+}
+
+#[test]
+fn status_without_a_token_file_reads_nothing_else_and_answers_at_once() {
+    let api = serve(|_| json_reply(200, &json!({ "id": "1" })));
+    let config = tempfile::tempdir().expect("config dir");
+
+    let (code, text) = gjd_within(
+        &["figma", "status", "--json"],
+        config.path(),
+        Some(&api),
+        None,
+    );
+
+    assert!(code.is_some(), "{text}");
+    assert!(
+        api.seen().is_empty(),
+        "a token came from somewhere: {} calls",
+        api.seen().len()
+    );
+    assert!(!text.to_lowercase().contains("keychain"), "{text}");
+}
+
+#[test]
+fn an_unreadable_token_file_is_not_reported_as_a_missing_token() {
+    let config = tempfile::tempdir().expect("config dir");
+    std::fs::create_dir_all(config.path().join("guijam").join("figma-token"))
+        .expect("a folder in the way");
+
+    let (_, text) = gjd_within(&["figma", "status"], config.path(), None, None);
+
+    assert!(!text.contains("No Figma token is saved"), "{text}");
+}
+
+#[test]
+fn the_outline_keeps_quotes_readable_drops_repeated_names_and_zero_radii() {
+    let api = serve(|_| {
+        json_reply(
+            200,
+            &json!({
+                "name": "Shop",
+                "nodes": { "12:34": { "document": {
+                    "type": "FRAME",
+                    "name": "Card",
+                    "absoluteBoundingBox": { "width": 320, "height": 200 },
+                    "children": [
+                        { "type": "TEXT", "name": "Say \"hi\" & <wave>", "characters": "Say \"hi\" & <wave>" },
+                        { "type": "GROUP", "name": "Box", "rectangleCornerRadii": [0, 0, 0, 0], "cornerRadius": 0 }
+                    ],
+                }, "components": {}, "styles": {} } }
+            }),
+        )
+    });
+
+    let output = read_through(&api, false);
+    let section = section(&output);
+
+    assert!(!section.contains("&quot;"), "{section}");
+    assert!(section.contains("&lt;wave&gt;"), "{section}");
+    assert_eq!(section.matches("&amp;").count(), 1, "{section}");
+    assert!(!section.contains("radius 0 0 0 0"), "{section}");
+    assert_eq!(section.matches("Say \"hi\"").count(), 1, "{section}");
+}
