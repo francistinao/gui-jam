@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 use std::io::Read as _;
 use std::net::{IpAddr, Ipv4Addr};
@@ -848,16 +848,18 @@ pub async fn read_all(
             .collect::<HashSet<_>>(),
     ));
     let mut tasks = JoinSet::new();
+    let mut indexes = HashMap::new();
     for (index, url) in found.links.iter().cloned().enumerate() {
         let options = options.clone();
         let events = events.clone();
         let claimed = Arc::clone(&claimed);
-        tasks.spawn(async move {
+        let task = tasks.spawn(async move {
             (
                 index,
                 read_one(url, options, events, reading_deadline, claimed).await,
             )
         });
+        indexes.insert(task.id(), index);
     }
     let mut reports: Vec<Option<Report>> = found.links.iter().map(|_| None).collect();
     loop {
@@ -868,7 +870,15 @@ pub async fn read_all(
             }
             next = tokio::time::timeout_at(deadline, tasks.join_next()) => match next {
                 Ok(Some(Ok((index, report)))) => reports[index] = Some(report),
-                Ok(Some(Err(_))) => {}
+                Ok(Some(Err(error))) => {
+                    if let Some(&index) = indexes.get(&error.id()) {
+                        tracing::warn!(%error, url = %found.links[index], "reading a link failed");
+                        reports[index] = Some(Report::failed(
+                            found.links[index].clone(),
+                            "GUIJam hit an error reading it",
+                        ));
+                    }
+                }
                 Ok(None) => break,
                 Err(_) => {
                     tasks.abort_all();

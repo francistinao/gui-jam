@@ -737,7 +737,7 @@ pub fn colors_in(value: &str) -> Vec<String> {
             .then(|| {
                 COLOR_FUNCTIONS
                     .iter()
-                    .find(|name| lower[at..].starts_with(*name))
+                    .find(|name| bytes[at..].starts_with(name.as_bytes()))
             })
             .flatten();
         if let Some(name) = function {
@@ -830,6 +830,14 @@ mod tests {
         Anchor, Code, HEADINGS, TEXT_CHARS, colors_in, decode_entities, google_font_families, scan,
         styles,
     };
+
+    #[test]
+    fn reads_colors_after_non_ascii_text_without_panicking() {
+        assert_eq!(
+            super::colors_in(".a::after{content:\"→ ✓ 한글\"}.b{color:rgb(1,2,3)}"),
+            vec!["rgb(1,2,3)".to_owned()]
+        );
+    }
 
     #[test]
     fn decodes_named_numeric_and_unknown_entities() {
